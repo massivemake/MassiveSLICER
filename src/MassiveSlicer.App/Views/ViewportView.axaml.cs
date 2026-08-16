@@ -238,6 +238,8 @@ public partial class ViewportView : UserControl
 
     // Last joint angles forwarded to SyncTcpReadout -- skip the readout when joints haven't moved.
     private double _lastSyncA1, _lastSyncA2, _lastSyncA3, _lastSyncA4, _lastSyncA5, _lastSyncA6;
+    List<TcpAxisTag>? _pendingTcpAxisTags;
+    bool _tcpAxisTagsPostScheduled;
 
     // Dev mode: editable cell environment nodes (bed, rotary bed, stands, docks).
     private readonly Dictionary<SceneNode, (string Kind, string? Id)> _devNodeKinds = new();
@@ -836,6 +838,14 @@ public partial class ViewportView : UserControl
                             (float)x, (float)y, (float)z, (float)a, (float)b, (float)c);
                 }
             };
+            robot.OnToolAxisConventionChanged = _ =>
+            {
+                if (DataContext is ViewportViewModel vmConv && vmConv.Robot is not null)
+                {
+                    SyncTcpReadout(vmConv);
+                    vmConv.NotifyRenderNeeded();
+                }
+            };
         }
 
         vm.OnSelectionTranslated = (x, y, z) =>
@@ -1114,12 +1124,34 @@ public partial class ViewportView : UserControl
             _lastSeamGuideSurfacePoint = null;
         }
 
+        // No part / no toolpath: a leftover guide used to draw as a 1 m lime
+        // stub in empty space (the stray green line next to the bed).
+        if (guides.Count > 0 && !vm.IsSeamEditorActive && !HasSeamGuideGeometry())
+        {
+            _renderer.SetSeamGuides([], [], -1);
+            GlCanvas.RequestNextFrameRendering();
+            return;
+        }
+
         var (zLo, zHi) = SeamGuideHeightRange(vm);
         var paths = new List<IReadOnlyList<TkVector3>>(guides.Count);
         foreach (var g in guides)
             paths.Add(BuildSeamGuidePath(g, zLo, zHi));
         _renderer.SetSeamGuides(guides, paths, vm.SelectedSeamGuideIndex, zLo, zHi);
         GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>True when a user mesh or toolpath exists for a guide to sit on.</summary>
+    bool HasSeamGuideGeometry()
+    {
+        if (_vm is { } live)
+        {
+            foreach (var item in live.EnumerateUserModelItems())
+                if (item.Visible) return true;
+        }
+        foreach (var (node, tp) in _toolpathByNode)
+            if (node.Visible && tp.Layers.Count > 0) return true;
+        return false;
     }
 
     /// <summary>
@@ -1924,13 +1956,17 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingToolSwap.TryDequeue(out var swap))
             {
-                if (_multiTools is not null)
+                try
                 {
-                    ApplyMultiToolMount(swap.Config, vm);
-                    continue;
-                }
+                    if (_multiTools is not null)
+                    {
+                        bool select = !vm.SuppressNextToolViewportSelect;
+                        vm.SuppressNextToolViewportSelect = false;
+                        ApplyMultiToolMount(swap.Config, vm, selectInViewport: select);
+                        continue;
+                    }
 
-                if (_fkController?.FlangeNode is not { } flange) continue;
+                    if (_fkController?.FlangeNode is not { } flange) continue;
 
                 if (_currentToolNode is not null)
                 {
@@ -1979,8 +2015,20 @@ public partial class ViewportView : UserControl
                                         + _tcpOffsetLocal.Y * kRot2.Row1
                                         + _tcpOffsetLocal.Z * kRot2.Row2;
                         var tcpDelta = tcpPt - pos2;
-                        System.Console.WriteLine($"[tcp] Tool={t.Name}  Flange=({pos2.X:F1},{pos2.Y:F1},{pos2.Z:F1})  TCP=({tcpPt.X:F1},{tcpPt.Y:F1},{tcpPt.Z:F1})  Δ=({tcpDelta.X:F1},{tcpDelta.Y:F1},{tcpDelta.Z:F1}) len={tcpDelta.Length:F1}mm  KukaZ=({kRot2.Row2.X:F3},{kRot2.Row2.Y:F3},{kRot2.Row2.Z:F3})");
+                        System.Console.WriteLine($"[tcp] Tool={t.Name}  Flange=({pos2.X:F1},{pos2.Y:F1},{pos2.Z:F1})  TCP=({tcpPt.X:F1},{tcpPt.Y:F1},{tcpPt.Z:F1})  d=({tcpDelta.X:F1},{tcpDelta.Y:F1},{tcpDelta.Z:F1}) len={tcpDelta.Length:F1}mm  KukaZ=({kRot2.Row2.X:F3},{kRot2.Row2.Y:F3},{kRot2.Row2.Z:F3})");
                     }
+                }
+                }
+                catch (Exception ex)
+                {
+                    System.Console.Error.WriteLine($"[cell] PendingToolSwap '{swap.Config.Name}' failed: {ex}");
+                    try
+                    {
+                        File.AppendAllText(
+                            Path.Combine(Path.GetTempPath(), "massiveslicer-crash.log"),
+                            $"[{DateTime.Now:O}] PendingToolSwap {swap.Config.Name}\n{ex}\n\n");
+                    }
+                    catch { /* best-effort */ }
                 }
             }
 
@@ -2211,6 +2259,7 @@ public partial class ViewportView : UserControl
 
         _renderer.Render(w, h);
         UpdateSequenceWaypointTags(w, h);
+        UpdateTcpAxisTags(w, h);
     }
 
     // -- TCP readout -----------------------------------------------------------
@@ -2243,9 +2292,32 @@ public partial class ViewportView : UserControl
             kukaZ.X, kukaZ.Y, kukaZ.Z, 0,
             0, 0, 0, 1);
         var toolN   = abcMat * kukaN;
-        var tcpAxisX = new Vector3(toolN.M11, toolN.M12, toolN.M13);
-        var tcpAxisY = new Vector3(toolN.M21, toolN.M22, toolN.M23);
-        var tcpAxisZ = new Vector3(toolN.M31, toolN.M32, toolN.M33);
+
+        // Spindle / T12: TOOL_DATA applied in A6 lands at the wrist. The cutter is the
+        // SpindleBitTCP plane (preferred) or SpindleBit disc — green preview + TCP sit
+        // there, +Z perpendicular to the plane (purple shop line). Extruder / scanner
+        // have neither primitive and keep the flange+TOOL_DATA path.
+        if (_currentToolNode is not null &&
+            SpindleBitCylinder.TryGetCutterWorld(_currentToolNode, out var bit, out var axisAway))
+        {
+            tcp = bit;
+            var z = axisAway.LengthSquared < 1e-10f ? Vector3.UnitZ : Vector3.Normalize(axisAway);
+            var hint = MathF.Abs(z.Z) > 0.9f ? Vector3.UnitX : Vector3.UnitZ;
+            var x = Vector3.Normalize(Vector3.Cross(hint, z));
+            if (x.LengthSquared < 1e-10f)
+                x = Vector3.Normalize(Vector3.Cross(Vector3.UnitY, z));
+            var y = Vector3.Cross(z, x);
+            toolN = new System.Numerics.Matrix4x4(
+                x.X, x.Y, x.Z, 0,
+                y.X, y.Y, y.Z, 0,
+                z.X, z.Y, z.Z, 0,
+                0, 0, 0, 1);
+        }
+        var kind    = vm.Robot?.SelectedToolAxisConvention?.Kind ?? ToolAxisConvention.ZMinus;
+        var shown   = ToolAxisConventionMath.ExtraRotation(kind) * toolN;
+        var tcpAxisX = new Vector3(shown.M11, shown.M12, shown.M13);
+        var tcpAxisY = new Vector3(shown.M21, shown.M22, shown.M23);
+        var tcpAxisZ = new Vector3(shown.M31, shown.M32, shown.M33);
 
         _renderer.TcpFrameMatrix = new Matrix4(
             tcpAxisX.X, tcpAxisX.Y, tcpAxisX.Z, 0,
@@ -2253,11 +2325,16 @@ public partial class ViewportView : UserControl
             tcpAxisZ.X, tcpAxisZ.Y, tcpAxisZ.Z, 0,
             tcp.X,      tcp.Y,      tcp.Z,       1f);
 
+        // Flange triad only: +90 about Z (X<-Y, Y<- -X). Mesh / TCP / IK stay on kukaX/Y/Z.
+        var flangeN = ToolAxisConventionMath.FlangeDisplayRotation * kukaN;
+        var flX = new Vector3(flangeN.M11, flangeN.M12, flangeN.M13);
+        var flY = new Vector3(flangeN.M21, flangeN.M22, flangeN.M23);
+        var flZ = new Vector3(flangeN.M31, flangeN.M32, flangeN.M33);
         _renderer.FlangeFrameMatrix = new Matrix4(
-            kukaX.X, kukaX.Y, kukaX.Z, 0,
-            kukaY.X, kukaY.Y, kukaY.Z, 0,
-            kukaZ.X, kukaZ.Y, kukaZ.Z, 0,
-            pos.X,   pos.Y,   pos.Z,   1f);
+            flX.X, flX.Y, flX.Z, 0,
+            flY.X, flY.Y, flY.Z, 0,
+            flZ.X, flZ.Y, flZ.Z, 0,
+            pos.X, pos.Y, pos.Z, 1f);
 
         if (_sensorOriginLocal is { } so)
         {
@@ -2287,14 +2364,68 @@ public partial class ViewportView : UserControl
         vm.Robot.SceneTcpY = Math.Round(tcp.Y, 1);
         vm.Robot.SceneTcpZ = Math.Round(tcp.Z, 1);
 
-        vm.Robot.TcpX = Math.Round(tcp.X, 1);
-        vm.Robot.TcpY = Math.Round(tcp.Y, 1);
-        vm.Robot.TcpZ = Math.Round(tcp.Z, 1);
-
         var (a, b, c) = KukaIkSolver.MatrixToAbc(toolN);
-        vm.Robot.TcpA = Math.Round(a, 2);
-        vm.Robot.TcpB = Math.Round(b, 2);
-        vm.Robot.TcpC = Math.Round(c, 2);
+        vm.Robot.SetTcpActualFromSceneWorld(
+            tcp.X, tcp.Y, tcp.Z, a, b, c,
+            robroot.X, robroot.Y, robroot.Z);
+    }
+
+    void UpdateTcpAxisTags(int vpW, int vpH)
+    {
+        if (_vm is not ViewportViewModel vm || !vm.ShowTcpFrame ||
+            (_renderer.TcpFrameMatrix is null && _renderer.FlangeFrameMatrix is null))
+        {
+            PostTcpAxisTags(null);
+            return;
+        }
+
+        string tcpName = "TCP";
+        if (vm.Robot is { KrlToolIndex: > 0 } robot)
+        {
+            tcpName = string.IsNullOrWhiteSpace(vm.MountedToolName)
+                ? $"T{robot.KrlToolIndex} TCP"
+                : $"T{robot.KrlToolIndex}  {vm.MountedToolName}";
+        }
+        else if (!string.IsNullOrWhiteSpace(vm.MountedToolName))
+        {
+            tcpName = $"{vm.MountedToolName}  TCP";
+        }
+
+        var world = TcpAxisLabelLayout.Build(
+            _renderer.TcpFrameMatrix,
+            _renderer.FlangeFrameMatrix,
+            _renderer.SensorOriginFrameMatrix,
+            tcpName);
+
+        var tags = new List<TcpAxisTag>(world.Count);
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+        foreach (var w in world)
+        {
+            var s = _renderer.ProjectToScreen(w.World, viewProj, vpW, vpH);
+            if (float.IsNaN(s.X)) continue;
+            float ox = w.IsTitle ? 28f : 6f;
+            float oy = w.IsTitle ? 10f : 7f;
+            tags.Add(new TcpAxisTag(s.X - ox, s.Y - oy, w.Text, w.IsTitle, w.ColorHex));
+        }
+
+        PostTcpAxisTags(tags);
+    }
+
+    void PostTcpAxisTags(IReadOnlyList<TcpAxisTag>? tags)
+    {
+        _pendingTcpAxisTags = tags is null ? null : [.. tags];
+        if (_tcpAxisTagsPostScheduled) return;
+        _tcpAxisTagsPostScheduled = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _tcpAxisTagsPostScheduled = false;
+            if (_vm is null) return;
+            var pending = _pendingTcpAxisTags;
+            if (pending is null || pending.Count == 0)
+                _vm.ClearTcpAxisTags();
+            else
+                _vm.SetTcpAxisTags(pending);
+        });
     }
 
     // -- Tool helpers ----------------------------------------------------------
@@ -2441,6 +2572,8 @@ public partial class ViewportView : UserControl
     private void RebuildIkSolver(ViewportViewModel vm)
     {
         if (_fkController is null) return;
+        var joints = vm.ActiveCell?.Robot.Joints;
+        if (joints is null || joints.Count < 3) return;
         float totalRoll = _toolFrameRoll + _flangeDisplayRoll;
         float cr = MathF.Cos(totalRoll);
         float sr = MathF.Sin(totalRoll);
@@ -2455,7 +2588,7 @@ public partial class ViewportView : UserControl
             _fkController.LiveChainRootTransform(),
             GetLiveRobrootWorldPos(),
             tcpLocal,
-            vm.ActiveCell?.Robot.Joints ?? [],
+            joints,
             totalRoll);
         if (vm.Robot is not null)
             vm.Robot.IkSolver = _ikSolver;
@@ -3112,6 +3245,10 @@ public partial class ViewportView : UserControl
         if (DataContext is not ViewportViewModel vm) return;
         if (_multiTools is not null)
         {
+            // ROBOT CELL TOOL # is a TCP/flange swap, not a scene pick. Selecting the
+            // toolhead (gizmo + Desync + Flash Additive) is what crashed T12 from PRINT.
+            // MILL-first worked because the phase button already sets this flag.
+            vm.SuppressNextToolViewportSelect = true;
             vm.PendingToolSwap.Enqueue((config, null!));
             vm.NotifyRenderNeeded();
             return;
@@ -3188,14 +3325,30 @@ public partial class ViewportView : UserControl
     {
         _pendingSpindleCylinderRefresh = false;
         if (_currentToolNode is null) return;
+        try
+        {
+            ApplySpindleBitCylinderCore(vm);
+        }
+        catch (Exception ex)
+        {
+            System.Console.Error.WriteLine($"[cell] spindle cylinder preview failed: {ex.Message}");
+        }
+    }
+
+    void ApplySpindleBitCylinderCore(ViewportViewModel vm)
+    {
+        if (_currentToolNode is not { } tool) return;
 
         // Strip a previous preview (and any leftover under other tool holders).
-        foreach (var n in _currentToolNode.SelfAndDescendants().ToList())
+        foreach (var n in tool.SelfAndDescendants().ToList())
         {
             if (n.Name != SpindleBitCylinder.NodeName) continue;
             GpuMeshCache.ReleaseSubtree(n);
             n.Parent?.RemoveChild(n);
         }
+
+        // Authored TCP plane is a datum, not shop geometry.
+        SpindleBitCylinder.HideTcpDatum(tool);
 
         var bit = vm.SubtractiveSettings?.SelectedBit;
         if (bit is null || !bit.ShowSpindleCylinder)
@@ -3207,23 +3360,12 @@ public partial class ViewportView : UserControl
         var mesh = anchor.PendingMesh ?? TryMeshFromRenderer(anchor);
         if (mesh is null) return;
 
-        Vector3? bodyCentroid = null;
-        foreach (var n in _currentToolNode.SelfAndDescendants())
-        {
-            if (ReferenceEquals(n, anchor) || n.Name == SpindleBitCylinder.NodeName)
-                continue;
-            var other = n.PendingMesh ?? TryMeshFromRenderer(n);
-            if (other is null || other.Positions.Length < 8) continue;
-            bodyCentroid = SpindleBitCylinder.MeshCentroid(other);
-            break;
-        }
-
-        var local = SpindleBitCylinder.ComputeLocalTransform(mesh, bodyCentroid, bit.CylinderFlip);
+        var local = SpindleBitCylinder.ComputeLocalTransform(_currentToolNode, anchor, mesh, bit.CylinderFlip);
         float dia = (float)(vm.SubtractiveSettings!.ToolDiameterMm > 0.05
             ? vm.SubtractiveSettings.ToolDiameterMm
             : bit.DiameterMm);
         float len = (float)bit.EffectiveCylinderLengthMm;
-        var cyl = SpindleBitCylinder.BuildNode(dia, len, local);
+        var cyl = SpindleBitCylinder.BuildNode(dia, len, local, mesh);
         anchor.AddChild(cyl);
         UploadPendingMeshes(cyl);
     }
@@ -4486,25 +4628,52 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
-    private void ApplyMultiToolMount(ToolCellConfig tool, ViewportViewModel vm, bool hideAllDocks = false)
+    private void ApplyMultiToolMount(ToolCellConfig tool, ViewportViewModel vm, bool hideAllDocks = false, bool selectInViewport = true)
     {
         if (_multiTools is null) return;
 
-        _multiTools.MountedToolName = tool.Name;
-        foreach (var (name, pair) in _multiTools.Tools)
+        try
         {
-            bool mounted = name == tool.Name;
-            pair.FlangeHolder.Visible = mounted;
-            if (pair.DockHolder is { } dock)
-                dock.Visible = hideAllDocks ? false : !mounted;
-
-            if (mounted)
-                EnqueueCellGpuUpload(pair.FlangeHolder);
-            else if (!hideAllDocks && pair.DockHolder is { } d)
-                EnqueueCellGpuUpload(d);
+            ApplyMultiToolMountCore(tool, vm, hideAllDocks, selectInViewport);
         }
+        catch (Exception ex)
+        {
+            System.Console.Error.WriteLine($"[cell] TOOL #{tool.KrlIndex} '{tool.Name}' mount failed: {ex}");
+            try
+            {
+                var path = Path.Combine(Path.GetTempPath(), "massiveslicer-crash.log");
+                File.AppendAllText(path,
+                    $"[{DateTime.Now:O}] ApplyMultiToolMount TOOL #{tool.KrlIndex} {tool.Name}\n{ex}\n\n");
+            }
+            catch { /* best-effort */ }
+        }
+    }
 
-        _cellGpuUploadPending = _cellGpuUploadQueue.Count > 0 || _cellGpuUploadPending;
+    void ApplyMultiToolMountCore(ToolCellConfig tool, ViewportViewModel vm, bool hideAllDocks, bool selectInViewport)
+    {
+        bool haveHolder = _multiTools!.Tools.ContainsKey(tool.Name);
+        if (!haveHolder)
+            System.Console.Error.WriteLine(
+                $"[cell] TOOL #{tool.KrlIndex} '{tool.Name}' is not in the live multi-tool set — TCP only");
+
+        if (haveHolder)
+        {
+            _multiTools.MountedToolName = tool.Name;
+            foreach (var (name, pair) in _multiTools.Tools)
+            {
+                bool mounted = name == tool.Name;
+                pair.FlangeHolder.Visible = mounted;
+                if (pair.DockHolder is { } dock)
+                    dock.Visible = hideAllDocks ? false : !mounted;
+
+                if (mounted)
+                    EnqueueCellGpuUpload(pair.FlangeHolder);
+                else if (!hideAllDocks && pair.DockHolder is { } d)
+                    EnqueueCellGpuUpload(d);
+            }
+
+            _cellGpuUploadPending = _cellGpuUploadQueue.Count > 0 || _cellGpuUploadPending;
+        }
 
         _tcpOffsetLocal    = new Vector3(tool.TcpX, tool.TcpY, tool.TcpZ);
         _tcpOrientationABC = new Vector3(tool.TcpA, tool.TcpB, tool.TcpC);
@@ -4516,7 +4685,7 @@ public partial class ViewportView : UserControl
         _toolCorrectionMatrix = Matrix4.CreateRotationY(MathF.PI / 2f);
         RebuildFrameMatrices();
 
-        if (_multiTools.Tools.TryGetValue(tool.Name, out var active))
+        if (haveHolder && _multiTools.Tools.TryGetValue(tool.Name, out var active))
         {
             active.FlangeHolder.LocalTransform = _toolMeshMatrix;
             _currentToolNode = active.FlangeHolder;
@@ -4527,8 +4696,8 @@ public partial class ViewportView : UserControl
         RebuildIkSolver(vm);
         if (vm.Robot is not null)
             SyncTcpReadout(vm);
-        PostMultiToolVmState(vm, tool.Name);
-        if (_currentToolNode is not null)
+        PostMultiToolVmState(vm, haveHolder ? tool.Name : vm.MountedToolName);
+        if (selectInViewport && haveHolder && _currentToolNode is not null)
         {
             _renderer.Select(_currentToolNode);
             _lastOutlinerSyncedNode = _currentToolNode;
@@ -12759,11 +12928,18 @@ public partial class ViewportView : UserControl
             SetGizmoMode(GizmoMode.None);
         else if (isToolNode)
         {
-            vm.Robot?.Desync();
-            SetGizmoMode(GizmoMode.Translate);
+            try
+            {
+                vm.Robot?.Desync();
+                SetGizmoMode(GizmoMode.Translate);
+                if (!_wasToolNodeSelected)
+                    vm.OnToolheadSelected?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                System.Console.Error.WriteLine($"[cell] toolhead select overlay failed: {ex.Message}");
+            }
         }
-        if (isToolNode && !_wasToolNodeSelected)
-            vm.OnToolheadSelected?.Invoke();
         _wasToolNodeSelected = isToolNode;
 
         // Use ResetScrubIndex (not the public setters) so the IK callback is NOT triggered
@@ -17154,6 +17330,8 @@ public partial class ViewportView : UserControl
                 SliceBedWorldZ   = _renderer.BedZ,
                 HeaderTemplate   = string.IsNullOrWhiteSpace(sub.HeaderTemplate) ? null : sub.HeaderTemplate,
                 FooterTemplate   = string.IsNullOrWhiteSpace(sub.FooterTemplate) ? null : sub.FooterTemplate,
+                SlicerVersion    = MassiveSlicer.App.BuildInfo.Label,
+                CellName         = cell.Name,
             };
             var millKrl = await Task.Run(() => KrlExporter.Export(toolpath, millExport));
             await File.WriteAllTextAsync(path, millKrl);
@@ -17224,6 +17402,12 @@ public partial class ViewportView : UserControl
             SsPreTravelWaitSec      = (float)settings.SsPreTravelWaitSec,
             SsResumePrimePercent    = (float)settings.SsResumePrimePercent,
             DigitalStartStopEnabled = settings.DigitalStartStopEnabled,
+            SlicerVersion           = MassiveSlicer.App.BuildInfo.Label,
+            MaterialPresetName      = selectedPreset?.Name,
+            MaterialType            = selectedPreset?.MaterialType,
+            MaterialColor           = selectedPreset?.Color,
+            CellName                = cell.Name,
+            ExtruderIsHf            = settings.ActiveExtruderIsHf,
         };
         exportSettings = WithRpmInputs(exportSettings, settings);
 

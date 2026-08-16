@@ -549,6 +549,7 @@ internal static class WorkspaceService
         // SMB passwords stay in the local prefs.json only, never in workspace
         // settings snapshots.
         clone.ErpApiToken = null;
+        clone.ErpPassword = null;
         foreach (var smb in clone.RobotSmb)
             smb.Password = null;
         return clone;

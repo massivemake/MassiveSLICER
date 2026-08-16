@@ -10,6 +10,18 @@ namespace MassiveSlicer.Core.IO;
 public sealed record KrlExportSettings
 {
     public required string ProgramName { get; init; }
+    /// <summary>MassiveSLICER build label (status-bar version) written into the KRL header.</summary>
+    public string? SlicerVersion { get; init; }
+    /// <summary>Applied material / print preset name, if one was selected.</summary>
+    public string? MaterialPresetName { get; init; }
+    /// <summary>Preset material family (e.g. ABS), if known.</summary>
+    public string? MaterialType { get; init; }
+    /// <summary>Preset color, if known.</summary>
+    public string? MaterialColor { get; init; }
+    /// <summary>Active cell name (LFAM 1/2/3).</summary>
+    public string? CellName { get; init; }
+    /// <summary>True when the HF extruder flow was used (print only).</summary>
+    public bool ExtruderIsHf { get; init; }
     public int ToolDataIndex { get; init; } = 1;
     public int BaseDataIndex { get; init; } = 1;
     /// <summary>Deposition print speed in m/s.</summary>
@@ -1012,6 +1024,8 @@ public static class KrlExporter
             .Replace("{{APO_CVEL}}",      s.ApoCvel.ToString(Inv))
             .Replace("{{HOME_PTP}}",      homePtp);
 
+        rendered = InjectExportCommentBlock(rendered, s);
+
         if (s.RotaryExternalKinematic && !rendered.Contains("EK(", System.StringComparison.Ordinal))
         {
             // A user-overridden header may predate the {{EK_BASE}} placeholder. Inject the
@@ -1034,6 +1048,93 @@ public static class KrlExporter
         }
 
         return rendered;
+    }
+
+    /// <summary>
+    /// ASCII comment block after DEF so print / URM / mill / custom headers all carry
+    /// the slicer version, preset, and the numbers the software actually exported.
+    /// </summary>
+    internal static string BuildExportCommentBlock(KrlExportSettings s)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(";FOLD MassiveSLICER export");
+        sb.AppendLine($"; MassiveSLICER {SanitizeComment(s.SlicerVersion)}");
+        sb.AppendLine($"; Exported {DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", Inv)} UTC");
+        if (!string.IsNullOrWhiteSpace(s.CellName))
+            sb.AppendLine($"; Cell {SanitizeComment(s.CellName)}");
+        sb.AppendLine($"; TOOL {s.ToolDataIndex}  BASE {s.BaseDataIndex}");
+
+        if (s.IsMilling)
+        {
+            sb.AppendLine("; Mode mill");
+            sb.AppendLine($"; Spindle RPM {s.SpindleRpm.ToString("F0", Inv)}");
+            sb.AppendLine($"; Cutting feed {s.CuttingFeedMmMin.ToString("F0", Inv)} mm/min");
+            sb.AppendLine($"; Plunge feed {s.PlungeFeedMmMin.ToString("F0", Inv)} mm/min");
+            sb.AppendLine($"; Rapid {Mms(s.TravelSpeedMps)} mm/s");
+            sb.AppendLine($"; Approach Z {s.ApproachZMm.ToString("F1", Inv)} mm");
+        }
+        else
+        {
+            sb.AppendLine("; Mode print");
+            if (!string.IsNullOrWhiteSpace(s.MaterialPresetName))
+                sb.AppendLine($"; Material preset {SanitizeComment(s.MaterialPresetName)}");
+            else
+                sb.AppendLine("; Material preset (none)");
+            if (!string.IsNullOrWhiteSpace(s.MaterialType) || !string.IsNullOrWhiteSpace(s.MaterialColor))
+            {
+                var type = string.IsNullOrWhiteSpace(s.MaterialType) ? "-" : SanitizeComment(s.MaterialType);
+                var color = string.IsNullOrWhiteSpace(s.MaterialColor) ? "-" : SanitizeComment(s.MaterialColor);
+                sb.AppendLine($"; Material {type} {color}");
+            }
+            sb.AppendLine($"; Extruder {(s.ExtruderIsHf ? "HF" : "HV")}");
+            sb.AppendLine($"; Layer height {s.LayerHeightMm.ToString("F2", Inv)} mm");
+            sb.AppendLine($"; Bead width {s.BeadWidthMm.ToString("F2", Inv)} mm");
+            sb.AppendLine($"; Extrusion flow {s.FlowRate.ToString("F4", Inv)} rev/cm3");
+            sb.AppendLine($"; Print speed {Mms(s.PrintSpeedMps)} mm/s");
+            sb.AppendLine($"; Travel speed {Mms(s.TravelSpeedMps)} mm/s");
+            sb.AppendLine($"; Wipe speed {Mms(s.WipeSpeedMps)} mm/s");
+            if (s.FirstLayerSpeedMps > 0f)
+                sb.AppendLine($"; First layer speed {Mms(s.FirstLayerSpeedMps)} mm/s");
+            if (s.ExtrusionRpmPercent is { } rpm)
+                sb.AppendLine($"; Extrusion RPM {rpm.ToString("F1", Inv)} %");
+            if (s.FirstLayerRpmPercent > 0f)
+                sb.AppendLine($"; First layer RPM {s.FirstLayerRpmPercent.ToString("F1", Inv)} %");
+            sb.AppendLine($"; T1 {s.Temperature1.ToString("F0", Inv)} C  T2 {s.Temperature2.ToString("F0", Inv)} C  T3 {s.Temperature3.ToString("F0", Inv)} C");
+            sb.AppendLine($"; Approach Z {s.ApproachZMm.ToString("F1", Inv)} mm");
+        }
+
+        sb.AppendLine(";ENDFOLD (MassiveSLICER export)");
+        return sb.ToString().TrimEnd();
+    }
+
+    static string Mms(float mps) => (mps * 1000f).ToString("F1", Inv);
+
+    static string SanitizeComment(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "(unknown)";
+        var t = raw.Trim();
+        var sb = new StringBuilder(t.Length);
+        foreach (var ch in t)
+        {
+            if (ch == '\n' || ch == '\t' || ch == ';' || ch == (char)13) sb.Append(' ');
+            else if (ch < 32 || ch > 126) sb.Append('?');
+            else sb.Append(ch);
+        }
+        return sb.ToString();
+    }
+
+    static string InjectExportCommentBlock(string rendered, KrlExportSettings s)
+    {
+        var block = BuildExportCommentBlock(s);
+        var crlf = ((char)13).ToString() + "\n";
+        var text = rendered.Replace(crlf, "\n").Replace(((char)13).ToString(), "");
+        int def = text.IndexOf("DEF ", StringComparison.Ordinal);
+        if (def < 0)
+            return block + "\n" + rendered;
+        int eol = text.IndexOf('\n', def);
+        if (eol < 0)
+            return rendered + "\n" + block;
+        return text[..(eol + 1)] + "\n" + block + "\n" + text[(eol + 1)..];
     }
 
     private static (ToolpathMove move, ToolpathLayer layer)? FindFirstExtrude(Toolpath tp)

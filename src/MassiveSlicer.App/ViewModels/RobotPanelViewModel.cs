@@ -566,18 +566,22 @@ public sealed class RobotPanelViewModel : ViewModelBase
     private double _tcpX, _tcpY, _tcpZ;
     private double _tcpA, _tcpB, _tcpC;
 
-    /// <summary>TCP X position in mm (Z-up world frame).</summary>
+    /// <summary>TCP X in the current BASE # (mm). Live = $POS_ACT; otherwise scene FK.</summary>
     public double TcpX { get => _tcpX; set => SetField(ref _tcpX, value); }
-    /// <summary>TCP Y position in mm.</summary>
+    /// <summary>TCP Y in the current BASE # (mm).</summary>
     public double TcpY { get => _tcpY; set => SetField(ref _tcpY, value); }
-    /// <summary>TCP Z position in mm.</summary>
+    /// <summary>TCP Z in the current BASE # (mm).</summary>
     public double TcpZ { get => _tcpZ; set => SetField(ref _tcpZ, value); }
-    /// <summary>TCP A rotation (Euler Z) in degrees -- flange orientation in ROBROOT.</summary>
+    /// <summary>TCP A (Euler Z) in the current BASE #, degrees.</summary>
     public double TcpA { get => _tcpA; set => SetField(ref _tcpA, value); }
-    /// <summary>TCP B rotation (Euler Y) in degrees.</summary>
+    /// <summary>TCP B (Euler Y) in the current BASE #, degrees.</summary>
     public double TcpB { get => _tcpB; set => SetField(ref _tcpB, value); }
-    /// <summary>TCP C rotation (Euler X) in degrees.</summary>
+    /// <summary>TCP C (Euler X) in the current BASE #, degrees.</summary>
     public double TcpC { get => _tcpC; set => SetField(ref _tcpC, value); }
+
+    /// <summary>Section header: TCP ACTUAL (BASE n).</summary>
+    public string TcpActualTitle
+        => KrlBaseIndex > 0 ? $"TCP ACTUAL (BASE {KrlBaseIndex})" : "TCP ACTUAL";
 
     // -- Flange readout (ROBROOT frame, from scene graph) ---------------------
 
@@ -730,6 +734,40 @@ public sealed class RobotPanelViewModel : ViewModelBase
 
     internal Action<double, double, double, double, double, double>? OnTcpOffsetEdited { get; set; }
 
+    // -- Tool axis convention (display triad only) -----------------------------
+
+    public IReadOnlyList<ToolAxisConventionOption> ToolAxisConventionOptions { get; } =
+        ToolAxisConventionOption.All;
+
+    private ToolAxisConventionOption _selectedToolAxisConvention = ToolAxisConventionOption.Default;
+
+    /// <summary>Which taught tool axis is drawn as forward (away from the flange).</summary>
+    public ToolAxisConventionOption SelectedToolAxisConvention
+    {
+        get => _selectedToolAxisConvention ?? ToolAxisConventionOption.Default;
+        set
+        {
+            var next = value ?? ToolAxisConventionOption.Default;
+            if (!SetField(ref _selectedToolAxisConvention, next)) return;
+            OnPropertyChanged(nameof(SelectedToolAxisConventionIndex));
+            OnToolAxisConventionChanged?.Invoke(next.Kind);
+        }
+    }
+
+    /// <summary>ComboBox index twin of <see cref="SelectedToolAxisConvention"/> (avoids Avalonia SelectedItem nulls).</summary>
+    public int SelectedToolAxisConventionIndex
+    {
+        get => (int)SelectedToolAxisConvention.Kind;
+        set
+        {
+            var opt = ToolAxisConventionOption.All.FirstOrDefault(o => (int)o.Kind == value)
+                      ?? ToolAxisConventionOption.Default;
+            SelectedToolAxisConvention = opt;
+        }
+    }
+
+    internal Action<ToolAxisConvention>? OnToolAxisConventionChanged { get; set; }
+
     private void FireTcpEdited()
     {
         if (!_suppressTcpCallback)
@@ -822,6 +860,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
             {
                 KrlBaseIndex = _krlBaseIndices[value];
                 OnPropertyChanged(nameof(KrlBaseIndex));
+                OnPropertyChanged(nameof(TcpActualTitle));
             }
         }
     }
@@ -874,6 +913,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
         {
             KrlBaseIndex = _krlBaseIndices[Math.Max(0, _krlBaseSelectedIndex)];
             OnPropertyChanged(nameof(KrlBaseIndex));
+            OnPropertyChanged(nameof(TcpActualTitle));
         }
     }
 
@@ -918,6 +958,24 @@ public sealed class RobotPanelViewModel : ViewModelBase
         BaseX = Math.Round(x, 2);
         BaseY = Math.Round(y, 2);
         BaseZ = Math.Round(z, 2);
+    }
+
+    /// <summary>
+    /// Writes TCP ACTUAL in the current BASE (scene world minus ROBROOT minus BASE_DATA).
+    /// No-op while live-synced — <c>TcpUpdated</c> already has controller $POS_ACT.
+    /// </summary>
+    public void SetTcpActualFromSceneWorld(
+        double worldX, double worldY, double worldZ,
+        double aDeg, double bDeg, double cDeg,
+        double robrootX, double robrootY, double robrootZ)
+    {
+        if (IsConnected) return;
+        TcpX = Math.Round(worldX - robrootX - BaseX, 1);
+        TcpY = Math.Round(worldY - robrootY - BaseY, 1);
+        TcpZ = Math.Round(worldZ - robrootZ - BaseZ, 1);
+        TcpA = Math.Round(aDeg, 2);
+        TcpB = Math.Round(bDeg, 2);
+        TcpC = Math.Round(cDeg, 2);
     }
 
     public ICommand GoToBedCenterCommand { get; }
