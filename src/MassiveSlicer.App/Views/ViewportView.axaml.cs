@@ -7633,23 +7633,35 @@ public partial class ViewportView : UserControl
         foreach (var (tpNode, tp) in _toolpathByNode)
         {
             if (!ReferenceEquals(tpNode, node) && !IsUnder(tpNode, node)) continue;
-            float z = ToolpathMinZ(tp, tpNode.WorldTransform);
+            // Points are stored ABSOLUTE but the node is translated to the toolpath's centroid,
+            // and the renderer draws (point − origin) × world. Transforming the raw point would
+            // double-count the centroid, so the drop overshot and buried the part under the bed.
+            // Same convention the exporter uses: Vector3.Transform(stored − NodeOrigin, world).
+            _toolpathOriginByNode.TryGetValue(tpNode, out var origin);
+            float z = ToolpathMinZ(tp, tpNode.WorldTransform, origin);
             if (z < minZ) minZ = z;
         }
 
         return minZ;
     }
 
-    /// <summary>Lowest world Z reached by any move in <paramref name="tp"/>.</summary>
-    internal static float ToolpathMinZ(MassiveSlicer.Core.Models.Toolpath tp, TkMatrix4 world)
+    /// <summary>
+    /// Lowest world Z reached by any move in <paramref name="tp"/>, drawn the way the renderer
+    /// and the exporter draw it: <c>(point − origin) × world</c>, where origin is the toolpath's
+    /// centroid and the node's own transform already carries that centroid.
+    /// </summary>
+    internal static float ToolpathMinZ(
+        MassiveSlicer.Core.Models.Toolpath tp, TkMatrix4 world, System.Numerics.Vector3 origin)
     {
         float minZ = float.MaxValue;
         foreach (var layer in tp.Layers)
             foreach (var m in layer.Moves)
             {
-                var a = TkVector3.TransformPosition(new TkVector3(m.From.X, m.From.Y, m.From.Z), world);
+                var a = TkVector3.TransformPosition(
+                    new TkVector3(m.From.X - origin.X, m.From.Y - origin.Y, m.From.Z - origin.Z), world);
                 if (a.Z < minZ) minZ = a.Z;
-                var b = TkVector3.TransformPosition(new TkVector3(m.To.X, m.To.Y, m.To.Z), world);
+                var b = TkVector3.TransformPosition(
+                    new TkVector3(m.To.X - origin.X, m.To.Y - origin.Y, m.To.Z - origin.Z), world);
                 if (b.Z < minZ) minZ = b.Z;
             }
         return minZ;

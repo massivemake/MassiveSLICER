@@ -16,19 +16,28 @@ namespace MassiveSlicer.Tests;
 /// </summary>
 public sealed class ToolpathMinZTest
 {
-    private static float MinZ(Toolpath tp, Matrix4x4 world)
+    private static float MinZ(Toolpath tp, Matrix4x4 world, Vector3 origin = default)
     {
         float minZ = float.MaxValue;
         foreach (var layer in tp.Layers)
             foreach (var m in layer.Moves)
             {
-                var a = Vector3.Transform(m.From, world);
+                var a = Vector3.Transform(m.From - origin, world);
                 if (a.Z < minZ) minZ = a.Z;
-                var b = Vector3.Transform(m.To, world);
+                var b = Vector3.Transform(m.To - origin, world);
                 if (b.Z < minZ) minZ = b.Z;
             }
         return minZ;
     }
+
+    /// <summary>
+    /// How the scene actually holds a registered toolpath: points stay ABSOLUTE, the node is
+    /// translated to the toolpath's centroid, and both renderer and exporter draw
+    /// <c>(point − origin) × world</c>. Reproduced here because the first version of the drop
+    /// transformed the raw point, double-counted the centroid, and buried the part under the bed.
+    /// </summary>
+    private static (Matrix4x4 World, Vector3 Origin) AsRegistered(Vector3 centroid)
+        => (Matrix4x4.CreateTranslation(centroid), centroid);
 
     private static Toolpath Ramp(float z0, float z1)
     {
@@ -94,5 +103,29 @@ public sealed class ToolpathMinZTest
         // MaxValue is the "nothing to measure" signal the caller checks; returning 0 would
         // slam an empty node onto the bed from wherever it was.
         Assert.Equal(float.MaxValue, MinZ(new Toolpath(), Matrix4x4.Identity));
+    }
+
+    [Fact]
+    public void CentroidIsNotDoubleCountedForARegisteredToolpath()
+    {
+        // At rest a registered toolpath must measure exactly where its raw points say it is.
+        var tp = Ramp(300f, 400f);
+        var (world, origin) = AsRegistered(new Vector3(1500f, 900f, 350f));
+
+        Assert.Equal(300f, MinZ(tp, world, origin), 3);
+        Assert.NotEqual(300f, MinZ(tp, world), 3);   // the bug: origin ignored
+    }
+
+    [Fact]
+    public void DropDeltaLandsOnTheBedForARegisteredToolpath()
+    {
+        var tp = Ramp(1520f, 1800f);                       // imported ~4 ft up
+        var (world, origin) = AsRegistered(new Vector3(1500f, 900f, 1660f));
+        const float bedZ = 300f;
+
+        float delta   = bedZ - MinZ(tp, world, origin);
+        var   dropped = world * Matrix4x4.CreateTranslation(0f, 0f, delta);
+
+        Assert.Equal(bedZ, MinZ(tp, dropped, origin), 3);
     }
 }
