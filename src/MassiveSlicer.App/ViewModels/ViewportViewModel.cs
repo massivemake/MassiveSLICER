@@ -1270,6 +1270,25 @@ public sealed partial class ViewportViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasSequenceWaypointTags));
     }
 
+    public ObservableCollection<TcpAxisTag> TcpAxisTags { get; } = [];
+
+    public bool HasTcpAxisTags => TcpAxisTags.Count > 0;
+
+    public void SetTcpAxisTags(IReadOnlyList<TcpAxisTag> tags)
+    {
+        TcpAxisTags.Clear();
+        foreach (var tag in tags)
+            TcpAxisTags.Add(tag);
+        OnPropertyChanged(nameof(HasTcpAxisTags));
+    }
+
+    public void ClearTcpAxisTags()
+    {
+        if (TcpAxisTags.Count == 0) return;
+        TcpAxisTags.Clear();
+        OnPropertyChanged(nameof(HasTcpAxisTags));
+    }
+
     public int ToolChangeScrubValue
     {
         get => _toolChangeScrubValue;
@@ -1356,14 +1375,20 @@ public sealed partial class ViewportViewModel : ViewModelBase
         RaiseToolChangeCommandsCanExecuteChanged();
     }
 
+    /// <summary>
+    /// When true, the next flange mount from a workflow PRINT/SCAN/MILL click
+    /// swaps the toolhead mesh but does not <c>Select</c> it (no TCP gizmo).
+    /// </summary>
+    internal bool SuppressNextToolViewportSelect { get; set; }
+
     void SelectLfam3WorkflowPhase(int phaseIndex, string toolName)
     {
         if (!ShowLfam3ToolPicker) return;
         _lfam3WorkflowPhaseIndex = phaseIndex;
-        // Phase UI / sidebar only. Do not mount or select the phase tool here —
-        // that was selecting the TCP toolhead in the viewport on every Print/Scan/Mill click.
-        // Explicit pick/deposit (or robot tool dropdown) still mounts tools when the user asks.
-        _ = toolName;
+        // Instant flange swap for the phase (Extruder / Scanner / Spindle).
+        // Do not leave the TCP selected — that used to steal the viewport gizmo.
+        SuppressNextToolViewportSelect = true;
+        SelectLfam3Tool(toolName);
         NotifyWorkflowStateChanged();
     }
 
@@ -1373,7 +1398,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
         int? phase = MountedToolName switch
         {
             "Extruder" or "HV Extruder" => PrintPhaseIndex,
-            "Spindle"     => MillPhaseIndex,
+            "Scanner" or "Scanner (Calibrated)" or "Scanner (No Calibration)" => ScanPhaseIndex,
+            "Spindle" or "Spindle (No Bit)" or "Spindle (Probe)" => MillPhaseIndex,
             _             => null,
         };
         if (phase is int p && p != _lfam3WorkflowPhaseIndex)

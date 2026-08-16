@@ -30,6 +30,20 @@ public sealed class SpindleBitCylinderTest
     }
 
     [Fact]
+    public void FindAnchor_prefers_SpindleBitTCP_plane_over_legacy_disc()
+    {
+        var root = new SceneNode { Name = "Tool" };
+        var body = new SceneNode { Name = "Mesh_0.006" };
+        var disc = new SceneNode { Name = "Mesh_0.007__SpindleBit" };
+        var plane = new SceneNode { Name = "Mesh_0.001__SpindleBitTCP" };
+        root.AddChild(body);
+        root.AddChild(disc);
+        root.AddChild(plane);
+        Assert.Same(plane, SpindleBitCylinder.FindAnchor(root));
+        Assert.Same(plane, SpindleBitCylinder.FindTcpPlane(root));
+    }
+
+    [Fact]
     public void UniqueExtentAxis_picks_the_unlike_side_even_when_puck_is_thick()
     {
         // Live SpindleBit AABB: thicker in X (31 mm) than Ø in Y/Z (23 mm).
@@ -59,6 +73,32 @@ public sealed class SpindleBitCylinderTest
         Assert.InRange((origin - center).Length, 0f, 0.01f);
         var zAxis = Vector3.Normalize(m.Row2.Xyz);
         Assert.True(MathF.Abs(zAxis.X) > 0.98f, $"expected ±X, got {zAxis}");
+    }
+
+    [Fact]
+    public void MmToParentLocal_metre_disc_is_one_thousandth()
+    {
+        // Live puck after bake: ~31 mm × Ø23 mm → metres.
+        var discM = MakeDisc(Vector3.UnitX, radius: 0.0115f, thickness: 0.0315f, segments: 16);
+        Assert.InRange(SpindleBitCylinder.MmToParentLocal(discM, 76.2f), 0.0761f, 0.0763f);
+        Assert.InRange(SpindleBitCylinder.MmToParentLocal(discM, 1f), 0.00099f, 0.00101f);
+    }
+
+    [Fact]
+    public void MmToParentLocal_millimetre_disc_stays_millimetres()
+    {
+        var discMm = MakeDisc(Vector3.UnitX, radius: 11.5f, thickness: 31.5f, segments: 16);
+        Assert.InRange(SpindleBitCylinder.MmToParentLocal(discMm, 76.2f), 76.1f, 76.3f);
+    }
+
+    [Fact]
+    public void BuildNode_on_metre_disc_is_bit_scale_not_cell_scale()
+    {
+        var discM = MakeDisc(Vector3.UnitX, radius: 0.0115f, thickness: 0.0315f, segments: 16);
+        var node = SpindleBitCylinder.BuildNode(76.2f, 1f, Matrix4.Identity, discM);
+        var (min, max) = node.PendingMesh!.LocalBounds;
+        Assert.InRange(max.Z - min.Z, 0.00099f, 0.00101f); // 1 mm stick-out
+        Assert.InRange(max.X, 0.0380f, 0.0382f);            // Ø 76.2 mm
     }
 
     [Fact]
@@ -102,5 +142,106 @@ public sealed class SpindleBitCylinderTest
             normals.Add(radial);
         }
         return new MeshData(positions.ToArray(), normals.ToArray(), null, "disc");
+    }
+
+    [Fact]
+    public void TryGetCutterWorld_uses_disc_center_and_moves_to_cylinder_tip()
+    {
+        var root = new SceneNode { Name = "Spindle", LocalTransform = Matrix4.Identity };
+        var discMesh = MakeDisc(Vector3.UnitZ, radius: 11.5f, thickness: 4f, segments: 16);
+        var disc = new SceneNode
+        {
+            Name = "Mesh__SpindleBit",
+            PendingMesh = discMesh,
+            LocalTransform = Matrix4.CreateTranslation(10f, 20f, 30f),
+        };
+        root.AddChild(disc);
+        Assert.True(SpindleBitCylinder.TryGetCutterWorld(root, out var origin, out var axis));
+        Assert.True(axis.Z > 0.9f, $"axis away from body should be +Z, got {axis}");
+        Assert.InRange(origin.X, 9f, 11f);
+        Assert.InRange(origin.Y, 19f, 21f);
+
+        var cylLocal = SpindleBitCylinder.ComputeLocalTransform(discMesh, bodyCentroidLocal: Vector3.Zero, flip: false);
+        var cyl = SpindleBitCylinder.BuildNode(20f, 50f, cylLocal, discMesh);
+        disc.AddChild(cyl);
+        Assert.True(SpindleBitCylinder.TryGetCutterWorld(root, out var tip, out _));
+        Assert.True(tip.Z > origin.Z + 1f, $"cylinder tip should be past the disc ({origin.Z} -> {tip.Z})");
+    }
+
+    [Fact]
+    public void ComputeLocalTransform_follows_housing_axis_not_puck_thickness()
+    {
+        // Housing is a tall Z cylinder (the spindle). Puck is thick along X — the old
+        // code used that and cocked the preview off the spindle.
+        var root = new SceneNode { Name = "Spindle", LocalTransform = Matrix4.Identity };
+        var housing = new SceneNode
+        {
+            Name = "Body",
+            PendingMesh = MakeDisc(Vector3.UnitZ, radius: 40f, thickness: 200f, segments: 20),
+            LocalTransform = Matrix4.Identity,
+        };
+        var disc = new SceneNode
+        {
+            Name = "Mesh__SpindleBit",
+            PendingMesh = MakeDisc(Vector3.UnitX, radius: 11.5f, thickness: 31.5f, segments: 16),
+            LocalTransform = Matrix4.CreateTranslation(0f, 0f, 110f),
+        };
+        root.AddChild(housing);
+        root.AddChild(disc);
+
+        Assert.Same(housing, SpindleBitCylinder.FindHousing(root, disc));
+        var m = SpindleBitCylinder.ComputeLocalTransform(root, disc, disc.PendingMesh!, flip: false);
+        var z = Vector3.Normalize(m.Row2.Xyz);
+        Assert.True(z.Z > 0.95f, $"expected +Z along the housing (purple line), got {z}");
+        Assert.InRange(MathF.Abs(z.X), 0f, 0.15f);
+    }
+
+    [Fact]
+    public void ComputeLocalTransform_tcp_plane_uses_plane_normal_not_housing()
+    {
+        // Housing long axis is +X (the 90-deg-off case in the shop shot). The
+        // authored SpindleBitTCP plane lies in XY, so its normal is +Z — that
+        // is the purple line / bit axis.
+        var root = new SceneNode { Name = "Spindle", LocalTransform = Matrix4.Identity };
+        var housing = new SceneNode
+        {
+            Name = "Body",
+            PendingMesh = MakeDisc(Vector3.UnitX, radius: 40f, thickness: 200f, segments: 20),
+            LocalTransform = Matrix4.Identity,
+        };
+        var planeMesh = MakePlane(normal: Vector3.UnitZ, size: 20f);
+        var plane = new SceneNode
+        {
+            Name = "Mesh_0.001__SpindleBitTCP",
+            PendingMesh = planeMesh,
+            LocalTransform = Matrix4.CreateTranslation(0f, 0f, 110f),
+        };
+        root.AddChild(housing);
+        root.AddChild(plane);
+
+        Assert.Same(plane, SpindleBitCylinder.FindAnchor(root));
+        var m = SpindleBitCylinder.ComputeLocalTransform(root, plane, planeMesh, flip: false);
+        var z = Vector3.Normalize(m.Row2.Xyz);
+        Assert.True(z.Z > 0.95f, $"expected +Z (plane normal / purple line), got {z}");
+        Assert.InRange(MathF.Abs(z.X), 0f, 0.15f);
+    }
+
+    static MeshData MakePlane(Vector3 normal, float size)
+    {
+        normal = Vector3.Normalize(normal);
+        var hint = MathF.Abs(normal.Z) > 0.9f ? Vector3.UnitX : Vector3.UnitZ;
+        var x = Vector3.Normalize(Vector3.Cross(hint, normal));
+        var y = Vector3.Cross(normal, x);
+        float h = size * 0.5f;
+        var positions = new[]
+        {
+            -x * h - y * h,
+             x * h - y * h,
+             x * h + y * h,
+            -x * h + y * h,
+        };
+        var normals = new[] { normal, normal, normal, normal };
+        uint[] indices = [0, 1, 2, 0, 2, 3];
+        return new MeshData(positions, normals, indices, "SpindleBitTCP");
     }
 }

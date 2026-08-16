@@ -136,15 +136,17 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "erp",
-            Description = "ERP attachment: erp url <u> | token <t> | connect | expand | search <q> | attach <i> [elemIdx] | newelem <name> | sendslice | pricing | quote [qty] [finishing] | detach | status",
+            Description = "ERP: erp url | email | password | token | connect | expand | search | attach | newelem | sendslice | pricing | quote | presets | detach | status",
             Execute = (ctx, args) =>
             {
                 var erp = ctx.Main.Viewport.Erp;
                 var parts = args.Trim().Split(' ', 2);
                 switch (parts[0].ToLowerInvariant())
                 {
-                    case "url":     erp.BaseUrl  = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[erp] url = {erp.BaseUrl}"); break;
-                    case "token":   erp.ApiToken = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log("[erp] token set"); break;
+                    case "url":      erp.BaseUrl  = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[erp] url = {erp.BaseUrl}"); break;
+                    case "email":    erp.Email    = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log("[erp] email set"); break;
+                    case "password": erp.Password = parts.ElementAtOrDefault(1) ?? ""; ctx.Log("[erp] password set"); break;
+                    case "token":    erp.ApiToken = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log("[erp] token set"); break;
                     case "connect": erp.ConnectCommand.Execute(null); break;
                     case "expand":
                     case "toggle":
@@ -196,6 +198,13 @@ public sealed class ConsoleCommandRegistry
                         break;
                     }
                     case "sendslice": erp.SendSliceCommand.Execute(null); break;
+                    case "presets":
+                    case "syncpresets":
+                        ctx.Log(erp.PresetsSyncStatus.Length > 0
+                            ? $"[erp] last presets sync: {erp.PresetsSyncStatus}"
+                            : "[erp] no presets sync yet — pulling now…");
+                        _ = erp.SyncPresetsLibraryAsync();
+                        break;
                     case "reattach":  erp.ReattachToProjectCommand.Execute(null); break;
                     case "pricing":
                         if (erp.PricingConfig is { } cfg)

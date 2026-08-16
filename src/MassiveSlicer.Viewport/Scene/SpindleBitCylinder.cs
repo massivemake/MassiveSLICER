@@ -3,32 +3,140 @@ using OpenTK.Mathematics;
 namespace MassiveSlicer.Viewport.Scene;
 
 /// <summary>
-/// Locks a preview cylinder to the spindle GLB primitive whose material is
-/// <c>SpindleBit</c> (see <c>assets/cells/LFAM3/Toolheads/spindle.glb</c>).
-/// Mesh local units are millimetres (the node above applies the 0.001 scale).
+/// Locks a preview cylinder + TCP to a named primitive on
+/// <c>assets/cells/LFAM3/Toolheads/spindle.glb</c>.
+/// Prefer <c>SpindleBitTCP</c> (authoring plane: TCP origin on the plane, +Z = plane
+/// normal / purple shop line). Fall back to <c>SpindleBit</c> (legacy disc + housing axis).
+/// Spindle GLB verts are baked to <b>metres</b> (flange then applies GltfToScene ×1000).
+/// UI lengths stay millimetres — <see cref="MmToParentLocal"/> converts before CreateCylinder.
 /// </summary>
 public static class SpindleBitCylinder
 {
     public const string MaterialToken = "SpindleBit";
+    public const string TcpPlaneToken = "SpindleBitTCP";
     public const string NodeName = "__SpindleBitCylinder";
 
+    public static bool IsTcpPlane(SceneNode n)
+        => HasToken(n, TcpPlaneToken);
+
+    public static SceneNode? FindTcpPlane(SceneNode toolRoot)
+        => FindByToken(toolRoot, TcpPlaneToken);
+
     public static SceneNode? FindAnchor(SceneNode toolRoot)
+        => FindTcpPlane(toolRoot) ?? FindLegacyBit(toolRoot);
+
+    static SceneNode? FindLegacyBit(SceneNode toolRoot)
     {
         SceneNode? named = null;
         foreach (var n in toolRoot.SelfAndDescendants())
         {
+            if (IsTcpPlane(n)) continue;
             if (n.Name.Contains(MaterialToken, StringComparison.OrdinalIgnoreCase))
                 return n;
             if (named is null &&
-                (n.PendingMesh?.Name.Contains(MaterialToken, StringComparison.OrdinalIgnoreCase) == true))
+                (n.PendingMesh?.Name.Contains(MaterialToken, StringComparison.OrdinalIgnoreCase) == true)
+                && n.PendingMesh.Name.Contains(TcpPlaneToken, StringComparison.OrdinalIgnoreCase) == false)
                 named = n;
         }
         return named;
     }
 
+    static SceneNode? FindByToken(SceneNode toolRoot, string token)
+    {
+        SceneNode? named = null;
+        foreach (var n in toolRoot.SelfAndDescendants())
+        {
+            if (n.Name.Contains(token, StringComparison.OrdinalIgnoreCase))
+                return n;
+            if (named is null &&
+                (n.PendingMesh?.Name.Contains(token, StringComparison.OrdinalIgnoreCase) == true))
+                named = n;
+        }
+        return named;
+    }
+
+    static bool HasToken(SceneNode n, string token)
+        => n.Name.Contains(token, StringComparison.OrdinalIgnoreCase)
+           || (n.PendingMesh?.Name.Contains(token, StringComparison.OrdinalIgnoreCase) == true)
+           || (n.Mesh?.PickingData?.Name.Contains(token, StringComparison.OrdinalIgnoreCase) == true);
+
     /// <summary>
-    /// Origin at the disc centroid; +Z along the disc plane's true normal
-    /// (axis of rotational symmetry), oriented away from the spindle body.
+    /// Datum plane is authoring-only — hide it so the green bit / TCP sit on an
+    /// invisible face rather than a visible quad.
+    /// </summary>
+    public static void HideTcpDatum(SceneNode toolRoot)
+    {
+        var plane = FindTcpPlane(toolRoot);
+        if (plane is null) return;
+        plane.Visible = false;
+        plane.PickIgnore = true;
+        plane.IsAuthoringOverlay = true;
+        plane.Selectable = false;
+    }
+
+    /// <summary>
+    /// Housing = largest non-bit mesh under the tool. Used so the preview follows
+    /// the spindle, not the bit puck's thick axis (that puck is ~31 mm along X and
+    /// is not coaxial with the housing).
+    /// </summary>
+    public static SceneNode? FindHousing(SceneNode toolRoot, SceneNode disc)
+    {
+        SceneNode? best = null;
+        float bestVol = -1f;
+        foreach (var n in toolRoot.SelfAndDescendants())
+        {
+            if (ReferenceEquals(n, disc) || n.Name == NodeName || IsTcpPlane(n)) continue;
+            var mesh = n.PendingMesh ?? n.Mesh?.PickingData;
+            if (mesh is null || mesh.Positions.Length < 8) continue;
+            var (min, max) = mesh.LocalBounds;
+            var e = max - min;
+            float vol = MathF.Abs(e.X * e.Y * e.Z);
+            if (vol > bestVol)
+            {
+                bestVol = vol;
+                best = n;
+            }
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// Disc-local frame: origin at the datum centre. +Z is the <c>SpindleBitTCP</c>
+    /// plane normal when that primitive exists (perpendicular to the authored face,
+    /// the purple shop line). Otherwise +Z follows the housing long axis (legacy
+    /// <c>SpindleBit</c> puck). Always flipped away from the housing body.
+    /// </summary>
+    public static Matrix4 ComputeLocalTransform(SceneNode toolRoot, SceneNode disc, MeshData discMesh, bool flip)
+    {
+        var center = MeshCentroid(discMesh);
+        var housing = FindHousing(toolRoot, disc);
+        Vector3? bodyLocal = null;
+        if (housing is not null && (housing.PendingMesh ?? housing.Mesh?.PickingData) is { } hMesh)
+            bodyLocal = ToNodeLocal(disc, MeshCentroid(hMesh), housing);
+
+        Vector3 axis;
+        if (IsTcpPlane(disc))
+        {
+            // Authored plane: Z is perpendicular to the face, not the housing AABB.
+            axis = EstimatePlaneNormal(discMesh);
+        }
+        else if (housing is not null && (housing.PendingMesh ?? housing.Mesh?.PickingData) is { } houseMesh)
+        {
+            axis = DirectionToNodeLocal(disc, EstimateFaceNormal(houseMesh), housing);
+            if (axis.LengthSquared < 1e-10f)
+                axis = EstimateFaceNormal(discMesh);
+        }
+        else
+        {
+            axis = EstimateFaceNormal(discMesh);
+        }
+
+        return ComputeLocalTransform(center, axis, bodyLocal, flip);
+    }
+
+    /// <summary>
+    /// Origin at the disc centroid; +Z along <paramref name="faceNormal"/>,
+    /// oriented away from the spindle body.
     /// </summary>
     public static Matrix4 ComputeLocalTransform(
         MeshData disc,
@@ -39,6 +147,23 @@ public static class SpindleBitCylinder
             EstimateFaceNormal(disc),
             bodyCentroidLocal,
             flip);
+
+    static Vector3 ToNodeLocal(SceneNode dest, Vector3 srcLocalPoint, SceneNode src)
+    {
+        var world = Vector3.TransformPosition(srcLocalPoint, src.WorldTransform);
+        Matrix4.Invert(dest.WorldTransform, out var inv);
+        return Vector3.TransformPosition(world, inv);
+    }
+
+    static Vector3 DirectionToNodeLocal(SceneNode dest, Vector3 srcLocalDir, SceneNode src)
+    {
+        var world0 = Vector3.TransformPosition(Vector3.Zero, src.WorldTransform);
+        var world1 = Vector3.TransformPosition(srcLocalDir, src.WorldTransform);
+        var worldDir = world1 - world0;
+        if (worldDir.LengthSquared < 1e-20f) return srcLocalDir;
+        Matrix4.Invert(dest.WorldTransform, out var inv);
+        return Vector3.TransformVector(worldDir, inv);
+    }
 
     /// <summary>Public for tests: build the lock frame from a known centre + normal.</summary>
     public static Matrix4 ComputeLocalTransform(
@@ -71,6 +196,53 @@ public static class SpindleBitCylinder
             z.X, z.Y, z.Z, 0f,
             center.X, center.Y, center.Z, 1f);
     }
+
+    /// <summary>
+    /// Normal of an authored plane (SpindleBitTCP): first usable triangle, then
+    /// the thin AABB axis. Does not use housing symmetry.
+    /// </summary>
+    public static Vector3 EstimatePlaneNormal(MeshData mesh)
+    {
+        var fromTris = FirstTriangleNormal(mesh);
+        if (fromTris.LengthSquared > 1e-10f)
+            return Vector3.Normalize(fromTris);
+
+        var (min, max) = mesh.LocalBounds;
+        return UniqueExtentAxis(max - min);
+    }
+
+    public static Vector3 FirstTriangleNormal(MeshData mesh)
+    {
+        if (mesh.Positions.Length < 3)
+            return Vector3.Zero;
+
+        if (mesh.Indices is { Length: >= 3 } idx)
+        {
+            for (int i = 0; i + 2 < idx.Length; i += 3)
+            {
+                var n = TriangleNormal(
+                    mesh.Positions[idx[i]],
+                    mesh.Positions[idx[i + 1]],
+                    mesh.Positions[idx[i + 2]]);
+                if (n.LengthSquared > 1e-12f)
+                    return n;
+            }
+        }
+        else
+        {
+            for (int i = 0; i + 2 < mesh.Positions.Length; i += 3)
+            {
+                var n = TriangleNormal(mesh.Positions[i], mesh.Positions[i + 1], mesh.Positions[i + 2]);
+                if (n.LengthSquared > 1e-12f)
+                    return n;
+            }
+        }
+
+        return Vector3.Zero;
+    }
+
+    static Vector3 TriangleNormal(Vector3 a, Vector3 b, Vector3 c)
+        => Vector3.Cross(b - a, c - a);
 
     /// <summary>
     /// Disc-face normal = axis of rotational symmetry (points form a circle
@@ -184,11 +356,69 @@ public static class SpindleBitCylinder
         return sum / mesh.Positions.Length;
     }
 
-    public static SceneNode BuildNode(float diameterMm, float lengthMm, Matrix4 local)
+    /// <summary>
+    /// Convert a millimetre length into the parent disc's local units.
+    /// Baked tool meshes are metres (AABB diag &lt; 10). Raw mm CAD is tens–hundreds.
+    /// </summary>
+    public static float MmToParentLocal(MeshData? parent, float mm)
     {
+        if (mm <= 0f) return 0f;
+        if (parent is null || parent.Positions.Length == 0)
+            return mm * 0.001f;
+        var (min, max) = parent.LocalBounds;
+        float diag = (max - min).Length;
+        return diag > 10f ? mm : mm * 0.001f;
+    }
+
+    /// <summary>
+    /// World-space cutter: disc centroid, or the preview-cylinder tip when present.
+    /// Axis points away from the spindle body (toward the table when the bit hangs down).
+    /// </summary>
+    public static bool TryGetCutterWorld(SceneNode toolRoot, out Vector3 origin, out Vector3 axisAway)
+    {
+        origin = default;
+        axisAway = default;
+        var anchor = FindAnchor(toolRoot);
+        if (anchor is null) return false;
+
+        var mesh = anchor.PendingMesh ?? anchor.Mesh?.PickingData;
+        if (mesh is null || mesh.Positions.Length < 3) return false;
+
+        var local = ComputeLocalTransform(toolRoot, anchor, mesh, flip: false);
+        var world = local * anchor.WorldTransform;
+        origin = world.Row3.Xyz;
+        axisAway = SafeDir(world.Row2.Xyz);
+
+        foreach (var n in anchor.Children)
+        {
+            if (n.Name != NodeName) continue;
+            var cw = n.WorldTransform;
+            var cyl = n.PendingMesh ?? n.Mesh?.PickingData;
+            float h = 0f;
+            if (cyl is not null)
+            {
+                var (_, max) = cyl.LocalBounds;
+                h = max.Z;
+            }
+            origin = Vector3.TransformPosition(new Vector3(0f, 0f, h), cw);
+            axisAway = SafeDir(cw.Row2.Xyz);
+            break;
+        }
+
+        return axisAway.LengthSquared > 1e-10f;
+    }
+
+    static Vector3 SafeDir(Vector3 v)
+        => v.LengthSquared < 1e-10f ? Vector3.UnitZ : Vector3.Normalize(v);
+
+    public static SceneNode BuildNode(float diameterMm, float lengthMm, Matrix4 local, MeshData? parentMesh = null)
+    {
+        float scale = parentMesh is null
+            ? 0.001f
+            : MmToParentLocal(parentMesh, 1f);
         var mesh = MeshFactory.CreateCylinder(
-            radius: Math.Max(diameterMm, 0.2f) * 0.5f,
-            height: Math.Max(lengthMm, 0.2f),
+            radius: Math.Max(diameterMm, 0.2f) * 0.5f * scale,
+            height: Math.Max(lengthMm, 0.2f) * scale,
             name: NodeName);
         return new SceneNode
         {

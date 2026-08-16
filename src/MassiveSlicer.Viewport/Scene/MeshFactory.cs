@@ -62,7 +62,7 @@ public static class MeshFactory
 
     /// <summary>
     /// Unit cylinder along +Z: base disk in the XY plane at Z=0, top at Z=<paramref name="height"/>.
-    /// Units match the caller (mm when parented under the spindle GLB's millimetre-native mesh).
+    /// Units match the caller. Spindle preview passes metres (baked tool mesh + flange ×1000).
     /// </summary>
     public static MeshData CreateCylinder(
         float  radius   = 5f,
@@ -71,8 +71,10 @@ public static class MeshFactory
         string name     = "Cylinder",
         Vector4? baseColor = null)
     {
-        radius   = Math.Max(radius, 0.05f);
-        height   = Math.Max(height, 0.05f);
+        // Floor is near-zero so a 1 mm stick-out in metre-baked tool space (0.001)
+        // is not inflated to 50 mm. Degenerate 0 still becomes a sliver.
+        radius   = Math.Max(radius, 1e-6f);
+        height   = Math.Max(height, 1e-6f);
         segments = Math.Max(segments, 8);
 
         // Bottom ring, top ring, bottom-cap centre, top-cap centre.

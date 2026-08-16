@@ -271,8 +271,6 @@
             <TextBlock Text="ROBOT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>
         <StackPanel Margin="10,2,10,10">
-<ScrollViewer VerticalScrollBarVisibility="Disabled"
-                              HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Margin="0,8">
 
                         <TextBlock Text="JOINT ANGLES" Classes="SectionHeader"/>
@@ -413,6 +411,20 @@
                                        KeyDown="JointAngle_KeyDown"/>
                         </Grid>
 
+                        <TextBlock Text="HOME POSITIONS" Classes="SectionHeader"/>
+                        <TextBox Margin="8,0,8,4"
+                                 Classes="PanelTextBox"
+                                 Text="{Binding DataContext.RightPanel.Settings.Robot.NewHomePositionName,
+                                        RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                 PlaceholderText="Home Target..."
+                                 VerticalContentAlignment="Center"
+                                 Padding="6,4"/>
+                        <Button Content="SAVE AS HOME POSITION"
+                                Command="{Binding DataContext.RightPanel.Settings.Robot.SaveAsHomePositionCommand,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                HorizontalAlignment="Stretch"
+                                Margin="8,0,8,8"/>
+
                         <Expander Classes="SectionExpander" Header="LIMITS" IsExpanded="False" Margin="0,4,0,0">
                           <StackPanel>
                             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.65" Margin="8,2,8,6"
@@ -500,13 +512,6 @@
                                        Text="{Binding DataContext.RightPanel.Settings.Robot.LimitsStatus, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
                           </StackPanel>
                         </Expander>
-
-                        <Button Content="GO TO BED CENTER"
-                                Command="{Binding DataContext.RightPanel.Settings.Robot.GoToBedCenterCommand,
-                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                Classes="PrimaryButton"
-                                HorizontalAlignment="Stretch"
-                                Margin="8,4,8,8"/>
 
                         <!-- Per-cell SMB credentials for direct Export-to-Robot uploads -->
                         <Expander Classes="SectionExpander" Header="ROBOT NETWORK" IsExpanded="False" Margin="0,4,0,0">
@@ -694,47 +699,10 @@
                         </Expander>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-                        <TextBlock Text="HOME POSITIONS" Classes="SectionHeader"/>
-                        <TextBox Margin="8,0,8,4"
-                                 Classes="PanelTextBox"
-                                 Text="{Binding DataContext.RightPanel.Settings.Robot.NewHomePositionName,
-                                        RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                 PlaceholderText="Home Target..."
-                                 VerticalContentAlignment="Center"
-                                 Padding="6,4"/>
-                        <Button Content="SAVE AS HOME POSITION"
-                                Command="{Binding DataContext.RightPanel.Settings.Robot.SaveAsHomePositionCommand,
+
+                        <TextBlock Text="{Binding DataContext.RightPanel.Settings.Robot.TcpActualTitle,
                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                HorizontalAlignment="Stretch"
-                                Margin="8,0,8,8"/>
-
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-
-                        <!-- Flange position readout -->
-                        <TextBlock Text="FLANGE POSITION (ROBROOT)" Classes="SectionHeader"/>
-                        <Grid Margin="8,4,8,2">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" Classes="LabelMuted"
-                                       Text="{Binding DataContext.RightPanel.Settings.Robot.FlangeX, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
-                        </Grid>
-                        <Grid Margin="8,2,8,2">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" Classes="LabelMuted"
-                                       Text="{Binding DataContext.RightPanel.Settings.Robot.FlangeY, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
-                        </Grid>
-                        <Grid Margin="8,2,8,8">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" Classes="LabelMuted"
-                                       Text="{Binding DataContext.RightPanel.Settings.Robot.FlangeZ, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
-                        </Grid>
-
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-
-                        <!-- TCP world position readout -->
-                        <TextBlock Text="TCP WORLD POSITION" Classes="SectionHeader"/>
+                                   Classes="SectionHeader"/>
                         <Grid Margin="8,4,8,2">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
@@ -773,29 +741,17 @@
                         </Grid>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                        <TextBlock Text="TOOL CONVENTION" Classes="SectionHeader"/>
+                        <ComboBox Margin="8,0,8,8"
+                                  HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.ToolAxisConventionOptions,
+                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                  SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.SelectedToolAxisConventionIndex,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                  Mode=TwoWay}"
+                                  DisplayMemberBinding="{Binding Label}"
+                                  ToolTip.Tip="Which taught tool axis points forward (away from the flange). Remaps the TCP triad only — does not change TOOL_DATA."/>
 
-                        <!-- BASE frame (from cell config) -->
-                        <TextBlock Text="BASE FRAME (ROBROOT)" Classes="SectionHeader"/>
-                        <Grid Margin="8,4,8,2">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" Classes="LabelMuted"
-                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BaseX, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F2} mm}"/>
-                        </Grid>
-                        <Grid Margin="8,2,8,2">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" Classes="LabelMuted"
-                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BaseY, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F2} mm}"/>
-                        </Grid>
-                        <Grid Margin="8,2,8,8">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" Classes="LabelMuted"
-                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BaseZ, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F2} mm}"/>
-                        </Grid>
-
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
                         <TextBlock Text="TCP OFFSET" Classes="SectionHeader"/>
 
                         <!-- Position X Y Z -->
@@ -847,7 +803,6 @@
                         </Grid>
 
                     </StackPanel>
-                </ScrollViewer>
         </StackPanel>
     </Expander>
     <Expander Classes="StepCard" IsExpanded="False"
@@ -857,7 +812,6 @@
             <TextBlock Text="VIEWPORT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>
         <StackPanel Margin="10,2,10,10">
-<ScrollViewer MaxHeight="520"                               VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8,6">
 
                         <!-- Backdrop -->
@@ -1334,11 +1288,9 @@
                         </Grid>
 
                     </StackPanel>
-                </ScrollViewer>
-
-                <!-- Robot tab -->
         </StackPanel>
     </Expander>
+    <Border Height="0" IsHitTestVisible="False"/>
     </StackPanel>
 
 </UserControl>

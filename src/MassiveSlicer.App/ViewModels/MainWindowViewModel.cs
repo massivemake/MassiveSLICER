@@ -168,6 +168,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         Viewport.ImportKrlFile          = p => ImportKrlToolpath(p);
 
         Viewport.Erp.BuildSlicePayloadAsync = BuildErpSlicePayloadAsync;
+
+        // Shared print + material presets on lab.massivemake.com (pull on connect, push on save).
+        RightPanel.Presets.PushToErp = rec => Viewport.Erp.PushPrintPresetInBackground(rec);
+        Viewport.Erp.PresetsLibraryChanged += ReloadPresetLibrariesFromDisk;
         Toolbar.SetRecentWorkspaces(AppPreferences.RecentWorkspaces);
         Toolbar.OpenRecentRequested += (_, recentPath) =>
         {
@@ -2227,7 +2231,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         var src = await ExportSrcToPrintFilesAsync();
         if (src is { } s2)
         {
-            if (ToUnasShareRelative(s2.Path) is { } krlRel)
+            if (ToUnasShareRelative(s2.Path, AppPreferences.UnasProjectsRoot) is { } krlRel)
                 files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("krl", krlRel, new System.IO.FileInfo(s2.Path).Length));
         }
         else
@@ -2245,7 +2249,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 string previewPath = System.IO.Path.Combine(
                     dir, System.IO.Path.GetFileNameWithoutExtension(massPath) + " preview.png");
                 await System.IO.File.WriteAllBytesAsync(previewPath, png);
-                if (ToUnasShareRelative(previewPath) is { } previewRel)
+                if (ToUnasShareRelative(previewPath, AppPreferences.UnasProjectsRoot) is { } previewRel)
                     files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("preview", previewRel, png.Length));
             }
         }
@@ -2254,7 +2258,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.Log($"[erp] preview render failed: {ex.Message}");
         }
 
-        if (ToUnasShareRelative(massPath) is { } massRel)
+        if (ToUnasShareRelative(massPath, AppPreferences.UnasProjectsRoot) is { } massRel)
             files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("workspace", massRel, new System.IO.FileInfo(massPath).Length));
 
         var add = RightPanel.Additive;
@@ -2282,12 +2286,12 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         // srcPath is the NAS copy under 3D Print Files/Rev N/ when the workspace is
         // saved on the share; reference it directly.
-        if (ToUnasShareRelative(srcPath) is { } krlRel && System.IO.File.Exists(srcPath))
+        if (ToUnasShareRelative(srcPath, AppPreferences.UnasProjectsRoot) is { } krlRel && System.IO.File.Exists(srcPath))
             files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("krl", krlRel, new System.IO.FileInfo(srcPath).Length));
 
         if (AppPreferences.LastWorkspacePath is { Length: > 0 } massPath && System.IO.File.Exists(massPath))
         {
-            if (ToUnasShareRelative(massPath) is { } massRel)
+            if (ToUnasShareRelative(massPath, AppPreferences.UnasProjectsRoot) is { } massRel)
                 files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("workspace", massRel, new System.IO.FileInfo(massPath).Length));
         }
 
@@ -2371,13 +2375,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <c>/Volumes/&lt;share&gt;/rest…</c> → <c>rest…</c> — the path the ERP's UNAS API
     /// resolves against the same share. Null for local (non-mounted) paths.
     /// </summary>
-    internal static string? ToUnasShareRelative(string path)
-    {
-        var parts = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length > 2 && parts[0] == "Volumes"
-            ? string.Join('/', parts.Skip(2))
-            : null;
-    }
+    internal static string? ToUnasShareRelative(string path, string? unasProjectsRoot = null)
+        => UnasPaths.ToShareRelative(path, unasProjectsRoot);
 
     /// <summary>Saves a full-window PNG under <c>%LOCALAPPDATA%/MassiveSlicer/screenshots/</c> and returns the path.</summary>
     public async Task<string> SaveViewportScreenshotAsync()
@@ -4031,6 +4030,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 : $"[workspace] Saved {modelCount} model(s) and settings to {path}");
             if (RightPanel.Additive.SelectedPreset is { } mp)
                 Console.Log($"[workspace] Material preset '{mp.Name}' saved with the workspace.");
+            RecordWorkspaceSaveForLab(path);
         }
         catch (Exception ex)
         {
@@ -4044,6 +4044,22 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     /// <summary>Fire-and-forget wrapper for callers that cannot await.</summary>
     public void SaveWorkspace(string path) => _ = SaveWorkspaceAsync(path);
+
+    /// <summary>
+    /// Appends a JSONL save record (AppData + UNAS <c>Projects/_slicer/</c>) and
+    /// pings MassiveLAB with the path when the workspace is attached.
+    /// </summary>
+    void RecordWorkspaceSaveForLab(string path)
+    {
+        var root = AppPreferences.UnasProjectsRoot;
+        var rec  = WorkspaceSaveLog.Build(path, root, Viewport.ActiveCell?.Name, Viewport.Erp.Attachment);
+        var dest = WorkspaceSaveLog.Append(rec, root);
+        string where = rec.UnasPath ?? path;
+        Console.Log(dest.Count > 0
+            ? $"[workspace] Logged save -> {where}"
+            : $"[workspace] Saved at {where} (save log write failed)");
+        _ = Viewport.Erp.NotifyWorkspaceSavedAsync(rec);
+    }
 
     /// <summary>
     /// Suggested filename stem for the Save As dialog (last save or default).
@@ -4151,6 +4167,27 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Reloads print + material libraries from AppData after an ERP pull. Preserves the
+    /// selected material by name when it still exists.
+    /// </summary>
+    private void ReloadPresetLibrariesFromDisk()
+    {
+        var selectedName = RightPanel.Additive.SelectedPreset?.Name;
+        RightPanel.Additive.MaterialPresets.Clear();
+        foreach (var preset in MaterialPresetsLoader.Load())
+            RightPanel.Additive.MaterialPresets.Add(preset);
+        if (selectedName is { } name)
+        {
+            int idx = RightPanel.Additive.MaterialPresets
+                .Select((p, i) => (p, i))
+                .FirstOrDefault(t => t.p.Name == name, (null!, -1)).i;
+            RightPanel.Additive.SelectedPresetIndex = idx >= 0 ? idx : -1;
+        }
+        RightPanel.Presets.ReloadFromDiskAfterErpSync();
+        Console.Log("[erp] local preset libraries reloaded from ERP sync");
     }
 
     private void OnSettingsChanged()

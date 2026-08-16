@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-15** (Imported KRL drop-to-plate + .src drag-drop; save.ps1: no stash on SMB)
+Last updated: **2026-08-16** (SpindleBitTCP plane drives bit + TCP Z)
 
 ---
 
@@ -202,10 +202,9 @@ Start-Process -FilePath 'Z:\Research\LFAM\MassiveSLICER\src\MassiveSlicer.App\bi
 - NVIDIA rejects **any non-ASCII** in shader source strings (even comments) → `error C0000: unexpected $end` → app dies on first mesh upload.
 - Keep `MeshRenderer.VertSrc` / `FragSrc` pure ASCII.
 
-#### LFAM 3 phase switch: do not select TCP
-- `SelectLfam3WorkflowPhase` updates `_lfam3WorkflowPhaseIndex` + sidebar only.
-- **Does not** call `SelectLfam3Tool` (that set `Robot.SelectedToolIndex` → mount → `_renderer.Select(tool)`).
-- Tool mount still via explicit pick/deposit or robot tool dropdown.
+#### LFAM 3 phase switch: mount tool, do not select TCP
+- `SelectLfam3WorkflowPhase` updates `_lfam3WorkflowPhaseIndex` and mounts Extruder / Scanner (Calibrated) / Spindle (No Bit).
+- `SuppressNextToolViewportSelect` skips `_renderer.Select` so the gizmo does not jump to the TCP.
 
 #### Console + MCP milling
 - Console: `mill status | mill area <whole|face|box|lasso|brush|clear> | mill brush size <mm> | mill brush falloff <0-1> | mill op <Kind>`
@@ -484,6 +483,162 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-16 — SpindleBitTCP plane is the TCP / bit Z
+
+- New `spindle.glb` has material `SpindleBitTCP` on a plane (`Mesh_0.001`). Green bit was 90° off (horizontal) vs the purple shop line (down).
+- Cause: preview + TCP followed the housing long axis, not the authored plane normal.
+- Fix: prefer `SpindleBitTCP`; origin on the plane; +Z = plane normal flipped away from the housing. Hide the plane (datum only). Legacy `SpindleBit` still uses housing axis.
+- Files: `SpindleBitCylinder.cs`, `ViewportView.axaml.cs`, `SpindleBitCylinderTest.cs`. Tests 13 passed.
+
+### 2026-08-16 — ERP email/password login (slicer ready; Lab route pending)
+
+- Preferences → Connections: Email + Password. Connect / launch POSTs `/api/slicer/v1/login` and stores the returned bearer. Pasted API token still works.
+- Password scrubbed from `.mass` files. Console: `erp email` / `erp password`.
+- Lab does not have this route yet (404). Prompt: `docs/ERP-Login-API-Replit-Prompt.md`.
+
+### 2026-08-16 — massiveslicer:// opens a .mass; Board copies the project folder
+
+- Symptom: MassiveSYSTEM Windows icon copied `Z:\Research\LFAM\MassiveSLICER` (the checkout), not the project mass-files folder.
+- Fix (Board): copy is now `"Z:\Projects\…\mass Files\"` from the save row (Projects only). New logo button launches `massiveslicer://open?path=`.
+- Fix (Slicer): register `massiveslicer` URL protocol on Windows launch. `GET/POST /open` on the localhost bridge opens the .mass. A second instance hands off to the running app and exits.
+- Files: `ProtocolUri.cs`, `ProtocolRegistration.cs`, `Program.cs`, `App.axaml.cs`, `LocalControlBridge.cs`, `macOS/Info.plist`, `ProtocolUriTest.cs`. Board `public/js/graph.js`.
+
+### 2026-08-16 — Shared print + material presets via ERP (lab.massivemake.com)
+
+- Print presets (`%AppData%/MassiveSlicer/presets.json`) and material presets (`materials.json`) were machine-local only. New MassiveSLICER installs could not see team libraries.
+- **ERP contract (Replit):** `GET /api/slicer/v1/presets-bundle` plus CRUD on `/print-presets` and `/material-presets`. Same `Authorization: Bearer msl_…` as search/pricing. Payload is opaque desktop JSON (`PrintPresetRecord` / `MaterialPreset`) wrapped as `{ id, updatedAt, payload }`. Prompt: `docs/ERP-Presets-API-Replit-Prompt.md`.
+- **Slicer (NAS clone `\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER`):** on ERP connect, pull bundle (404 → list endpoints → stay local). Merge by `ErpId` then name; POST local-only rows. Save preset / save material POST or PUT. Console: `erp presets`. 404 = “API not shipped yet” (connect still works).
+- Files: `ErpClient.cs`, `ErpPresetSync.cs`, `ErpModels.cs`, `ErpViewModel.cs`, `PresetsCardViewModel.cs`, `MainWindowViewModel.cs`, `RightPanelView.axaml.cs`, `PrintPresetRecord.ErpId`, `MaterialPreset.ErpId`. Tests: `ErpParsingTest` 27 passed.
+- **Not done:** Replit must still deploy the routes. Local `C:\Users\MassiveMAKE\MassiveSLICER` clone was not updated (NAS only).
+
+### 2026-08-16 — LFAM 3 flange triad: Extruder tool roll spun X/Y
+
+- Symptom: flange Z correct; green Y sat where red X should be.
+- Cause: `FlangeFrameMatrix` used `totalRoll = toolFrameRoll + flangeDisplayRoll`. Extruder `toolFrameRoll=-90` rotated the physical flange mark.
+- Fix: flange triad uses **only** `flangeDisplayRoll` (−15° on LFAM3). TCP/IK still use total roll. Rebuild launched.
+
+### 2026-08-16 — Spindle cylinder was cocked off the housing
+
+- Shop: green preview came out of the collet at an angle; purple line is the spindle (straight down). TCP should sit on that tip, just above the bed.
+- Cause: cylinder +Z followed the SpindleBit puck thick axis (~31 mm X), which is not the housing spin axis.
+- Fix: `FindHousing` = largest non-bit mesh; cylinder +Z = housing long axis, flipped away from the body. TCP still snaps to the cylinder tip.
+- Files: `SpindleBitCylinder.cs`, `ViewportView.axaml.cs`, `SpindleBitCylinderTest.cs`.
+
+### 2026-08-16 — MassiveSYSTEM Windows icon opens Explorer
+
+- Symptom: graph Windows button only copied `Z:\…`.
+- Cause: MassiveBOARD runs on the Mac, so `explorer.exe` never ran on the shop PC.
+- Fix: `LocalControlBridge` `GET/POST /reveal?path=` starts Explorer on the folder (MassiveFILES / `Z:\Projects` / `Z:\Research` only). Graph calls `127.0.0.1:8723–8728` when the browser is Windows. Fallback still copies the path if slicer is not running.
+- Files: `src/MassiveSlicer.App/Console/LocalControlBridge.cs`, MassiveBOARD `public/js/graph.js`.
+
+### 2026-08-15 — KRL header records slicer version, preset, and slice settings
+
+- After `DEF`: `;FOLD MassiveSLICER export` with status-bar `BuildInfo.Label`, UTC time, cell, TOOL/BASE.
+- Print: material preset name (or none), type/color, HV/HF, layer height, bead width, extrusion flow, print/travel/wipe speeds, first-layer speed/RPM when set, extrusion RPM %, T1/T2/T3, approach Z.
+- Mill: spindle RPM, cutting/plunge feed, rapid, approach Z.
+- Injected into default / URM / mill / custom headers. ASCII only.
+
+### 2026-08-15 — T12 TCP triad sat at the wrist; bit was on the table
+
+- TOOL_DATA[12] applied in A6 put the RGB triad ~flange height. The cutter (green cylinder) was already on the bed. Pendant BASE 1 Z is about -99 mm (table).
+- Spindle tools: snap TCP origin to the SpindleBit disc / preview-cylinder tip and align taught Z with the spindle. Extruder / scanner unchanged. TOOL_DATA numbers are not rewritten.
+
+### 2026-08-15 — LFAM 3 flange triad rotated, mesh left alone
+
+- Shop sketch: flange **X** along old Y (left), **Y** along -old X (down), **Z** unchanged (out of the face).
+- Display-only `FlangeDisplayRotation` (+90 deg about Z) on `FlangeFrameMatrix`. TCP / TOOL_DATA / spindle GLB unchanged.
+
+### 2026-08-15 — TOOL CONVENTION defaults to Z- (backward)
+
+- Startup + null fallback is **Z- (backward)**, not Undefined. Combo, triad readout, and `ToolAxisConventionOption.Default` all agree.
+
+### 2026-08-15 — TOOL #12 from ROBOT CELL crashed; MILL then T12 worked
+
+- ROBOT CELL TOOL # mounted T12 **and selected** the toolhead (gizmo + Desync + flash Additive). MILL first used `SuppressNextToolViewportSelect` so the spindle came up without that overlay.
+- TOOL # now uses the same no-select mount. TCP / TOOL_DATA still load. Overlay select is try/caught.
+
+### 2026-08-15 — TOOL #12 select crashed the app
+
+- Selecting T12 on LFAM 3 ran mount on the GL thread. A null TOOL CONVENTION SelectedItem (Avalonia ComboBox) or a missing T12 flange holder could NRE and take the process down.
+- Convention ComboBox now binds SelectedIndex. Mount no longer unmounts every tool if T12 has no holder. Mount + spindle-cylinder wrap in try/catch and log to `%TEMP%/massiveslicer-crash.log`.
+
+### 2026-08-15 — TOOL CONVENTION dropdown on the ROBOT card
+
+- Next to TCP OFFSET: Undefined / Z- (backward) / Z+ (forward) / X- (backward) / X+ (forward).
+- Remaps the TCP triad after taught ABC. Does not change TOOL_DATA or TCP ACTUAL numbers.
+
+### 2026-08-15 — ROBOT card shows only TCP ACTUAL in the current BASE
+
+- Removed FLANGE (ROBROOT), TCP WORLD, and BASE FRAME readouts from the left ROBOT card.
+- One block: **TCP ACTUAL (BASE n)** XYZABC. Live sync = controller `$POS_ACT`. Otherwise scene TCP minus ROBROOT minus `bed.baseData`.
+
+### 2026-08-15 — Name the two TCP triads + small x/y/z
+
+- The two RGB sticks are **TCP** (T12 + mounted tool name) and **FLANGE**. Sensor (if present) is **SENSOR**.
+- Small **x / y / z** at each tip: red / green / blue.
+
+### 2026-08-15 — Spindle Show Cylinder was 1000x too big
+
+- Tool GLBs bake verts to metres (`NormalizeMetresIfLooksLikeMillimetres`); flange applies GltfToScene ×1000. The preview cylinder was created in millimetres, so a Ø76 mm × 1 mm stick-out became 76 m × 1 m — larger than the cell.
+- `MmToParentLocal` converts UI mm into the disc's local units (metres when AABB diag &lt; 10).
+
+### 2026-08-15 — Save Home Position sits under Joint Angles
+
+- Moved HOME POSITIONS (name + SAVE AS HOME POSITION) in the left ROBOT card to just below the A1–E1 sliders and above LIMITS.
+
+### 2026-08-15 — Remove GO TO BED CENTER from left ROBOT card
+
+- Dropped the `PrimaryButton` in `LeftPanelView.axaml`. `GoToBedCenterCommand` stays on `RobotPanelViewModel` (unused from UI).
+
+### 2026-08-15 — Remove nested scroll in ROBOT / VIEWPORT
+
+- VIEWPORT had `MaxHeight=520` ScrollViewer inside LeftPanelHost (wheel stole events, expand-to-top fought the inner offset).
+- ROBOT had a Disabled ScrollViewer wrapper. Both unwrapped — the left column is the only scroller.
+
+### 2026-08-15 — Left + right sidebar: expand pins the card to the top
+
+- VIEWPORT only moved a few pixels because it is the last card — a scroller cannot pin the last item without empty space below. Inject a pad ~column height.
+- ROBOT still failed when Offset was applied before Extent grew, or the inner Disabled viewer was targeted. Shared `SidebarExpandScroll` skips Disabled, waits for layout, binds Floating `Offset`.
+- Same behavior on the **right** tab ScrollViewers (PRINTING / SCAN / MILL StepCards).
+
+### 2026-08-15 — ROBOT expand scrolls the left column to that card
+
+- Clicking ROBOT expanded in place because (1) the expand hook could miss the card and (2) scroll ran before layout, when Extent was still the collapsed height.
+- Now a class handler on every StepCard, then LayoutUpdated + delayed retries, using the card's Y inside the scroll content.
+- Floating ScrollViewer template also got a vertical scroll gesture so Offset actually moves the column.
+
+### 2026-08-15 — MassiveBOARD lists last 10 .mass saves
+
+- MassiveSLICER already logs each save (`WorkspaceSaveLog` → AppData + `Projects/_slicer/workspace-saves.jsonl`).
+- Added `ReadRecent` for newest-first unique paths. Board `GET /api/slicer/saves` reads that JSONL (prefs `RecentWorkspaces` until the first log line).
+- Expand MassiveSLICER on the graph: last 10 files. **Mac** reveals in Finder (`open -R`); **Windows** copies `Z:\…`.
+
+### 2026-08-15 — Log every .mass save for MassiveLAB
+
+- After a successful workspace save, append one JSONL line (path, UNAS-relative path, bytes, cell, project/element) to `%AppData%/MassiveSlicer/workspace-saves.jsonl` and `Projects/_slicer/workspace-saves.jsonl`.
+- If Lab is connected, POST `/api/slicer/v1/workspace-saves` (404 is fine until Lab ships it). Does **not** create a slice rev.
+- Share-relative paths now cover shop `Z:\Projects\…` and UNC `\\192.168.0.191\MassiveFILES\…`, not just `/Volumes/…`.
+
+### 2026-08-15 — PRINT / SCAN / MILL swap the flange toolhead
+
+- Clicking WORKFLOW PRINT / SCAN / MILL now mounts Extruder / Scanner (Calibrated) / Spindle (No Bit) on LFAM 3.
+- Does **not** select the TCP in the viewport (no gizmo steal). Sidebar tabs still follow the phase.
+
+### 2026-08-15 — Hide leftover seam-guide green line
+
+- The thin lime line beside the LFAM 3 table was a **seam-guide column** (always-on-top, ~1 m stub when no part is loaded).
+- Committed guides no longer draw unless a visible model or toolpath is in the scene. Open the seam editor to see/edit them.
+
+### 2026-08-15 — Viewport top chrome: no overlap on small screens
+
+- Move/rotate/scale bar (center) and Body/Toolpath/Speed/RPM/Thermal/Preview pills (right) overlapped when the viewport strip was narrow.
+- If they would collide, the pills drop to a second row (centered). Wide windows stay one row.
+
+### 2026-08-15 — Left sidebar: expand ROBOT (etc.) slides that card to the top
+
+- First pass scrolled on a single Loaded post, before the expander body measured — Extent was still collapsed, so ROBOT stayed put.
+- Now retries across layout/render (up to 10 frames) and targets `LeftPanelHost`, not the ROBOT card’s inner disabled ScrollViewer.
 
 ### 2026-08-15 — Imported KRL: drop it to the plate, and drag-drop it in
 
