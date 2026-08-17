@@ -16,6 +16,8 @@
          macOS/Linux, but harmless to leave unconditional for a Windows-only project. -->
     <BuiltInComInteropSupport Condition="$([MSBuild]::IsOSPlatform('Windows'))">true</BuiltInComInteropSupport>
     <RootNamespace>MassiveSlicer.App</RootNamespace>
+    <!-- MassiveFILES is SMB. codesign rejects Finder/xattr detritus on the copied apphost (NETSDK1177). -->
+    <_EnableMacOSCodeSign Condition="$([MSBuild]::IsOSPlatform('OSX'))">false</_EnableMacOSCodeSign>
   </PropertyGroup>
 
   <!-- Platform-specific GL host: Windows uses the WGL P/Invoke implementation

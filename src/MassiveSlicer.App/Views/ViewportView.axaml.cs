@@ -204,6 +204,7 @@ public partial class ViewportView : UserControl
     // The toolpath node whose scrubber is active. Set/cleared on the UI thread in
     // UpdateFocusOverlay; read on the UI thread in ScrubIk -- no cross-thread access.
     private SceneNode? _activeScrubNode;
+    private SceneNode? _pendingMillArmNode;
 
     // Cancellation for in-flight scrub-IK tasks -- replaced on each scrub step so only
     // the most recent index drives the robot.
@@ -323,6 +324,7 @@ public partial class ViewportView : UserControl
         _vmGlWired = true;
         _vm = vm;
         HookSpindleBitPreview(vm);
+        WirePlanarAxisCapture(vm);
 
         {
             vm.PropertyChanged += (_, pe) =>
@@ -390,6 +392,7 @@ public partial class ViewportView : UserControl
             vm.OnMillRequested        = () => RunMillAsync(vm);
             vm.OnPreviewDisplacedRequested = () => RunPreviewDisplacedAsync(vm);
             vm.OnGenerateMultiAxisRequested = () => RunMultiAxisMillAsync(vm);
+            vm.OnGenerateMillFromSettingsRequested = () => RunMillFromMeshAsync(vm);
             vm.OnUpdateSliceRequested = () => RunUpdateSliceAsync(vm);
             vm.CanUpdateSlice         = () => FindResliceSource(vm) is not null
                 && (_activeScrubNode is null || !_mergedByNode.ContainsKey(_activeScrubNode));
@@ -2061,7 +2064,9 @@ public partial class ViewportView : UserControl
                     // picks up the real layer count (otherwise it stays at 1–2).
                     if (!deferAdopt
                         && DataContext is ViewportViewModel vmAdopt
-                        && (_activeScrubNode is null || vmAdopt.IsPaintEditOpen))
+                        && (_activeScrubNode is null
+                            || vmAdopt.IsPaintEditOpen
+                            || ReferenceEquals(_pendingMillArmNode, adoptNode)))
                     {
                         bool sameNode = ReferenceEquals(_activeScrubNode, adoptNode);
                         bool canPreserve = sameNode
@@ -2072,9 +2077,15 @@ public partial class ViewportView : UserControl
                         vmAdopt.ResetScrubIndex(
                             adoptTp.Layers.Sum(l => l.Moves.Count),
                             adoptTp,
-                            preservePosition: canPreserve);
+                            preservePosition: canPreserve && !ReferenceEquals(_pendingMillArmNode, adoptNode));
                         vmAdopt.IsScrubSessionActive = true;
                         ValidateToolpathAsync(adoptNode, adoptTp);
+                        if (ReferenceEquals(_pendingMillArmNode, adoptNode))
+                        {
+                            _pendingMillArmNode = null;
+                            if (!vmAdopt.RobotOwnsPose)
+                                ScrubIkForNode(adoptNode, 0);
+                        }
                     }
                     UpdateFocusOverlay();
                 });
@@ -2118,12 +2129,24 @@ public partial class ViewportView : UserControl
                     // Body has no timeline, so the arm belongs at the end of the path rather than
                     // wherever the toolpath editor was left.
                     if (DataContext is ViewportViewModel vRep
-                        && ReferenceEquals(_activeScrubNode, replacedNode)
-                        && vRep.IsScrubSessionActive
-                        && !vRep.RobotOwnsPose)   // synced robot outranks a re-slice
+                        && !vRep.RobotOwnsPose
+                        && (ReferenceEquals(_pendingMillArmNode, replacedNode)
+                            || (ReferenceEquals(_activeScrubNode, replacedNode)
+                                && vRep.IsScrubSessionActive)))
                     {
-                        ScrubIkForNode(replacedNode, vRep.ViewGovernedScrubIndex);
-                        // Repopulate playback IK data so the timeline can play again.
+                        if (ReferenceEquals(_pendingMillArmNode, replacedNode))
+                        {
+                            _pendingMillArmNode = null;
+                            _activeScrubNode = replacedNode;
+                            if (_toolpathByNode.TryGetValue(replacedNode, out var millTp))
+                            {
+                                vRep.ResetScrubIndex(millTp.Layers.Sum(l => l.Moves.Count), millTp, preservePosition: false);
+                                vRep.IsScrubSessionActive = true;
+                            }
+                            ScrubIkForNode(replacedNode, 0);
+                        }
+                        else
+                            ScrubIkForNode(replacedNode, vRep.ViewGovernedScrubIndex);
                         if (_toolpathByNode.TryGetValue(replacedNode, out var freshTp))
                             ValidateToolpathAsync(replacedNode, freshTp);
                     }
@@ -2293,11 +2316,13 @@ public partial class ViewportView : UserControl
             0, 0, 0, 1);
         var toolN   = abcMat * kukaN;
 
-        // Spindle / T12: TOOL_DATA applied in A6 lands at the wrist. The cutter is the
-        // SpindleBitTCP plane (preferred) or SpindleBit disc — green preview + TCP sit
-        // there, +Z perpendicular to the plane (purple shop line). Extruder / scanner
-        // have neither primitive and keep the flange+TOOL_DATA path.
-        if (_currentToolNode is not null &&
+        // Spindle mesh datum is a preview. While a mill path is armed, the triad must
+        // be the same point IK solves (taught TOOL_DATA — T12), or it will not ride
+        // the beads. Idle spindle preview still snaps to SpindleBitTCP.
+        bool millPlayback = _activeScrubNode is { } millNode
+                            && _toolpathByNode.TryGetValue(millNode, out var millTp)
+                            && ToolpathHasMillMoves(millTp);
+        if (!millPlayback && _currentToolNode is not null &&
             SpindleBitCylinder.TryGetCutterWorld(_currentToolNode, out var bit, out var axisAway))
         {
             tcp = bit;
@@ -3306,6 +3331,7 @@ public partial class ViewportView : UserControl
         if (_spindleBitPreviewHooked) return;
         if (vm.SubtractiveSettings is not { } sub) return;
         _spindleBitPreviewHooked = true;
+        WirePlanarAxisCapture(vm);
         sub.PropertyChanged += (_, pe) =>
         {
             if (pe.PropertyName is
@@ -3366,7 +3392,9 @@ public partial class ViewportView : UserControl
             : bit.DiameterMm);
         float len = (float)bit.EffectiveCylinderLengthMm;
         var cyl = SpindleBitCylinder.BuildNode(dia, len, local, mesh);
-        anchor.AddChild(cyl);
+        // Parent to the tool, not the hidden SpindleBitTCP plane — Visible=false
+        // on the datum would swallow the cylinder with it.
+        SpindleBitCylinder.AttachPreview(tool, anchor, cyl);
         UploadPendingMeshes(cyl);
     }
 
@@ -3526,6 +3554,8 @@ public partial class ViewportView : UserControl
                 }
                 // Face click
                 TryMillAreaFaceAt(millPtrVm, pos, erase);
+                if (millPtrVm.IsMillStepActive)
+                    ScheduleRealtimeSlice(millPtrVm);
                 e.Handled = true;
                 return;
             }
@@ -3984,6 +4014,8 @@ public partial class ViewportView : UserControl
                     if (rect.Width > 4 && rect.Height > 4)
                         SelectMillFacesInRect(millBoxVm, rect, erase);
                 }
+                if (millBoxVm.IsMillStepActive)
+                    ScheduleRealtimeSlice(millBoxVm);
             }
             e.Handled = true;
             return;
@@ -3992,6 +4024,8 @@ public partial class ViewportView : UserControl
         {
             _millAreaStroking = false;
             if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            if (DataContext is ViewportViewModel millStrokeVm && millStrokeVm.IsMillStepActive)
+                ScheduleRealtimeSlice(millStrokeVm);
             e.Handled = true;
             return;
         }
@@ -5496,6 +5530,11 @@ public partial class ViewportView : UserControl
     private async Task RunSliceAsync(ViewportViewModel vm)
     {
         if (vm.IsSlicing || vm.OutlinerItems.Count == 0) return;
+        if (vm.ActiveSliceToolpathKind == OutlinerToolpathKind.Mill)
+        {
+            await RunMillFromMeshAsync(vm);
+            return;
+        }
         var cancel = BeginSliceCancellation();
         _sliceStatusClearGen++;
         vm.IsSlicing = true;
@@ -5514,9 +5553,10 @@ public partial class ViewportView : UserControl
                 return;
             }
 
-            // One evolving toolpath per model: if this model was already sliced,
-            // update it in place instead of adding another toolpath node.
-            if (sourceItem.Children.FirstOrDefault(c => c.IsToolpath) is { } existingToolpath)
+            // One evolving toolpath per model *and kind*: mill (LFAM 3 Mill tab)
+            // sits beside the print path instead of overwriting it.
+            var sliceKind = vm.ActiveSliceToolpathKind;
+            if (ViewportViewModel.FindToolpathChild(sourceItem, sliceKind) is { } existingToolpath)
             {
                 vm.IsSlicing = false;   // hand off to the update path (it re-guards)
                 await RunUpdateSliceAsync(vm, (sourceItem, existingToolpath));
@@ -5572,9 +5612,9 @@ public partial class ViewportView : UserControl
                 return;
             }
 
-            var toolpathName = ToolpathNameFrom(sourceItem.Name);
+            var toolpathName = ToolpathNameFrom(sourceItem.Name, sliceKind);
             var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
-            vm.RegisterToolpathInOutliner(toolpathNode, sourceItem);
+            vm.RegisterToolpathInOutliner(toolpathNode, sourceItem, sliceKind);
             var selectedPreset = vm.AdditiveSettings is { } asp
                 && asp.SelectedPresetIndex >= 0
                 && asp.SelectedPresetIndex < asp.MaterialPresets.Count
@@ -5816,7 +5856,7 @@ public partial class ViewportView : UserControl
                 Name = $"Relief Mill D{mill.ToolDiameterMm:0.#} SO{mill.StepoverMm:0.#}",
                 Selectable = true,
             };
-            vm.RegisterToolpathInOutliner(toolpathNode, sourceItem);
+            vm.RegisterToolpathInOutliner(toolpathNode, sourceItem, OutlinerToolpathKind.Mill);
             vm.PendingToolpath.Enqueue(new PendingToolpathEntry
             {
                 Toolpath      = toolpath,
@@ -5973,7 +6013,7 @@ public partial class ViewportView : UserControl
                 Name = $"Multi-Axis Mill D{mill.ToolDiameterMm:0.#} SO{mill.StepoverMm:0.#}",
                 Selectable = true,
             };
-            vm.RegisterToolpathInOutliner(toolpathNode, null);
+            vm.RegisterToolpathInOutliner(toolpathNode, null, OutlinerToolpathKind.Mill);
             vm.PendingToolpath.Enqueue(new PendingToolpathEntry
             {
                 Toolpath      = toolpath,
@@ -6004,6 +6044,396 @@ public partial class ViewportView : UserControl
         {
             vm.IsSlicing = false;
         }
+    }
+
+    /// <summary>
+    /// Mills the selected workpiece (or the painted mill area) with the live subtractive
+    /// settings. Does not require a heightmap or UVs — those stay on the MORE displaced /
+    /// relief paths. Used by TOOLPATHING → Generate Toolpath and by mill-tab realtime slice.
+    /// </summary>
+    private async Task RunMillFromMeshAsync(ViewportViewModel vm)
+    {
+        if (vm.IsSlicing) return;
+        var sub = vm.SubtractiveSettings;
+        if (sub is null)
+        {
+            SetSliceStatus(vm, "Mill failed: no milling settings.", isError: true);
+            return;
+        }
+
+        var sourceItem = vm.OwningModelItem(
+                             vm.FindUserMeshOutlinerItem(_renderer.SelectedNode)
+                             ?? vm.ResolveActivePrintObjectItem())
+                         ?? vm.EnumerateUserModelItems().FirstOrDefault();
+        if (sourceItem is null)
+        {
+            SetSliceStatus(vm, "Mill failed: select a model to mill.", isError: true);
+            return;
+        }
+
+        bool areaArmed = vm.IsMillAreaSelectActive;
+        bool hasPaint  = MillPaint.HasPaint || vm.MillPaintedVertices > 0;
+        if (areaArmed && !hasPaint)
+        {
+            SetSliceStatus(vm,
+                "Paint a mill area first (Box / Lasso / Brush / Face), or switch SELECT AREA to Whole model.",
+                isError: true);
+            return;
+        }
+
+        if (!TryCollectMillSurface(sourceItem, restrictToPaint: hasPaint,
+                out var positions, out var normals, out var indices))
+        {
+            SetSliceStatus(vm,
+                hasPaint
+                    ? "Mill failed: painted area has no mesh triangles."
+                    : "Mill failed: mesh has no geometry.",
+                isError: true);
+            return;
+        }
+
+        var cancel = BeginSliceCancellation();
+        _sliceStatusClearGen++;
+        vm.IsSlicing = true;
+        vm.SliceStatusIsError = false;
+        SetSliceStatus(vm, $"{sub.SelectedOperationDisplayName}: milling…");
+        try
+        {
+            ApplyMillCutterTcp(vm);
+            var mill = BuildMillSettings(sub);
+            bool planar = sub.IsPlanarFacing || sub.IsPlanarClearing;
+            NVec3? approach = null;
+            bool lockAxis = false;
+            if (planar)
+            {
+                if (sub.PlanarToolAxis.Kind == MillPlanarAxisKind.PaintedFace)
+                {
+                    var face = MillPlanarOrientation.AverageSurfaceNormal(positions, normals, indices);
+                    sub.SetCapturedToolAxis(-face, MillPlanarAxisKind.PaintedFace);
+                }
+                else if (sub.PlanarToolAxis.Kind == MillPlanarAxisKind.Camera)
+                    ApplyCameraToolAxis(sub);
+                approach = sub.ResolvePlanarApproach();
+                lockAxis = true;
+            }
+            var toolpath = await Task.Run(() =>
+            {
+                cancel.ThrowIfCancellationRequested();
+                return planar
+                    ? MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.Generate(
+                        positions, normals, indices, mill,
+                        approachAxis: approach, lockToolToApproach: lockAxis)
+                    : MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.GenerateMultiAxis(
+                        positions, normals, indices, mill);
+            }, cancel);
+
+            cancel.ThrowIfCancellationRequested();
+            if (toolpath.Layers.Count == 0 || toolpath.Layers.Sum(l => l.Moves.Count) == 0)
+            {
+                SetSliceStatus(vm, "Mill finished with 0 cuts — check area selection and stepover.", isError: true);
+                return;
+            }
+
+            var existing = ViewportViewModel.FindToolpathChild(sourceItem, OutlinerToolpathKind.Mill);
+            SceneNode toolpathNode;
+            if (existing is not null)
+            {
+                toolpathNode = existing.Node;
+                toolpathNode.Name = ToolpathNameFrom(sourceItem.Name, OutlinerToolpathKind.Mill);
+                var preservedFull  = toolpathNode.LocalTransform;
+                var preservedLocal = Matrix4.CreateTranslation(preservedFull.M41, preservedFull.M42, preservedFull.M43);
+                if (!_toolpathOriginByNode.TryGetValue(toolpathNode, out var preservedOrigin))
+                    preservedOrigin = new NVec3(preservedLocal.M41, preservedLocal.M42, preservedLocal.M43);
+                ClearTcpKeyframeState(toolpathNode, vm);
+                vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+                {
+                    Toolpath                = toolpath,
+                    RawToolpath             = toolpath,
+                    Node                    = toolpathNode,
+                    BeadWidth               = (float)sub.ToolDiameterMm,
+                    LayerHeight             = mill.StepdownMm,
+                    MaterialColor           = MapMaterialColor(null),
+                    PreserveRelativePose    = true,
+                    PreservedLocalTransform = preservedLocal,
+                    PreservedOrigin         = preservedOrigin,
+                    RebaseToFreshCentroid   = true,
+                });
+            }
+            else
+            {
+                toolpathNode = new SceneNode
+                {
+                    Name       = ToolpathNameFrom(sourceItem.Name, OutlinerToolpathKind.Mill),
+                    Selectable = true,
+                };
+                vm.RegisterToolpathInOutliner(toolpathNode, sourceItem, OutlinerToolpathKind.Mill);
+                vm.PendingToolpath.Enqueue(new PendingToolpathEntry
+                {
+                    Toolpath      = toolpath,
+                    RawToolpath   = toolpath,
+                    Node          = toolpathNode,
+                    BeadWidth     = (float)sub.ToolDiameterMm,
+                    LayerHeight   = mill.StepdownMm,
+                    MaterialColor = MapMaterialColor(null),
+                });
+            }
+
+            ApplyToolpathStats(vm, toolpath);
+            _pendingMillArmNode = toolpathNode;
+            int moves = toolpath.Layers.Sum(l => l.Moves.Count);
+            string scope = hasPaint
+                ? $"{vm.MillPaintedVertices:N0} painted verts"
+                : "whole model";
+            string axisNote = "";
+            if (planar)
+            {
+                var tool = sub.ResolvePlanarToolAxis();
+                var n = MassiveSlicer.Core.Models.MillPlanarOrientation.SurfaceNormalFromToolAxis(tool);
+                var (aa, bb, cc) = KukaOrientation.AbcFromMillNormal(n);
+                axisNote = $"  T12 +Z=({tool.X:0.##},{tool.Y:0.##},{tool.Z:0.##})  ABC=({aa:0.#},{bb:0.#},{cc:0.#})";
+                ConsoleLogMill($"[mill] planar axis {sub.PlanarToolAxis.Kind} tilt={sub.PlanarTiltDeg:0.#} az={sub.PlanarAzimuthDeg:0.#}{axisNote}");
+            }
+            SetSliceStatus(vm, $"Mill complete — {moves:N0} cuts ({sub.SelectedOperationDisplayName}, {scope}){axisNote}");
+            ScheduleClearSliceStatus(vm);
+            vm.MarkWorkspaceDirty?.Invoke();
+            GlCanvas.RequestNextFrameRendering();
+        }
+        catch (OperationCanceledException)
+        {
+            SetSliceStatus(vm, "Mill cancelled — applying latest settings…");
+        }
+        catch (Exception ex)
+        {
+            SetSliceStatus(vm, $"Mill failed: {ex.Message}", isError: true);
+            System.Console.Error.WriteLine($"[mill] {ex}");
+        }
+        finally
+        {
+            vm.IsSlicing = false;
+        }
+    }
+
+    bool TryCollectMillSurface(
+        OutlinerItemViewModel source,
+        bool restrictToPaint,
+        out NVec3[] positions,
+        out NVec3[] normals,
+        out int[] indices)
+    {
+        positions = [];
+        normals = [];
+        indices = [];
+        var pos = new List<NVec3>();
+        var nrm = new List<NVec3>();
+        var idx = new List<int>();
+
+        var nodes = new List<SceneNode>();
+        foreach (var node in source.Node.SelfAndDescendants())
+        {
+            if (node.Mesh?.PickingData is not null)
+                nodes.Add(node);
+        }
+
+        // Paint may live on a descendant (or a sibling mesh) while the outliner
+        // row is the import root — if the source has no painted verts, take every
+        // painted millable layer instead of silently falling back to the whole mesh.
+        if (restrictToPaint)
+        {
+            bool sourceHasPaint = false;
+            foreach (var node in nodes)
+            {
+                if (MillPaint.TryGetLayer(node, out var layer) && layer.PaintedVertexCount > 0)
+                {
+                    sourceHasPaint = true;
+                    break;
+                }
+            }
+            if (!sourceHasPaint)
+            {
+                nodes.Clear();
+                foreach (var node in _renderer.SceneRoot.SelfAndDescendants())
+                {
+                    if (node.Mesh?.PickingData is null) continue;
+                    if (!MillPaint.TryGetLayer(node, out var layer) || layer.PaintedVertexCount <= 0)
+                        continue;
+                    if (!vmIsMillable(node)) continue;
+                    nodes.Add(node);
+                }
+            }
+        }
+
+        bool vmIsMillable(SceneNode node)
+        {
+            if (DataContext is not ViewportViewModel vm) return true;
+            var selectable = Picker.FindSelectableRoot(node) ?? node;
+            return vm.IsMillableWorkpiece(selectable) || vm.IsMillableWorkpiece(node);
+        }
+
+        foreach (var node in nodes)
+        {
+            if (node.Mesh?.PickingData is not { } mesh) continue;
+            var world = node.WorldTransform;
+            float[]? weights = null;
+            if (restrictToPaint && MillPaint.TryGetLayer(node, out var layer))
+                weights = layer.Weights;
+
+            int n = mesh.Positions.Length;
+            if (n == 0) continue;
+
+            var painted = restrictToPaint ? new bool[n] : null;
+            if (weights is not null && painted is not null)
+            {
+                int wlen = Math.Min(n, weights.Length);
+                for (int i = 0; i < wlen; i++)
+                    painted[i] = weights[i] >= 0.02f;
+            }
+            if (restrictToPaint)
+            {
+                bool any = false;
+                if (painted is not null)
+                {
+                    for (int i = 0; i < painted.Length; i++)
+                    {
+                        if (painted[i]) { any = true; break; }
+                    }
+                }
+                if (!any) continue;
+            }
+
+            int baseIndex = pos.Count;
+            var meshNrm = mesh.Normals;
+            for (int i = 0; i < n; i++)
+            {
+                pos.Add(TransformPoint(mesh.Positions[i], world));
+                var nn = meshNrm is { Length: > 0 } && i < meshNrm.Length
+                    ? meshNrm[i]
+                    : new TkVector3(0, 0, 1);
+                nrm.Add(TransformNormalWorld(nn, world));
+            }
+
+            if (mesh.Indices is { } mi)
+            {
+                for (int t = 0; t + 2 < mi.Length; t += 3)
+                {
+                    int i0 = (int)mi[t], i1 = (int)mi[t + 1], i2 = (int)mi[t + 2];
+                    if (painted is not null
+                        && !((uint)i0 < (uint)painted.Length && painted[i0]
+                             || (uint)i1 < (uint)painted.Length && painted[i1]
+                             || (uint)i2 < (uint)painted.Length && painted[i2]))
+                        continue;
+                    idx.Add(baseIndex + i0);
+                    idx.Add(baseIndex + i1);
+                    idx.Add(baseIndex + i2);
+                }
+            }
+            else
+            {
+                for (int i = 0; i + 2 < n; i += 3)
+                {
+                    if (painted is not null && !(painted[i] || painted[i + 1] || painted[i + 2]))
+                        continue;
+                    idx.Add(baseIndex + i);
+                    idx.Add(baseIndex + i + 1);
+                    idx.Add(baseIndex + i + 2);
+                }
+            }
+        }
+
+        if (idx.Count < 3) return false;
+        positions = pos.ToArray();
+        normals = nrm.ToArray();
+        indices = idx.ToArray();
+        return true;
+    }
+
+    void WirePlanarAxisCapture(ViewportViewModel vm)
+    {
+        var sub = vm.SubtractiveSettings;
+        if (sub is null) return;
+        sub.CapturePlanarFromCamera = () => ApplyCameraToolAxis(sub);
+        sub.CapturePlanarFromPaint = () => ApplyPaintedToolAxis(vm, sub);
+    }
+
+    void ApplyCameraToolAxis(SubtractiveSettingsViewModel sub)
+    {
+        var eye = _renderer.Camera.Eye;
+        var tgt = _renderer.Camera.Target;
+        // Tool comes from the camera: T12 +Z points from eye toward the work.
+        var toolZ = new NVec3(tgt.X - eye.X, tgt.Y - eye.Y, tgt.Z - eye.Z);
+        sub.SetCapturedToolAxis(toolZ, MillPlanarAxisKind.Camera);
+        ConsoleLogMill($"[mill] tool axis from camera → T12 +Z ({toolZ.X:0.###}, {toolZ.Y:0.###}, {toolZ.Z:0.###})");
+    }
+
+    void ApplyPaintedToolAxis(ViewportViewModel vm, SubtractiveSettingsViewModel sub)
+    {
+        var sourceItem = vm.OwningModelItem(
+                             vm.FindUserMeshOutlinerItem(_renderer.SelectedNode)
+                             ?? vm.ResolveActivePrintObjectItem())
+                         ?? vm.EnumerateUserModelItems().FirstOrDefault();
+        if (sourceItem is null)
+        {
+            ConsoleLogMill("[mill] tool axis from paint: no model");
+            return;
+        }
+        bool hasPaint = MillPaint.HasPaint || vm.MillPaintedVertices > 0;
+        if (!TryCollectMillSurface(sourceItem, restrictToPaint: hasPaint,
+                out var positions, out var normals, out var indices))
+        {
+            ConsoleLogMill("[mill] tool axis from paint: no triangles");
+            return;
+        }
+        var face = MillPlanarOrientation.AverageSurfaceNormal(positions, normals, indices);
+        sub.SetCapturedToolAxis(-face, MillPlanarAxisKind.PaintedFace);
+        ConsoleLogMill($"[mill] tool axis from paint → T12 +Z ({-face.X:0.###}, {-face.Y:0.###}, {-face.Z:0.###})");
+    }
+
+    /// <summary>
+    /// MILL workflow mounts "Spindle (No Bit)" which still carries the extruder CRE_HV TCP.
+    /// Playback must use taught T12 (or the first spindle TOOL_DATA that is not the extruder).
+    /// Mesh stays; only IK + triad offset change.
+    /// </summary>
+    void ApplyMillCutterTcp(ViewportViewModel vm)
+    {
+        var tools = vm.ActiveCell?.EffectiveTools;
+        if (tools is null || tools.Count == 0) return;
+
+        var millTool = tools.FirstOrDefault(t => t.KrlIndex == 12)
+                       ?? tools.FirstOrDefault(t =>
+                           t.Name.Contains("Tool 12", StringComparison.OrdinalIgnoreCase))
+                       ?? tools.FirstOrDefault(t =>
+                           t.KrlIndex is >= 7 and <= 12
+                           && (Math.Abs(t.TcpX) + Math.Abs(t.TcpY) + Math.Abs(t.TcpZ)) > 1f);
+
+        if (millTool is null) return;
+
+        _tcpOffsetLocal = new Vector3(millTool.TcpX, millTool.TcpY, millTool.TcpZ);
+        _tcpOrientationABC = new Vector3(millTool.TcpA, millTool.TcpB, millTool.TcpC);
+        RebuildIkSolver(vm);
+        if (vm.Robot is not null)
+            SyncTcpReadout(vm);
+
+        // Don't pick the toolhead (T12 select from PRINT used to crash). TCP/IK only.
+        vm.SuppressNextToolViewportSelect = true;
+        vm.Robot?.SelectToolByKrlIndex(millTool.KrlIndex);
+        ConsoleLogMill($"[mill] TCP → T{millTool.KrlIndex} '{millTool.Name}'  "
+                       + $"({millTool.TcpX:0.#}, {millTool.TcpY:0.#}, {millTool.TcpZ:0.#})");
+    }
+
+    void ArmMillPlayback(ViewportViewModel vm, SceneNode toolpathNode, Toolpath toolpath)
+    {
+        _activeScrubNode = toolpathNode;
+        vm.IsScrubSessionActive = true;
+        int n = toolpath.Layers.Sum(l => l.Moves.Count);
+        vm.ResetScrubIndex(n, toolpath, preservePosition: false);
+        _renderer.Select(toolpathNode);
+        vm.SetOutlinerSelection(toolpathNode);
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (DataContext is not ViewportViewModel v2) return;
+            if (!ReferenceEquals(_activeScrubNode, toolpathNode)) return;
+            if (v2.RobotOwnsPose) return;
+            ScrubIkForNode(toolpathNode, 0);
+        }, DispatcherPriority.Background);
     }
 
     /// <summary>Transforms a normal by the matrix's 3x3 (row-vector convention) and renormalizes.</summary>
@@ -6102,6 +6532,26 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.WaveWavelength),
     ];
 
+    private static readonly HashSet<string> RealtimeMillProps =
+    [
+        nameof(SubtractiveSettingsViewModel.StepoverMm),
+        nameof(SubtractiveSettingsViewModel.StepdownMm),
+        nameof(SubtractiveSettingsViewModel.FinishAllowanceMm),
+        nameof(SubtractiveSettingsViewModel.StockToLeaveMm),
+        nameof(SubtractiveSettingsViewModel.ToolDiameterMm),
+        nameof(SubtractiveSettingsViewModel.BallEnd),
+        nameof(SubtractiveSettingsViewModel.PassStrategy),
+        nameof(SubtractiveSettingsViewModel.PassAngleDeg),
+        nameof(SubtractiveSettingsViewModel.SelectedOperation),
+        nameof(SubtractiveSettingsViewModel.KeepToolWithinSurface),
+        nameof(SubtractiveSettingsViewModel.EnableAntiGouging),
+        nameof(SubtractiveSettingsViewModel.NumberOfDepthCuts),
+        nameof(SubtractiveSettingsViewModel.ApproachClearanceMm),
+        nameof(SubtractiveSettingsViewModel.RetractHeightMm),
+        nameof(SubtractiveSettingsViewModel.RapidZMm),
+        nameof(SubtractiveSettingsViewModel.SelectedBit),
+    ];
+
     private void WireRealtimeSlicing(ViewportViewModel vm)
     {
         if (vm.AdditiveSettings is { } add)
@@ -6110,6 +6560,13 @@ public partial class ViewportView : UserControl
                 if (e.PropertyName == nameof(AdditiveSettingsViewModel.EffectorRange))
                     vm.UpdateEffectorRangeIndicators((float)add.EffectorRange);
                 if (e.PropertyName is { } name && RealtimeSliceProps.Contains(name))
+                    ScheduleRealtimeSlice(vm);
+            };
+        if (vm.SubtractiveSettings is { } subRt)
+            subRt.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName is { } millName && RealtimeMillProps.Contains(millName)
+                    && vm.ActiveSliceToolpathKind == OutlinerToolpathKind.Mill)
                     ScheduleRealtimeSlice(vm);
             };
         vm.OnModelGeometryChanged = () => ScheduleRealtimeSlice(vm);
@@ -6132,6 +6589,9 @@ public partial class ViewportView : UserControl
         vm.RestorePaintModifications = RestorePaintModificationsState;
         vm.PropertyChanged += (_, e) =>
         {
+            if (e.PropertyName is nameof(ViewportViewModel.IsMillStepActive)
+                && vm.IsMillStepActive)
+                ScheduleRealtimeSlice(vm);
             if (e.PropertyName == nameof(ViewportViewModel.RealtimeSlicingPaused)
                 && !vm.RealtimeSlicingPaused && _realtimeSlicePending)
             {
@@ -6201,7 +6661,7 @@ public partial class ViewportView : UserControl
             LogPaintConsole("[edit] reslice: turned on Formbound bridges visibility");
         }
 
-        var toolpathChild = item.Children.FirstOrDefault(c => c.IsToolpath);
+        var toolpathChild = ViewportViewModel.FindToolpathChild(item, OutlinerToolpathKind.Print);
         LogPaintConsole(toolpathChild is not null
             ? "[edit] reslice: updating toolpath with paint edits…"
             : "[edit] reslice: slicing model with paint edits…");
@@ -6363,11 +6823,27 @@ public partial class ViewportView : UserControl
                    ?? vm.EnumerateUserModelItems().FirstOrDefault();
         if (item is null) return;
 
-        var toolpathChild = item.Children.FirstOrDefault(c => c.IsToolpath);
+        if (vm.ActiveSliceToolpathKind == OutlinerToolpathKind.Mill)
+        {
+            int millTris = SubtreeTriangleCount(item.Node);
+            if (ViewportViewModel.FindToolpathChild(item, OutlinerToolpathKind.Mill) is null
+                && millTris > AutoSliceMaxTriangles)
+            {
+                SetSliceStatus(vm,
+                    $"Auto-mill skipped — {millTris:N0} triangles (limit {AutoSliceMaxTriangles:N0}). Press Generate Toolpath.");
+                return;
+            }
+            await RunMillFromMeshAsync(vm);
+            return;
+        }
+
+        var sliceKind = vm.ActiveSliceToolpathKind;
+        var toolpathChild = ViewportViewModel.FindToolpathChild(item, sliceKind);
         if (toolpathChild is null)
         {
-            // No toolpath yet — this is a fresh import, so produce the FIRST slice rather
-            // than re-slicing. The 2026-08-01 guard returned here unconditionally, which
+            // No toolpath of this kind yet — produce a FIRST slice (print vs mill
+            // are siblings so a print path must not block the first mill slice).
+            // The 2026-08-01 guard returned here unconditionally, which
             // fixed dense STEP imports freezing but also removed auto-slice on import
             // entirely. Keep that protection as a size check instead of a blanket refusal.
             int tris = SubtreeTriangleCount(item.Node);
@@ -6439,7 +6915,7 @@ public partial class ViewportView : UserControl
                 return;
             }
 
-            toolpathNode.Name = ToolpathNameFrom(parentItem.Name);
+            toolpathNode.Name = ToolpathNameFrom(parentItem.Name, toolpathItem.ToolpathKind);
 
             var selectedPreset = vm.AdditiveSettings is { } asp
                 && asp.SelectedPresetIndex >= 0
@@ -7277,7 +7753,7 @@ public partial class ViewportView : UserControl
             return;
         }
 
-        var tpItem = ownerItem.Children.FirstOrDefault(c => c.IsToolpath);
+        var tpItem = ViewportViewModel.FindToolpathChild(ownerItem, OutlinerToolpathKind.Print);
 
         var pieces = new List<ApplyPiece> { new(masterMesh, ownerItem.Node.WorldTransform, ownerItem.Node.Name) };
         bool anyChange = false;
@@ -7437,9 +7913,9 @@ public partial class ViewportView : UserControl
                     continue;
                 }
 
-                var toolpathName = ToolpathNameFrom(pieceItem.Name);
+                var toolpathName = ToolpathNameFrom(pieceItem.Name, OutlinerToolpathKind.Print);
                 var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
-                vm.RegisterToolpathInOutliner(toolpathNode, pieceItem);
+                vm.RegisterToolpathInOutliner(toolpathNode, pieceItem, OutlinerToolpathKind.Print);
                 var selectedPreset = vm.AdditiveSettings is { } asp
                     && asp.SelectedPresetIndex >= 0
                     && asp.SelectedPresetIndex < asp.MaterialPresets.Count
@@ -8653,7 +9129,12 @@ public partial class ViewportView : UserControl
         float vpH = (float)GlCanvas.Bounds.Height;
         if (vpW < 2 || vpH < 2) return;
         var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+        var eye = _renderer.Camera.Eye;
 
+        bool Inside(float x, float y) => inside(new Avalonia.Point(x, y));
+        Vector3 Project(Vector3 world) => _renderer.ProjectToScreenDepth(world, viewProj, vpW, vpH);
+
+        var nodes = new List<(SceneNode Node, MeshData Mesh)>();
         foreach (var node in _renderer.SceneRoot.SelfAndDescendants())
         {
             if (node.Mesh?.PickingData is null) continue;
@@ -8661,26 +9142,30 @@ public partial class ViewportView : UserControl
             if (selectable is null) continue;
             if (!vm.IsMillableWorkpiece(selectable) && !vm.IsMillableWorkpiece(node))
                 continue;
-
             if (vm.MillAreaTargetRoot is null)
                 EnsureMillAreaTarget(vm, node);
             if (!vm.IsMillableWorkpiece(selectable) && !vm.IsMillableWorkpiece(node))
                 continue;
+            nodes.Add((node, node.Mesh.PickingData));
+        }
 
-            MillPaint.StampScreenRegion(
-                node,
-                world =>
-                {
-                    var scr = _renderer.ProjectToScreen(world, viewProj, vpW, vpH);
-                    if (float.IsNaN(scr.X)) return false;
-                    return inside(new Avalonia.Point(scr.X, scr.Y));
-                },
-                strength: 0.95f,
-                erase: erase);
+        // Shared front-depth buffer so a near skin occludes the far side / back wall.
+        MillFrontSurfaceBox.CreateDepthBuffer(vpW, vpH, out var zmin, out int gw, out int gh);
+        foreach (var (node, mesh) in nodes)
+            MillFrontSurfaceBox.AccumulateDepth(
+                mesh, node.WorldTransform, eye, Project, Inside, zmin, gw, gh);
+
+        foreach (var (node, mesh) in nodes)
+        {
+            var hits = new HashSet<int>();
+            MillFrontSurfaceBox.CollectVisibleVerts(
+                mesh, node.WorldTransform, eye, Project, Inside, zmin, gw, gh, hits);
+            if (hits.Count == 0) continue;
+            MillPaint.EnsureLayer(node).StampIndices(hits, strength: 0.95f, erase);
         }
 
         SyncMillPaintStats(vm);
-        ConsoleLogMill($"[mill-paint] region → {vm.MillPaintedVertices} verts ({vm.MillPaintCoverage * 100:0.#}%)");
+        ConsoleLogMill($"[mill-paint] region (front) → {vm.MillPaintedVertices} verts ({vm.MillPaintCoverage * 100:0.#}%)");
         GlCanvas.RequestNextFrameRendering();
     }
 
@@ -13434,12 +13919,16 @@ public partial class ViewportView : UserControl
     /// toolpath (no selection required), mapping 0–1 progress onto its move range.</summary>
     /// <summary>Toolpath display name = the source mesh's name (file extension stripped),
     /// so KRL export dialogs carry it straight through to the .src filename.</summary>
-    private static string ToolpathNameFrom(string meshName)
+    private static string ToolpathNameFrom(string meshName, OutlinerToolpathKind kind = OutlinerToolpathKind.Print)
     {
         var n = meshName.Trim();
         foreach (var ext in new[] { ".stl", ".obj", ".glb", ".gltf", ".3mf", ".ply", ".step", ".stp" })
             if (n.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) { n = n[..^ext.Length].TrimEnd(); break; }
-        return n.Length > 0 ? n : "Toolpath";
+        if (n.Length == 0) n = "Toolpath";
+        if (kind == OutlinerToolpathKind.Mill
+            && !n.Contains("Mill", StringComparison.OrdinalIgnoreCase))
+            return $"{n} Mill";
+        return n;
     }
 
     private void SimScrubIk(double progress)
@@ -13555,14 +14044,18 @@ public partial class ViewportView : UserControl
             targetRobroot = worldPos - robrootPos;
         }
 
-        // Tool orientation: approach along -normal, forward fixed to world +X.
-        // Fixing the forward eliminates azimuthal spin when tilt axis changes.
-        var targetRot = vm.AdditiveSettings is { } addSettings
-            ? solver.TargetRotFromGlobalOrientation(worldNormal,
-                (float)addSettings.ToolheadA,
-                (float)addSettings.ToolheadB,
-                (float)addSettings.ToolheadC)
-            : solver.TargetRotFromGlobalOrientation(worldNormal, 0f, 0f, 0f);
+        // Mill: T12 cutter is tool Z — do not use the extruder X-approach frame
+        // (that left the spindle TCP pointing sideways along the path).
+        bool millScrub = _toolpathByNode.TryGetValue(scrubNode, out var tpOri)
+                         && ToolpathHasMillMoves(tpOri);
+        var targetRot = millScrub
+            ? solver.TargetRotFromMillNormal(worldNormal)
+            : vm.AdditiveSettings is { } addSettings
+                ? solver.TargetRotFromGlobalOrientation(worldNormal,
+                    (float)addSettings.ToolheadA,
+                    (float)addSettings.ToolheadB,
+                    (float)addSettings.ToolheadC)
+                : solver.TargetRotFromGlobalOrientation(worldNormal, 0f, 0f, 0f);
 
         // Seed from current joint angles (snapshot on UI thread, safe to read).
         var seed = new float[]
@@ -13774,7 +14267,13 @@ public partial class ViewportView : UserControl
                     // Per-move normal (overhang orientation) takes priority; falls back to UnitZ.
                     NVec3 effNorm;
                     if (move.Kind == MoveKind.Travel || move.IsLayerStitch)
-                        effNorm = lastNormN;
+                    {
+                        effNorm = move.Normal.LengthSquared() > 1e-6f
+                            ? NVec3.Normalize(move.Normal)
+                            : lastNormN;
+                        if (move.Normal.LengthSquared() > 1e-6f)
+                            lastNormN = effNorm;
+                    }
                     else
                     {
                         effNorm    = move.Normal.LengthSquared() > 1e-6f ? move.Normal : NVec3.UnitZ;
@@ -13791,10 +14290,13 @@ public partial class ViewportView : UserControl
 
             if (cts.IsCancellationRequested) return;
 
+            bool millPath = ToolpathHasMillMoves(toolpath);
             var targetRots = new (TkVector3 r0, TkVector3 r1, TkVector3 r2)[total];
             for (int i = 0; i < total; i++)
             {
-                targetRots[i] = solver.TargetRotFromGlobalOrientation(normals[i], offA, offB, offC);
+                targetRots[i] = millPath
+                    ? solver.TargetRotFromMillNormal(normals[i])
+                    : solver.TargetRotFromGlobalOrientation(normals[i], offA, offB, offC);
             }
 
             if (cts.IsCancellationRequested) return;
@@ -13910,8 +14412,10 @@ public partial class ViewportView : UserControl
                                 bool ok = true;
                                 foreach (int ti in new[] { s0, (s0 + s1) / 2, s1 })
                                 {
-                                    var rot = solver.TargetRotFromGlobalOrientation(
-                                        normals[ti], offA, offB, offC + y);
+                                    var rot = millPath
+                                        ? solver.TargetRotFromMillNormal(normals[ti], y)
+                                        : solver.TargetRotFromGlobalOrientation(
+                                            normals[ti], offA, offB, offC + y);
                                     var sol = solver.Solve(targets[ti],
                                         solutions[Math.Max(0, ti - 1)], rot, maxIterations: 60);
                                     if (sol is null || MathF.Abs(sol[4]) < MinA5) { ok = false; break; }
@@ -13938,8 +14442,10 @@ public partial class ViewportView : UserControl
                             var chunkSeed = solutions[Math.Max(0, rIn - 1)];
                             for (int i = rIn; i <= rOut; i++)
                             {
-                                var rot = solver.TargetRotFromGlobalOrientation(
-                                    normals[i], offA, offB, offC + yawByMove[i]);
+                                var rot = millPath
+                                    ? solver.TargetRotFromMillNormal(normals[i], yawByMove[i])
+                                    : solver.TargetRotFromGlobalOrientation(
+                                        normals[i], offA, offB, offC + yawByMove[i]);
                                 var sol = solver.Solve(targets[i], chunkSeed, rot, maxIterations: 40);
                                 bool inEnv = sol is not null &&
                                     (cellJoints is null || JointLimitEnvelope.JointsInside(sol, cellJoints));
@@ -14257,6 +14763,15 @@ public partial class ViewportView : UserControl
     /// Builds a flat cache of (pos, normal) entries for O(1) scrub index lookup.
     /// Entry 0 = first move's From; entries 1..N = each move's To in order.
     /// </summary>
+    static bool ToolpathHasMillMoves(Toolpath? tp)
+    {
+        if (tp is null) return false;
+        foreach (var layer in tp.Layers)
+            foreach (var m in layer.Moves)
+                if (m.Kind == MoveKind.Mill) return true;
+        return false;
+    }
+
     private static (NVec3 pos, NVec3 normal)[] BuildScrubCache(Toolpath tp)
     {
         int total = 0;
@@ -14275,7 +14790,11 @@ public partial class ViewportView : UserControl
                 // Per-move normal (overhang orientation) overrides UnitZ fallback.
                 NVec3 n;
                 if (move.Kind == MoveKind.Travel || move.IsLayerStitch)
-                    n = lastN;
+                {
+                    n = move.Normal.LengthSquared() > 1e-6f ? NVec3.Normalize(move.Normal) : lastN;
+                    if (move.Normal.LengthSquared() > 1e-6f)
+                        lastN = n;
+                }
                 else
                 {
                     n     = move.Normal.LengthSquared() > 1e-6f ? move.Normal : NVec3.UnitZ;
@@ -16293,7 +16812,9 @@ public partial class ViewportView : UserControl
     {
         if (_renderer.IsToolpathNode(picked)) return picked;
         var item = vm.FindUserMeshOutlinerItem(picked);
-        return item?.Children.FirstOrDefault(c => c.IsToolpath)?.Node;
+        if (item is null) return null;
+        return ViewportViewModel.FindToolpathChild(item, vm.ActiveSliceToolpathKind)?.Node
+               ?? item.Children.FirstOrDefault(c => c.IsToolpath)?.Node;
     }
 
     /// <summary>
@@ -16349,7 +16870,8 @@ public partial class ViewportView : UserControl
         int step = target >= a ? 1 : -1;
         for (int i = a; i != target + step; i += step)
         {
-            var tp = models[i].Children.FirstOrDefault(c => c.IsToolpath)?.Node;
+            var tp = ViewportViewModel.FindToolpathChild(models[i], vm.ActiveSliceToolpathKind)?.Node
+                     ?? models[i].Children.FirstOrDefault(c => c.IsToolpath)?.Node;
             if (tp is null) continue;
             if (!_renderer.SelectedToolpaths.Contains(tp))
                 _renderer.ToggleToolpathSelection(tp);
@@ -16401,8 +16923,9 @@ public partial class ViewportView : UserControl
         };
 
         var merged     = BuildMergedToolpath(record);
+        var mergedKind = OutlinerToolpathKinds.Infer($"Merged Toolpath ({sources.Count})", merged);
         var mergedNode = new SceneNode { Name = $"Merged Toolpath ({sources.Count})", Selectable = true, Visible = true };
-        vm.RegisterToolpathInOutliner(mergedNode, parentItem: null);
+        vm.RegisterToolpathInOutliner(mergedNode, parentItem: null, mergedKind);
         _mergedByNode[mergedNode] = record;
 
         foreach (var sourceNode in nodes)

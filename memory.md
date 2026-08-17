@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-16** (SpindleBitTCP plane drives bit + TCP Z)
+Last updated: **2026-08-16** (macOS SMB NETSDK1177 skip apphost codesign)
 
 ---
 
@@ -483,6 +483,65 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-16 — macOS Release build: NETSDK1177 on SMB apphost
+
+- `codesign` failed on `obj/Release/net8.0/apphost` with "resource fork, Finder information, or similar detritus not allowed" because MassiveFILES is SMB.
+- Fix: `<_EnableMacOSCodeSign>false</_EnableMacOSCodeSign>` on OSX in `MassiveSlicer.App.csproj`. `dotnet run` does not need an ad-hoc signed host.
+- File: `src/MassiveSlicer.App/MassiveSlicer.App.csproj`.
+
+### 2026-08-16 — Mill T12 TCP now rides the facing path
+
+- MILL workflow mounts Spindle (No Bit), whose JSON TCP is still the extruder CRE_HV numbers. IK aimed that point at the path; the triad/bit were elsewhere.
+- Generate now applies taught T12 TOOL_DATA to IK, then arms scrub and snaps to the first mill move.
+- While a mill path is armed, the TCP triad is flange+TOOL_DATA (same point IK solves), not the SpindleBitTCP mesh datum.
+- File: `ViewportView.axaml.cs`.
+
+### 2026-08-16 — Planar facing TOOL AXIS (not locked to world -Z)
+
+- Planar Facing / Planar Clearing used to raster world XY and take the topmost Z. T12 stayed vertical.
+- New OPERATION → TOOL AXIS: World ±X/Y/Z, Painted area, Camera view, Custom XYZ, plus Tilt / Azimuth.
+- Generate rasters in that frame and locks move normals so mill ABC / T12 +Z = −approach.
+- From painted area / From camera buttons. Console: `mill axis`, `mill tilt`, `mill azimuth`.
+- Files: `MillPlanarOrientation.cs`, `SurfaceFollowMillGenerator.cs`, `SubtractiveSettingsViewModel.cs`, `RightPanelView.axaml`, `ViewportView.axaml.cs`. Tests: `MillPlanarOrientationTest`.
+
+### 2026-08-16 — Mill Box/Lasso only paint the front surface
+
+- Region select used every vertex inside the screen rectangle, including the back of the part.
+- Now: front-facing triangles only, plus a coarse depth buffer so the far wall is not painted through. Alt-erase uses the same rule. Lasso shares the path.
+- Files: `MillFrontSurfaceBox.cs`, `MillSurfacePaint.cs`, `ViewportView.axaml.cs`. Tests: `MillFrontSurfaceBoxTest` 2 passed.
+
+### 2026-08-16 — LFAM 3 circular bed grid was buried under the rotary platter
+
+- Polar overlay (circle + 500 mm rings + 30 deg spokes + origin) still built from `bed.diameter` 1828.8. It was drawn *before* meshes at the same Z as `rotary_bed_top.glb`, so Bed Grid looked off.
+- Draw after meshes with depth test off. Lift 2 mm. Grid colour brighter lime.
+- Files: `SceneRenderer.cs`, `BedBoundaryRenderer.cs`.
+
+### 2026-08-16 — Mill Box select started a panel-width to the right of the cursor
+
+- Overlay chrome (`OverlayRoot`) is inset `320,52,320,0` so tools clear the side cards. The box/lasso canvases lived inside that inset; pointer + `ProjectToScreen` are full-viewport.
+- Fix: draw marquee/lasso on the outer overlay grid (same as TCP x/y/z tags). Paint-mode box select uses the same canvases.
+- File: `ViewportOverlayView.axaml`.
+
+### 2026-08-16 — Connections could not scroll to LFAM 3 user/pass
+
+- Keep-on-bed stayed visible on every Preferences page and ate the top of the scroller. Hidden unless Navigation.
+- Last SMB card (LFAM 3) had no bottom pad, so username/password sat under the Done bar. +120 px pad; Floating scroller with a visible bar.
+- Files: `PreferencesWindow.axaml`, `PreferencesWindow.axaml.cs`.
+
+### 2026-08-16 — Preferences window 60% wider; Connections page recast
+
+- Window 620x640 -> 992x700 (min 832). Nav column 188. No dingbat labels.
+- Connections: Lab ERP card (email/password row, URL, projects root, Sign in + status pill). API token tucked under Advanced expander.
+- Robot SMB: 3-col cards (IP / share / folder, then user / password / Test).
+- Files: `PreferencesWindow.axaml`, `ErpViewModel.IsConnecting`.
+
+### 2026-08-16 — Green spindle cylinder vanished with the TCP plane
+
+- TCP at T12 was correct; "Show cylinder on spindle" drew nothing.
+- Cause: preview was a child of `SpindleBitTCP`, then `HideTcpDatum` set `Visible=false` on that node. `SceneNode.Draw` skips the whole subtree.
+- Fix: `AttachPreview` parents the cylinder to the tool holder (same world pose). Plane stays hidden.
+- Tests 14 passed.
 
 ### 2026-08-16 — SpindleBitTCP plane is the TCP / bit Z
 
