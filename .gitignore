@@ -55,6 +55,7 @@ logs/
 # Temp / scratch
 *.tmp
 *.bak
+*.bak_*
 *.swp
 *.orig
 **/__pycache__/
