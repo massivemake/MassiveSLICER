@@ -33,6 +33,10 @@ public static class ToolpathRpm
         if (move.IsResumeRamp)
             scale *= Math.Max(move.ResumeRpmScale, 1e-6f);
         scale *= Math.Max(move.HeightScale, 1e-6f);
+        // Horizontal crowding, the in-plane counterpart of HeightScale. Multiplied here rather
+        // than folded into HeightScale so each correction stays separately attributable and
+        // idempotent — the flow pass assigns HeightScale, the proximity pass assigns WidthScale.
+        scale *= Math.Max(move.WidthScale, 1e-6f);
         return scale;
     }
 

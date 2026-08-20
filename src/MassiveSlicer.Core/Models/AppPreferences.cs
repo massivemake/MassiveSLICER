@@ -193,6 +193,12 @@ public sealed class AppPreferences
     /// <summary>Largest thickness change allowed between adjacent layers (mm). 0 = off.</summary>
     public double MaxLayerHeightChangeMm { get; set; }
 
+    /// <summary>Reduce flow where same-layer beads run alongside each other.</summary>
+    public bool ProximityCorrectionEnabled { get; set; }
+
+    /// <summary>Shortest crowded stretch worth correcting (mm).</summary>
+    public double ProximityMinRunLengthMm { get; set; } = 100.0;
+
     /// <summary>Smallest triangle (mm2) allowed to dictate a layer thickness. 0 = bead footprint, negative = off.</summary>
     public double AdaptiveMinFaceAreaMm2 { get; set; }
 

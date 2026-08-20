@@ -201,6 +201,32 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _minLayerHeight, Math.Clamp(value, 0.1, 100.0));
     }
 
+    private bool _proximityCorrectionEnabled;
+
+    /// <summary>
+    /// Reduce flow where two beads on the same layer run alongside each other closer than a bead
+    /// width. Intended to become automatic — the toggle exists so it can be A/B'd on a print first.
+    /// </summary>
+    public bool ProximityCorrectionEnabled
+    {
+        get => _proximityCorrectionEnabled;
+        set => SetField(ref _proximityCorrectionEnabled, value);
+    }
+
+    private double _proximityMinRunLengthMm = 100.0;
+
+    /// <summary>
+    /// Shortest continuous crowded stretch worth correcting (mm). Deliberately NOT in the panel —
+    /// the measured populations separate with an empty band from 60 to 250 mm, so any value in
+    /// there behaves identically and there is nothing for a user to tune. Reachable via
+    /// <c>addset</c> for testing.
+    /// </summary>
+    public double ProximityMinRunLengthMm
+    {
+        get => _proximityMinRunLengthMm;
+        set => SetField(ref _proximityMinRunLengthMm, Math.Clamp(value, 0.0, 10000.0));
+    }
+
     private double _maxLayerHeightChangeMm;
 
     /// <summary>

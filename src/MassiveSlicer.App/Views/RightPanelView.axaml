@@ -1572,6 +1572,14 @@
                                     </Grid>
                                 </StackPanel>
 
+                                <!-- Proximity correction. Deliberately ONE checkbox and no numbers:
+                                     the amount is exact geometry, not a preference, and the run-length
+                                     threshold has an empty band 60-250 mm wide so there is nothing to
+                                     tune. Meant to become automatic and lose this toggle. -->
+                                <CheckBox Content="Proximity correction" FontSize="11" Margin="0,6,0,0"
+                                          IsChecked="{Binding Additive.ProximityCorrectionEnabled, Mode=TwoWay}"
+                                          ToolTip.Tip="Cuts extrusion where two beads on the SAME layer run alongside each other closer than one bead width — internal arms whose spacing the model fixes, printed with a wider bead.&#x0a;&#x0a;Those runs overlap and deposit the shared strip twice. Measured on a real part: arms at 6 mm pitch with an 8 mm bead put down 13.7 % more material than the space holds, across 9 % of the print. Layer height is not changed — only flow.&#x0a;&#x0a;Only long parallel runs are corrected (100 mm+). A short near-miss, like the outer wall clipping past the end of an arm, is left alone: it is far shorter than the extruder&apos;s response lag, so the correction could not land there anyway.&#x0a;&#x0a;Never increases flow, so it cannot trip the 99 % export gate. Run &apos;proximity-report&apos; to see exactly which bead it touches."/>
+
                                 <!-- Slew limit. Sits with Min layer height rather than inside the
                                      adaptive block for the same reason: it applies to whichever
                                      rule moved the planes, and a control that governs the result

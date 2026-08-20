@@ -61,6 +61,25 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     /// varies along the path. Scales extrusion RPM in export and bead height in preview.</summary>
     public float HeightScale { get; init; } = 1f;
 
+    /// <summary>
+    /// Per-move flow factor for HORIZONTAL crowding — the in-plane counterpart of
+    /// <see cref="HeightScale"/>.
+    ///
+    /// When another bead on the SAME layer runs alongside this one closer than a bead width, the
+    /// two overlap and the shared strip is deposited twice. Measured on a real part with internal
+    /// arms at a fixed 6 mm pitch and an 8 mm bead: 13.7 % more material than the space holds,
+    /// over 9.35 % of the print.
+    ///
+    /// Set from the bead's own territory — half a bead on a free side, half the gap on a crowded
+    /// one — so it is a volume correction, independent of the bead's cross-sectional SHAPE. A
+    /// rounded bead measures wider than the nominal width (32 mm² at 4 mm tall measures ~8.9 mm
+    /// across, which is why an 8 mm nozzle reads 9.2-9.4 mm on a correctly-flowing print), but
+    /// that spread is the same on both sides of the comparison and cancels out.
+    ///
+    /// Always &lt;= 1: it can only reduce flow, so it can never push a valid job over the export gate.
+    /// </summary>
+    public float WidthScale { get; init; } = 1f;
+
     /// <summary>Part of a Lightning Bridge support finger (perimeter detour) —
     /// rendered as its own display layer so fingers can be isolated/hidden.</summary>
     public bool IsLightning { get; init; }

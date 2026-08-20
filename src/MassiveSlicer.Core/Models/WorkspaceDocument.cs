@@ -422,6 +422,14 @@ public sealed class WorkspaceToolpathMoveData
     /// </summary>
     public float HeightScale { get; set; } = 1f;
 
+    /// <summary>
+    /// Horizontal-crowding flow factor. Persisted for the same reason HeightScale is: it is set
+    /// only during a slice, so a reopened workspace exported without re-slicing would send the
+    /// crowded bead out at full flow again.
+    /// Absent in files saved before this field existed, which load as 1 — the old behaviour.
+    /// </summary>
+    public float WidthScale { get; set; } = 1f;
+
     /// <summary>Lightning Bridge support finger — drives its own display layer.</summary>
     public bool IsLightning { get; set; }
 

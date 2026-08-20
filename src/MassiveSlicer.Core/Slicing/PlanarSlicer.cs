@@ -266,6 +266,12 @@ public static class PlanarSlicer
         // for it, so thin layers were given a full nominal layer's worth of material.
         Effects.LayerHeightFlowPostProcessor.Apply(toolpath, settings);
 
+        // After the vertical flow correction and after brim/support, because it measures between
+        // FINISHED paths — the crowding it looks for does not exist until the paths do. Writes a
+        // separate WidthScale rather than folding into HeightScale, so the two corrections stay
+        // independently attributable and each stays idempotent.
+        Effects.ProximityFlowPostProcessor.Apply(toolpath, settings);
+
         AttachZigZagWarning(toolpath);
         ReportDroppedContours();
         return toolpath;

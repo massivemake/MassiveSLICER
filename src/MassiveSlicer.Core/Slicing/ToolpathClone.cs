@@ -36,6 +36,7 @@ public static class ToolpathClone
                     PrintSpeedScale   = move.PrintSpeedScale,
                     IsLightning       = move.IsLightning,
                     HeightScale       = move.HeightScale,
+                    WidthScale        = move.WidthScale,
                     IsBrim            = move.IsBrim,
                     IsWall            = move.IsWall,
                     RpmPercentOverride = move.RpmPercentOverride,

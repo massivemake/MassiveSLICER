@@ -4289,6 +4289,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.AdaptiveQuality        = copy.AdaptiveQuality;
         live.MinLayerHeight         = copy.MinLayerHeight;
         live.MaxLayerHeightChangeMm = copy.MaxLayerHeightChangeMm;
+        live.ProximityCorrectionEnabled = copy.ProximityCorrectionEnabled;
+        live.ProximityMinRunLengthMm    = copy.ProximityMinRunLengthMm;
         live.AdaptiveMinFaceAreaMm2 = copy.AdaptiveMinFaceAreaMm2;
         live.SupportDrivenLayerHeight    = copy.SupportDrivenLayerHeight;
         live.SupportOverlapTargetPercent = copy.SupportOverlapTargetPercent;
@@ -4554,6 +4556,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.AdaptiveQuality     = p.AdaptiveQuality;
         add.MinLayerHeight      = p.MinLayerHeight;
         add.MaxLayerHeightChangeMm = p.MaxLayerHeightChangeMm;
+        add.ProximityCorrectionEnabled = p.ProximityCorrectionEnabled;
+        add.ProximityMinRunLengthMm    = p.ProximityMinRunLengthMm;
         add.AdaptiveMinFaceAreaMm2      = p.AdaptiveMinFaceAreaMm2;
         add.SupportDrivenLayerHeight    = p.SupportDrivenLayerHeight;
         add.SupportOverlapTargetPercent = p.SupportOverlapTargetPercent;
@@ -4897,6 +4901,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.AdaptiveQuality     = add.AdaptiveQuality;
         p.MinLayerHeight      = add.MinLayerHeight;
         p.MaxLayerHeightChangeMm = add.MaxLayerHeightChangeMm;
+        p.ProximityCorrectionEnabled = add.ProximityCorrectionEnabled;
+        p.ProximityMinRunLengthMm    = add.ProximityMinRunLengthMm;
         p.AdaptiveMinFaceAreaMm2      = add.AdaptiveMinFaceAreaMm2;
         p.SupportDrivenLayerHeight    = add.SupportDrivenLayerHeight;
         p.SupportOverlapTargetPercent = add.SupportOverlapTargetPercent;

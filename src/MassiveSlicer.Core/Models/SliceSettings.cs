@@ -255,6 +255,36 @@ public sealed class SliceSettings
     /// </summary>
     public float MaxLayerHeightChangeMm { get; init; } = 0f;
 
+    // -- Proximity (horizontal crowding) correction --------------------------------
+
+    /// <summary>
+    /// Reduce flow where two beads on the same layer run alongside each other closer than a bead
+    /// width. <b>Off by default</b> — it changes commanded RPM, so it is opt-in while it is proven.
+    ///
+    /// Model geometry can fix wall spacing tighter than the bead: measured on a real part, internal
+    /// arms at a 6 mm pitch printed with an 8 mm bead overlap by 2 mm and deposit that strip twice —
+    /// 13.7 % more material than the space holds, across 9.35 % of the print. Nothing upstream
+    /// notices, because the thickness rules only look up and down and the two contours are separate
+    /// loops that merely run alongside each other. Thinning a layer for overhang spreads the bead
+    /// wider, so the overhang correction makes this worse.
+    ///
+    /// Intended to become automatic; the toggle exists so it can be A/B'd against a print first.
+    /// </summary>
+    public bool ProximityCorrectionEnabled { get; init; } = false;
+
+    /// <summary>
+    /// Shortest continuous crowded stretch worth correcting (mm). Default 100.
+    ///
+    /// A bead alongside another for a few millimetres — the outer wall clipping past the end of an
+    /// arm — must be left alone: at 85 mm/s a 12 mm stretch is 0.14 s, far inside the extruder's
+    /// transport lag, so the RPM change could not land there and would only misplace flow further
+    /// along. Measured on a real part the populations separate with an EMPTY band between them:
+    /// 2237 runs under 15 mm against 784 runs of 360-366 mm, and nothing at all from 60 to 250 mm.
+    /// Any value inside that band gives identical results, so 100 sits in the middle of it rather
+    /// than near either edge.
+    /// </summary>
+    public float ProximityMinRunLengthMm { get; init; } = 100f;
+
     // -- Support-driven layer height (3b) ------------------------------------------
 
     /// <summary>

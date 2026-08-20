@@ -37,6 +37,7 @@ public static class ToolpathSerializer
                     PrintSpeedScale  = move.PrintSpeedScale,
                     ResumeWaitSec    = move.ResumeWaitSec,
                     HeightScale      = move.HeightScale,
+                    WidthScale       = move.WidthScale,
                     IsBrim           = move.IsBrim,
                     RpmPercentOverride = move.RpmPercentOverride,
                     IsLightning      = move.IsLightning,
@@ -89,6 +90,7 @@ public static class ToolpathSerializer
                     // 0 is never written (WhenWritingDefault) and would mean zero flow, so a
                     // 0 here is a malformed file — fall back to nominal rather than export dry.
                     HeightScale      = moveDto.HeightScale > 0f ? moveDto.HeightScale : 1f,
+                    WidthScale       = moveDto.WidthScale  > 0f ? moveDto.WidthScale  : 1f,
                     IsBrim           = moveDto.IsBrim,
                     RpmPercentOverride = moveDto.RpmPercentOverride,
                     IsLightning      = moveDto.IsLightning,

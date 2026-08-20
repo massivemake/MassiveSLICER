@@ -2002,6 +2002,75 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "proximity-report",
+            Description = "Where beads on the SAME layer run alongside each other closer than a "
+                        + "bead width, how much material that double-deposits, and which runs are "
+                        + "long enough to correct. Works whether or not Proximity correction is on",
+            Usage = "proximity-report [count]",
+            Execute = (ctx, args) =>
+            {
+                int show = int.TryParse(args.Trim(), out var n) && n > 0 ? n : 10;
+                var runs = MassiveSlicer.Core.Slicing.Effects.ProximityFlowPostProcessor.LastRuns;
+                var add  = ctx.Main.RightPanel.Additive;
+
+                if (runs.Count == 0)
+                {
+                    ctx.LogError(add.ProximityCorrectionEnabled
+                        ? "[proximity] nothing recorded — slice with Proximity correction on."
+                        : "[proximity] Proximity correction is OFF, so nothing was measured. "
+                          + "Turn it on (addset ProximityCorrectionEnabled true) and slice.");
+                    return;
+                }
+
+                float bead = (float)add.BeadWidth;
+                double corrLen = 0, skipLen = 0;
+                int corrected = 0;
+                float worst = float.PositiveInfinity;
+                double excess = 0;   // material above what the space holds, on corrected bead
+                foreach (var r in runs)
+                {
+                    if (r.Corrected)
+                    {
+                        corrected++; corrLen += r.LengthMm;
+                        excess += r.LengthMm * (1.0 / Math.Max(r.MeanScale, 1e-3f) - 1.0);
+                    }
+                    else skipLen += r.LengthMm;
+                    if (r.ClosestGapMm < worst) worst = r.ClosestGapMm;
+                }
+
+                ctx.Log($"[proximity] bead {bead:0.##} mm · correcting runs over "
+                      + $"{add.ProximityMinRunLengthMm:0.#} mm · "
+                      + $"{(add.ProximityCorrectionEnabled ? "ON" : "OFF")}");
+                ctx.Log($"[proximity]   {runs.Count} crowded run(s); {corrected} long enough to correct");
+                ctx.Log($"[proximity]   {corrLen / 1000.0:0.###} m corrected, "
+                      + $"{skipLen / 1000.0:0.###} m left alone as too short to act on");
+                ctx.Log($"[proximity]   closest parallel gap {worst:0.##} mm");
+                if (corrected > 0)
+                    ctx.Log($"[proximity]   removes ~{excess / 1000.0:0.###} m worth of "
+                          + "double-deposited material");
+
+                ctx.Log("[proximity]   longest runs first:");
+                foreach (var r in runs.OrderByDescending(r => r.LengthMm).Take(show))
+                    ctx.Log($"[proximity]     L{r.LayerIndex,-5} Z {r.Z,8:0.0}  "
+                          + $"{r.LengthMm,7:0.#} mm  gap {r.ClosestGapMm:0.##} mm  "
+                          + $"flow x{r.MeanScale:0.###}  {(r.Corrected ? "corrected" : "too short")}");
+
+                if (runs.Count > show)
+                    ctx.Log($"[proximity]     … {runs.Count - show} more "
+                          + $"(proximity-report {runs.Count} to list them all)");
+
+                // The measurement uses NOMINAL bead width, which is a volume figure. A rounded bead
+                // measures wider than nominal on a correctly-flowing print (32 mm2 at 4 mm tall reads
+                // ~8.9 mm across), and that spread cancels out of the comparison — so a caliper
+                // reading wider than the setting is NOT evidence the correction is too strong.
+                ctx.Log("[proximity]   note: scales come from nominal bead width (a volume figure). "
+                      + "A caliper reads wider than nominal on a correct bead; that is the rounded "
+                      + "profile, not extra material.");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "slew-report",
             Description = "Layer-to-layer thickness and RPM steps in the current slice, and what "
                         + "capping the change per layer would cost. Answers whether banding is "
