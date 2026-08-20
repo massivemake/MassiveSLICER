@@ -569,6 +569,13 @@ public static class KrlExporter
         float lastExtrudeSpeedMps = -1f;
         float lastExtrudeRpmScale = -1f;
         string? lastExtrudeAnoutText = null;
+        // The resolved percentage LAST WRITTEN to the controller. The deadband has to compare
+        // against this, not against the previous SCALE: a scale is meaningless without the layer
+        // settings it was resolved through, and re-resolving an old scale with the CURRENT layer's
+        // settings silently erases a genuine change at a layer boundary. That is exactly what broke
+        // the first-layer RPM override — 22 % on layer 0 then 40 % on layer 1 both re-resolved to
+        // 40 under layer 1's settings, so the change looked like zero and was suppressed.
+        float lastExtrudeRpmPercent = -1f;
         string? lastExtrudeVelText = null;
 
         // Pre-smooth per-move normals along each contour with a forward-biased Gaussian
@@ -764,7 +771,8 @@ public static class KrlExporter
                     // So a change must also be BIG ENOUGH to mean something. Suppressing it keeps the
                     // previous value, which is the honest choice: the difference is below what the
                     // machine can resolve either way.
-                    if (anoutChanged && RpmChangeTooSmallToMatter(layerS, extrudeRpmScale, lastExtrudeRpmScale))
+                    if (anoutChanged
+                        && RpmChangeTooSmallToMatter(layerS, extrudeRpmScale, lastExtrudeRpmPercent))
                         anoutChanged = false;
                     bool velChanged = !string.Equals(velText, lastExtrudeVelText, System.StringComparison.Ordinal);
 
@@ -791,6 +799,7 @@ public static class KrlExporter
                         isFirstPrintStart = false;
                         needsRpmOn = false;
                         lastExtrudeAnoutText = extrudeKey;
+                        lastExtrudeRpmPercent = ResolveRpmPercent(layerS, extrudeRpmScale);
                         lastExtrudeVelText = velText;
                     }
                     else if (anoutChanged || velChanged)
@@ -805,6 +814,7 @@ public static class KrlExporter
                         if (velChanged)
                             sb.AppendLine($"$VEL.CP = {velText}");
                         lastExtrudeAnoutText = extrudeKey;
+                        lastExtrudeRpmPercent = ResolveRpmPercent(layerS, extrudeRpmScale);
                         lastExtrudeVelText = velText;
                     }
 
@@ -1317,13 +1327,16 @@ public static class KrlExporter
     /// percentage, not the raw scale, so it means the same thing the machine sees.
     /// </summary>
     private static bool RpmChangeTooSmallToMatter(
-        KrlExportSettings s, float newScale, float oldScale)
+        KrlExportSettings s, float newScale, float lastWrittenPercent)
     {
-        float a = ResolveRpmPercent(s, newScale);
-        float b = ResolveRpmPercent(s, oldScale);
-        // Never suppress a transition to or from a stop — those are not "small changes".
-        if (a <= 0.01f || b <= 0.01f) return false;
-        return MathF.Abs(a - b) < MinRpmChangePercent;
+        // Nothing written yet — the first rate of the print is never "a small change".
+        if (lastWrittenPercent < 0f) return false;
+
+        float now = ResolveRpmPercent(s, newScale);
+        // Never suppress a transition to or from a stop; swallowing one would leave the extruder
+        // running through a travel.
+        if (now <= 0.01f || lastWrittenPercent <= 0.01f) return false;
+        return MathF.Abs(now - lastWrittenPercent) < MinRpmChangePercent;
     }
 
     /// <summary>Caracol-style RPM literal (e.g. <c>9.64115</c>, <c>0.00</c>, <c>18</c>).</summary>

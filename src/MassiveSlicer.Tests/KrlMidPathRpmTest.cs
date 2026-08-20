@@ -162,6 +162,48 @@ public sealed class KrlMidPathRpmTest
     }
 
     /// <summary>
+    /// ⭐ Regression. The deadband must compare against the percentage LAST WRITTEN, not against the
+    /// previous raw scale re-resolved through the current layer's settings.
+    ///
+    /// A scale is meaningless without the settings it resolves through. The first layer carries its
+    /// own RPM override, so re-resolving layer 0's scale using layer 1's settings made 22 % and 40 %
+    /// both read as 40 — the change looked like zero and got suppressed, and the layer-1 rate was
+    /// never written. Caught by KrlExporterTest.Export_first_layer_speed_and_rpm_override, which
+    /// this change broke.
+    /// </summary>
+    [Fact]
+    public void A_first_layer_override_boundary_is_not_swallowed_by_the_deadband()
+    {
+        var tp = new Toolpath();
+        foreach (var (idx, z) in new[] { (0, 4f), (1, 8f) })
+        {
+            var l = new ToolpathLayer(idx, z) { Height = 4f, PlaneNormal = Vector3.UnitZ };
+            l.Moves.Add(new ToolpathMove(
+                new Vector3(0, 0, z), new Vector3(300f, 0, z), MoveKind.Extrude)
+                { Normal = Vector3.UnitZ });
+            tp.Layers.Add(l);
+        }
+
+        // layer 0 forced low, layer 1 takes the geometric rate
+        var s = Urm() with { FirstLayerRpmPercent = 22f };
+
+        var krl = KrlExporter.Export(tp, s);
+
+        // Both rates must appear: the override AND the normal rate that follows it.
+        Assert.Contains("RPM = 22", krl);
+        var nums = RpmLines(krl)
+            .Select(l => System.Text.RegularExpressions.Regex.Match(l, @"RPM = ([\d.]+)"))
+            .Where(m => m.Success)
+            .Select(m => float.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))
+            .Where(v => v > 1f)
+            .Distinct()
+            .ToList();
+        Assert.True(nums.Count >= 2,
+            $"only {nums.Count} rate(s) written ({string.Join(", ", nums)}) — the layer-1 rate was "
+          + "suppressed, so the deadband is comparing a stale scale against new layer settings");
+    }
+
+    /// <summary>
     /// A print with ONE rate throughout must be unchanged — that is the shape every historically
     /// good print had, and it must not acquire triggers it never needed.
     /// </summary>
