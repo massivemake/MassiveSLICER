@@ -319,7 +319,7 @@ public sealed class ConsoleCommandRegistry
                 // wall is what Walls-only reads. Without it a dump cannot answer "why did the
                 // pattern land here", which is the question the scope setting actually gets asked.
                 var sb = new System.Text.StringBuilder(
-                    "layer,z,kind,fx,fy,fz,tx,ty,tz,lightning,hscale,nx,ny,nz,wall\n");
+                    "layer,z,kind,fx,fy,fz,tx,ty,tz,lightning,hscale,wscale,nx,ny,nz,wall\n");
                 for (int li = 0; li < tp.Layers.Count; li++)
                 {
                     var lyr = tp.Layers[li];
@@ -336,6 +336,7 @@ public sealed class ConsoleCommandRegistry
                           .Append(m.To.Z.ToString("0.###")).Append(',')
                           .Append(m.IsLightning ? 1 : 0).Append(',')
                           .Append(m.HeightScale.ToString("0.###")).Append(',')
+                          .Append(m.WidthScale.ToString("0.###")).Append(',')
                           .Append(n.X.ToString("0.####")).Append(',')
                           .Append(n.Y.ToString("0.####")).Append(',')
                           .Append(n.Z.ToString("0.####")).Append(',')
