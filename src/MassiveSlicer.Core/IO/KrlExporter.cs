@@ -754,6 +754,18 @@ public static class KrlExporter
                     string extrudeKey = FormatExtruderOn(layerS, extrudeRpmScale, "", useTrigger: false);
                     string velText = extrudeSpeedMps.ToString("F6", Inv);
                     bool anoutChanged = !string.Equals(extrudeKey, lastExtrudeAnoutText, System.StringComparison.Ordinal);
+
+                    // ⚠️ String inequality alone is too eager. It catches "same rate → same text",
+                    // but not "different text, physically identical rate": a 6 mm U-turn tip between
+                    // two arm walls came out 71.07596 against 71.26099 — a 0.26 % difference that no
+                    // extruder can act on — and that wrote a fresh setpoint 0.14 mm after the last
+                    // one. On a real part 637 of 1,717 changes (37 %) were under one RPM point.
+                    //
+                    // So a change must also be BIG ENOUGH to mean something. Suppressing it keeps the
+                    // previous value, which is the honest choice: the difference is below what the
+                    // machine can resolve either way.
+                    if (anoutChanged && RpmChangeTooSmallToMatter(layerS, extrudeRpmScale, lastExtrudeRpmScale))
+                        anoutChanged = false;
                     bool velChanged = !string.Equals(velText, lastExtrudeVelText, System.StringComparison.Ordinal);
 
                     if (needsRpmOn)
@@ -786,7 +798,10 @@ public static class KrlExporter
                         if (anoutChanged && !s.DigitalStartStopEnabled)
                             sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "layer speed", useTrigger: false));
                         else if (anoutChanged && s.DigitalStartStopEnabled)
-                            sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "", useTrigger: false));
+                            // Synchronised: this is a MID-PATH rate change, so it has to land where
+                            // the nozzle is rather than wherever the advance run has got to.
+                            sb.AppendLine(FormatExtruderOn(
+                                layerS, extrudeRpmScale, "rpm change", useTrigger: true));
                         if (velChanged)
                             sb.AppendLine($"$VEL.CP = {velText}");
                         lastExtrudeAnoutText = extrudeKey;
@@ -1259,11 +1274,56 @@ public static class KrlExporter
         {
             float rpmPercent = ResolveRpmPercent(s, rpmScale);
             string val = FormatCaracolRpm(rpmPercent);
+
+            // ⚠️ This MUST honour useTrigger. A bare `RPM = x` is a plain KRL assignment, and with
+            // $ADVANCE=5 a plain assignment executes in the ADVANCE RUN — up to five motion blocks
+            // ahead of where the arm actually is.
+            //
+            // That was harmless for years because RPM was written ONCE per print: a single early
+            // assignment lands before any motion and the value never changes again. The moment flow
+            // started varying mid-layer (adaptive thickness, then proximity correction) every write
+            // began firing ahead of the nozzle, in bursts — 1,717 changes with 338 distinct values on
+            // a real part, some only 0.14 mm apart. On the machine the commanded setpoint moved while
+            // the real screw speed stopped tracking it: "real always follows set, just not in our new
+            // exports."
+            //
+            // TRIGGER WHEN DISTANCE=0 attaches the write to the following motion block, so it fires
+            // where the nozzle is. The same file already uses this form for $OUT[7] and $OUT[8], so
+            // the controller understands it.
+            if (useTrigger)
+                return string.IsNullOrEmpty(comment)
+                    ? $"TRIGGER WHEN DISTANCE=0 DELAY=0 DO RPM = {val}"
+                    : $"TRIGGER WHEN DISTANCE=0 DELAY=0 DO RPM = {val} ; {comment}";
+
             return string.IsNullOrEmpty(comment) ? $"RPM = {val}" : $"RPM = {val} ; {comment}";
         }
 
         string text = ResolveAnout4ExtrudeText(s, rpmScale);
         return useTrigger ? FormatTriggerAnout4(text, comment) : FormatDirectAnout4(text, comment);
+    }
+
+    /// <summary>
+    /// Smallest commanded-RPM difference worth writing to the controller, in percentage points.
+    ///
+    /// Below this the change cannot be acted on — it is far inside the extruder's own response — and
+    /// writing it costs a setpoint update that lands in the middle of a bead. Measured on a real
+    /// part, 37 % of all RPM writes were under one point, several of them a couple of millimetres
+    /// apart.
+    /// </summary>
+    public const float MinRpmChangePercent = 1.0f;
+
+    /// <summary>
+    /// True when a rate change is too small to be worth a setpoint write. Compared on the RESOLVED
+    /// percentage, not the raw scale, so it means the same thing the machine sees.
+    /// </summary>
+    private static bool RpmChangeTooSmallToMatter(
+        KrlExportSettings s, float newScale, float oldScale)
+    {
+        float a = ResolveRpmPercent(s, newScale);
+        float b = ResolveRpmPercent(s, oldScale);
+        // Never suppress a transition to or from a stop — those are not "small changes".
+        if (a <= 0.01f || b <= 0.01f) return false;
+        return MathF.Abs(a - b) < MinRpmChangePercent;
     }
 
     /// <summary>Caracol-style RPM literal (e.g. <c>9.64115</c>, <c>0.00</c>, <c>18</c>).</summary>
