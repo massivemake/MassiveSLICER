@@ -121,20 +121,40 @@ public static class BeadProximity
     }
 
     /// <summary>
-    /// Flow factor for a bead whose nearest parallel neighbour is <paramref name="gapMm"/> away on
-    /// one side only, from the bead's own territory: half a bead on the free side, half the gap on
-    /// the crowded one.
+    /// Flow factor for a bead whose nearest parallel neighbour is <paramref name="gapMm"/> away:
+    /// <b>extrusion width equals line spacing</b>. The bead owns its pitch, so the factor is simply
+    /// <c>gap / beadWidth</c>.
     ///
-    /// A volume correction, so it is independent of the bead's cross-sectional shape — the rounded
-    /// spread appears identically in the single-bead and merged cases and cancels.
+    /// <para><b>Why the pitch and not half a bead on the free side.</b> An earlier version gave a
+    /// one-side-crowded bead <c>halfBead + gap/2</c> — 4 + 3 of 8 mm, so 0.875 at a 6 mm pitch. That
+    /// smuggles in an assumption: that the bead's outer edge extends half a bead beyond its
+    /// centreline, which is only true when that outer surface came from a contour inset by half a
+    /// bead. For a feature made of exactly two passes it is false, and it silently widened the
+    /// feature: two passes at 6 mm pitch came out 14 mm instead of the 12 mm two abutting 6 mm beads
+    /// would have made. Jeff caught it — the arms need 12, not 16.</para>
+    ///
+    /// <para>Mirroring the gap fixes it and generalises: a group of N parallel passes at pitch p is
+    /// N x p wide, each bead owns p, and the group's outer edges land where two abutting beads of
+    /// width p would have put them. At a 6 mm pitch with an 8 mm bead that is 6/8 = <b>0.75</b>.</para>
+    ///
+    /// <para>A volume correction, so it is independent of the bead's cross-sectional SHAPE — the
+    /// rounded spread appears identically in the single-bead and merged cases and cancels.</para>
+    ///
+    /// <para>⚠️ Uses the NEAREST gap. For a bead crowded on both sides at different pitches that is
+    /// the tighter of the two, which under-feeds slightly rather than over-feeding — the safer
+    /// direction, since over-extrusion is the failure being fixed.</para>
     /// </summary>
     public static float ScaleForGap(float gapMm, float beadWidthMm)
     {
         if (beadWidthMm <= 0f || float.IsNaN(gapMm) || gapMm >= beadWidthMm) return 1f;
-        float half = beadWidthMm * 0.5f;
-        float eff  = half + MathF.Min(half, MathF.Max(gapMm, 0f) * 0.5f);
-        return Math.Clamp(eff / beadWidthMm, 0.05f, 1f);
+        return Math.Clamp(MathF.Max(gapMm, 0f) / beadWidthMm, MinScale, 1f);
     }
+
+    /// <summary>
+    /// Floor on the correction. A pitch far below the bead width means the paths are wrong, not that
+    /// flow should go to nothing — clamping keeps a pathological gap from commanding a dry extruder.
+    /// </summary>
+    public const float MinScale = 0.05f;
 
     private static void Insert(
         Dictionary<(int, int), List<int>> grid, Vector3 a, Vector3 b, float cell, int index)

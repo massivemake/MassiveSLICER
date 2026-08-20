@@ -75,20 +75,40 @@ public class ProximityFlowTest
         var extrudeScales = l.Moves.Where(m => m.Kind == MoveKind.Extrude)
                                    .Select(m => m.WidthScale).Distinct().ToList();
         Assert.Single(extrudeScales);
-        Assert.Equal(0.875f, extrudeScales[0], 3);
+        Assert.Equal(0.75f, extrudeScales[0], 3);
 
         // Two walls, so two runs — the travel between them ends the first.
         Assert.Equal(2, ProximityFlowPostProcessor.LastRuns.Count(r => r.Corrected));
     }
 
+    /// <summary>
+    /// Extrusion width equals line spacing: the bead owns its PITCH, so the factor is gap/bead.
+    /// Not halfBead + gap/2 — that gave 0.875 at a 6 mm pitch and silently made a two-pass feature
+    /// 14 mm wide instead of the 12 mm that two abutting 6 mm beads would have produced.
+    /// </summary>
     [Theory]
     [InlineData(8f,   1.000f)]   // exactly a bead apart — touching, nothing to correct
-    [InlineData(7f,   0.9375f)]
-    [InlineData(6f,   0.875f)]
-    [InlineData(4f,   0.750f)]
-    [InlineData(2f,   0.625f)]
-    public void The_scale_follows_the_gap(float gap, float expected)
+    [InlineData(7f,   0.875f)]
+    [InlineData(6f,   0.750f)]   // the arms: 2 passes x 6 mm = 12 mm, not 16
+    [InlineData(4f,   0.500f)]
+    [InlineData(2f,   0.250f)]
+    public void The_scale_is_the_pitch_over_the_bead_width(float gap, float expected)
         => Assert.Equal(expected, BeadProximity.ScaleForGap(gap, Bead), 4);
+
+    /// <summary>
+    /// The property that makes it right: N passes at pitch p must deliver N x p of material, so a
+    /// two-pass arm at 6 mm pitch delivers 12 mm worth — exactly what two abutting 6 mm beads did.
+    /// </summary>
+    [Theory]
+    [InlineData(6f, 8f, 12f)]    // Jeff's arms: designed for two 6 mm beads
+    [InlineData(6f, 6f, 12f)]    // the original bead: already correct, no change
+    [InlineData(4f, 8f,  8f)]
+    [InlineData(3f, 6f,  6f)]
+    public void Two_passes_deliver_exactly_pitch_times_two(float pitch, float bead, float expectedMm)
+    {
+        float perBead = bead * BeadProximity.ScaleForGap(pitch, bead);
+        Assert.Equal(expectedMm, 2f * perBead, 3);
+    }
 
     [Fact]
     public void A_bead_with_nothing_alongside_is_left_at_full_flow()
@@ -282,14 +302,14 @@ public class ProximityFlowTest
     public void It_reaches_RPM_and_multiplies_with_the_thickness_correction()
     {
         var plain    = new ToolpathMove(Vector3.Zero, Vector3.UnitX, MoveKind.Extrude);
-        var crowded  = plain with { WidthScale = 0.875f };
+        var crowded  = plain with { WidthScale = 0.75f };
         var thin     = plain with { HeightScale = 0.5f };
-        var both     = plain with { HeightScale = 0.5f, WidthScale = 0.875f };
+        var both     = plain with { HeightScale = 0.5f, WidthScale = 0.75f };
 
         Assert.Equal(1f,       MassiveSlicer.Core.IO.ToolpathRpm.MoveScale(plain),   4);
-        Assert.Equal(0.875f,   MassiveSlicer.Core.IO.ToolpathRpm.MoveScale(crowded), 4);
+        Assert.Equal(0.75f,    MassiveSlicer.Core.IO.ToolpathRpm.MoveScale(crowded), 4);
         Assert.Equal(0.5f,     MassiveSlicer.Core.IO.ToolpathRpm.MoveScale(thin),    4);
-        Assert.Equal(0.4375f,  MassiveSlicer.Core.IO.ToolpathRpm.MoveScale(both),    4);
+        Assert.Equal(0.375f,   MassiveSlicer.Core.IO.ToolpathRpm.MoveScale(both),    4);
     }
 
     /// <summary>
@@ -302,10 +322,10 @@ public class ProximityFlowTest
         var tp = new Toolpath();
         var l  = Layer(0, 4f);
         Seg(l, 0f, 0f, 10f, 0f);
-        l.Moves[0] = l.Moves[0] with { WidthScale = 0.875f };
+        l.Moves[0] = l.Moves[0] with { WidthScale = 0.75f };
         tp.Layers.Add(l);
 
-        Assert.Equal(0.875f, ToolpathClone.Copy(tp).Layers[0].Moves[0].WidthScale, 4);
+        Assert.Equal(0.75f, ToolpathClone.Copy(tp).Layers[0].Moves[0].WidthScale, 4);
     }
 
     [Fact]
