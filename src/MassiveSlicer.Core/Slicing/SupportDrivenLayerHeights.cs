@@ -41,6 +41,14 @@ public static class SupportDrivenLayerHeights
     private static Decision[] s_last = [];
 
     /// <summary>
+    /// Drops the published decisions. Called when a slice runs with the feature OFF — otherwise
+    /// the static survives from the previous slice and <c>support-height-debug</c> reports layers
+    /// it thinned in a run that is no longer on screen. Observed live: it claimed "14 thinned for
+    /// overlap" for a slice with support-driven switched off.
+    /// </summary>
+    public static void ResetDecisions() => s_last = [];
+
+    /// <summary>
     /// Rewrites a slice-plane ladder so no continuous stretch longer than the bridging tolerance
     /// sits further off the layer below than the target.
     /// </summary>
@@ -58,11 +66,12 @@ public static class SupportDrivenLayerHeights
         float bridgeToleranceMm,
         float minLayerHeight,
         float maxLayerHeight,
-        float searchCellMm)
+        float searchCellMm,
+        bool  recordDecisions = true)
     {
         if (proposed.Length < 2 || targetOffsetMm <= 0f)
         {
-            s_last = [];
+            if (recordDecisions) s_last = [];
             return proposed;
         }
 
@@ -117,7 +126,9 @@ public static class SupportDrivenLayerHeights
             prev = trial;
         }
 
-        s_last = [.. decisions];
+        // Only a real slice publishes these; the layer preview must not overwrite what
+        // support-height-debug reads.
+        if (recordDecisions) s_last = [.. decisions];
         return [.. outZ];
     }
 

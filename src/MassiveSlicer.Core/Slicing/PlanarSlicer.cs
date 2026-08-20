@@ -53,42 +53,7 @@ public static class PlanarSlicer
         float reach = (xMax - xMin + yMax - yMin) + 10f;
         var seamOrigin = new Vector2(cx + sd.X * reach, cy + sd.Y * reach);
 
-        float[] zPositions = settings.AdaptiveLayerHeight
-            ? AdaptiveLayerHeights.ComputeZPositions(meshes, zMin, zMax,
-                  settings.FirstLayerHeight, settings.MinLayerHeight,
-                  settings.LayerHeight, settings.AdaptiveQuality,
-                  settings.ResolvedMinFaceAreaMm2)
-            : BuildUniformZPositions(zMin, zMax, settings.FirstLayerHeight, settings.LayerHeight);
-
-        // Support-driven thinning (opt-in). Runs on the boundary before any moves exist, and can
-        // only make a layer thinner than the ladder above already chose — so the finish criterion
-        // keeps its say and turning this off reproduces the previous output exactly.
-        if (settings.SupportDrivenLayerHeight && zPositions.Length >= 2)
-        {
-            float minH = settings.MinLayerHeight > 1e-4f
-                ? MathF.Min(settings.MinLayerHeight, settings.LayerHeight)
-                : settings.LayerHeight;
-            zPositions = SupportDrivenLayerHeights.Refine(
-                zPositions, zMax,
-                z => ComputeInsetContours(meshes, z, settings).Contours,
-                settings.SupportTargetOffsetMm,
-                settings.ResolvedBridgeToleranceMm,
-                minH, settings.LayerHeight,
-                searchCellMm: settings.BeadWidth);
-        }
-
-        // Last of the three thickness rules, because it smooths whatever the other two decided —
-        // it needs the final ladder, not an intermediate one. Only ever thins, so both the
-        // stairstep tolerance and the overlap target still hold everywhere.
-        if (settings.MaxLayerHeightChangeMm > 1e-4f && zPositions.Length >= 3)
-        {
-            float slewMinH = settings.MinLayerHeight > 1e-4f
-                ? MathF.Min(settings.MinLayerHeight, settings.LayerHeight)
-                : settings.LayerHeight;
-            zPositions = LayerHeightSlewLimiter.Apply(
-                zPositions, zMax, settings.MaxLayerHeightChangeMm,
-                slewMinH, settings.LayerHeight);
-        }
+        float[] zPositions = BuildLayerLadder(meshes, zMin, zMax, settings);
 
         // Tree Support must reach the print bed (Layer 1). If the mesh floats above
         // Z=0, prepend buffer layers so foundation is L1… and the part shifts up —
@@ -307,6 +272,76 @@ public static class PlanarSlicer
     }
 
     // -- Z position helpers ----------------------------------------------------
+
+    /// <summary>
+    /// The slice-plane ladder, exactly as <see cref="Slice"/> builds it: the finish criterion
+    /// (or a uniform ladder), then support-driven thinning, then the slew cap.
+    ///
+    /// <para><b>Public so the layer PREVIEW can call it.</b> The preview used to build its own
+    /// ladder, and it drifted — it called <see cref="AdaptiveLayerHeights.ComputeZPositions"/>
+    /// with no <c>minFaceAreaMm2</c>, and applied neither support-driven thinning nor the slew
+    /// cap. So the bands drawn on screen were a different calculation from the slice the user
+    /// was about to get, and the setting most likely to be under investigation — the min-face-area
+    /// gate — was the one the picture ignored. There must be exactly ONE place that decides where
+    /// slice planes go.</para>
+    /// </summary>
+    /// <param name="recordReasons">
+    /// Pass false from the preview. <see cref="AdaptiveLayerHeights.LastReasons"/> is a static that
+    /// <c>adaptive-height-debug</c> reads, and the preview runs on every settings keystroke — left
+    /// recording, it describes a ladder that is not the one on screen.
+    /// </param>
+    public static float[] BuildLayerLadder(
+        IReadOnlyList<Vector3[]> meshes,
+        float zMin, float zMax,
+        SliceSettings settings,
+        bool recordReasons = true)
+    {
+        float[] zPositions = settings.AdaptiveLayerHeight
+            ? AdaptiveLayerHeights.ComputeZPositions(meshes, zMin, zMax,
+                  settings.FirstLayerHeight, settings.MinLayerHeight,
+                  settings.LayerHeight, settings.AdaptiveQuality,
+                  settings.ResolvedMinFaceAreaMm2, recordReasons)
+            : BuildUniformZPositions(zMin, zMax, settings.FirstLayerHeight, settings.LayerHeight);
+
+        // The floor both later rules share, resolved once so they cannot disagree about it.
+        float minH = settings.MinLayerHeight > 1e-4f
+            ? MathF.Min(settings.MinLayerHeight, settings.LayerHeight)
+            : settings.LayerHeight;
+
+        // Support-driven thinning (opt-in). Runs on the boundary before any moves exist, and can
+        // only make a layer thinner than the ladder above already chose — so the finish criterion
+        // keeps its say and turning this off reproduces the previous output exactly.
+        if (settings.SupportDrivenLayerHeight && zPositions.Length >= 2)
+        {
+            zPositions = SupportDrivenLayerHeights.Refine(
+                zPositions, zMax,
+                z => ComputeInsetContours(meshes, z, settings).Contours,
+                settings.SupportTargetOffsetMm,
+                settings.ResolvedBridgeToleranceMm,
+                minH, settings.LayerHeight,
+                searchCellMm: settings.BeadWidth,
+                recordDecisions: recordReasons);
+        }
+        else if (recordReasons)
+        {
+            // Feature off: drop last run's decisions so support-height-debug cannot report
+            // thinning from a slice that is no longer on screen.
+            SupportDrivenLayerHeights.ResetDecisions();
+        }
+
+        // Last of the three thickness rules, because it smooths whatever the other two decided —
+        // it needs the final ladder, not an intermediate one. Only ever thins, so both the
+        // stairstep tolerance and the overlap target still hold everywhere.
+        if (settings.MaxLayerHeightChangeMm > 1e-4f && zPositions.Length >= 3)
+        {
+            zPositions = LayerHeightSlewLimiter.Apply(
+                zPositions, zMax, settings.MaxLayerHeightChangeMm,
+                minH, settings.LayerHeight);
+        }
+
+        return zPositions;
+    }
+
 
     private static float[] BuildUniformZPositions(float zMin, float zMax, float firstH, float layerH)
     {

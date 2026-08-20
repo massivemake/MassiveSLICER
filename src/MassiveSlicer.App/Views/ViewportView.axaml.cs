@@ -1012,7 +1012,11 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.AdaptiveMinFaceAreaMm2)
                                     or nameof(AdditiveSettingsViewModel.SupportDrivenLayerHeight)
                                     or nameof(AdditiveSettingsViewModel.SupportOverlapTargetPercent)
-                                    or nameof(AdditiveSettingsViewModel.SupportBridgeToleranceMm))
+                                    or nameof(AdditiveSettingsViewModel.SupportBridgeToleranceMm)
+                                    // Bead width feeds BOTH the derived min-face-area gate and the
+                                    // support target, so it moves the ladder even though it does
+                                    // not look like a layer-height setting.
+                                    or nameof(AdditiveSettingsViewModel.BeadWidth))
                 {
                     if (additive.ShowLayerPreview)
                         _ = ComputeLayerPreviewAsync(vm);
@@ -6446,11 +6450,10 @@ public partial class ViewportView : UserControl
         var meshSnapshots = CollectMeshSnapshots(sourceItem, requireVisible: true);
         if (meshSnapshots.Count == 0) return;
 
-        float layerH   = (float)s.LayerHeight;
-        float firstH   = (float)s.FirstLayerHeight;
-        float minH     = (float)s.MinLayerHeight;
-        float quality  = (float)s.AdaptiveQuality;
-        bool  adaptive = s.AdaptiveLayerHeight && s.ShowAdaptiveLayerHeight;
+        // The real slice settings, so the preview is computed from the same inputs the slicer
+        // uses. Building a private subset here is exactly how the preview drifted: it was missing
+        // the min-face-area gate, support-driven thinning and the slew cap.
+        var sliceSettings = BuildSliceSettings(s);
 
         var result = await Task.Run(() =>
         {
@@ -6478,9 +6481,11 @@ public partial class ViewportView : UserControl
 
             if (zMax <= zMin + 1e-4f) return ((float[])[], (float[])[]);
 
-            float[] zPositions = adaptive
-                ? AdaptiveLayerHeights.ComputeZPositions(flatMeshes, zMin, zMax, firstH, minH, layerH, quality)
-                : BuildUniformZPositions(zMin, zMax, firstH, layerH);
+            // ONE ladder builder, shared with PlanarSlicer.Slice. recordReasons: false so this
+            // does not overwrite the statics adaptive-height-debug and support-height-debug read —
+            // the preview runs on every settings keystroke.
+            float[] zPositions = PlanarSlicer.BuildLayerLadder(
+                flatMeshes, zMin, zMax, sliceSettings, recordReasons: false);
 
             if (zPositions.Length == 0) return ((float[])[], (float[])[]);
 
@@ -6500,14 +6505,6 @@ public partial class ViewportView : UserControl
             vm.PendingLayerPreview.Enqueue(result);
             GlCanvas.RequestNextFrameRendering();
         }
-    }
-
-    private static float[] BuildUniformZPositions(float zMin, float zMax, float firstH, float layerH)
-    {
-        var list = new List<float>();
-        float z  = zMin + firstH;
-        while (z < zMax - 1e-4f) { list.Add(z); z += layerH; }
-        return [.. list];
     }
 
     private static NVec3 MapMaterialColor(string? name) => name switch

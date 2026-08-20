@@ -112,7 +112,13 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     /// <summary>Mirrors AdaptiveLayerHeight — layer-stripe preview is active whenever adaptive mode is on.</summary>
-    public bool ShowLayerPreview => _adaptiveLayerHeight;
+    /// <summary>
+    /// Show the layer-thickness bands whenever SOME rule can vary thickness — not only when
+    /// Adaptive layer height is on. Keyed to adaptive alone, the preview was hidden exactly when
+    /// support-driven was doing all the thinning, which is the case a user most needs to see.
+    /// </summary>
+    public bool ShowLayerPreview
+        => _adaptiveLayerHeight || _supportDrivenLayerHeight || _maxLayerHeightChangeMm > 1e-4;
 
     // -- Adaptive layer height ------------------------------------------------
 
@@ -130,6 +136,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowLayerPreview));
                 OnPropertyChanged(nameof(ShowMinLayerHeight));
                 OnPropertyChanged(nameof(ShowMaxLayerHeightChange));
+                OnPropertyChanged(nameof(ShowLayerPreview));
             }
         }
     }
@@ -253,6 +260,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             if (SetField(ref _supportDrivenLayerHeight, value))
                 OnPropertyChanged(nameof(ShowMinLayerHeight));
                 OnPropertyChanged(nameof(ShowMaxLayerHeightChange));
+                OnPropertyChanged(nameof(ShowLayerPreview));
         }
     }
 
@@ -299,6 +307,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
                 OnPropertyChanged(nameof(ShowMinLayerHeight));
                 OnPropertyChanged(nameof(ShowMaxLayerHeightChange));
+                OnPropertyChanged(nameof(ShowLayerPreview));
                 OnPropertyChanged(nameof(ShowSlicingMode));
                 OnPropertyChanged(nameof(ShowCurvedControls));
                 OnPropertyChanged(nameof(IsCurvedMethod));

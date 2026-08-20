@@ -84,7 +84,8 @@ public static class AdaptiveLayerHeights
         float firstLayerHeight,
         float minLayerHeight, float maxLayerHeight,
         float qualityFactor,
-        float minFaceAreaMm2 = 0f)
+        float minFaceAreaMm2 = 0f,
+        bool recordReasons = true)
     {
         qualityFactor = Math.Clamp(qualityFactor, 0f, 1f);
 
@@ -122,7 +123,10 @@ public static class AdaptiveLayerHeights
 
         // One reference assignment, after the walk is finished: a concurrent reader gets the old
         // complete array or the new complete array, never a partially built one.
-        s_lastReasons = [.. reasons];
+        // Only a real slice publishes these. The layer preview calls this on every settings
+        // keystroke, and it used to overwrite the static that adaptive-height-debug reads — so the
+        // diagnostic described a ladder that was not the toolpath on screen.
+        if (recordReasons) s_lastReasons = [.. reasons];
 
         return [.. positions];
     }
