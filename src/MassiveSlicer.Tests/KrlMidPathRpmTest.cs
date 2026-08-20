@@ -320,6 +320,52 @@ public sealed class KrlMidPathRpmTest
     }
 
     /// <summary>
+    /// Adaptive-thickness flow varies rate per LAYER, but it rides on
+    /// <see cref="ToolpathMove.HeightScale"/> — on the MOVE, not on the layer's settings. With the
+    /// sub-layer gate off it must still reach the program: it is the per-layer mechanism wearing a
+    /// per-move coat, and it is main 544's fix.
+    ///
+    /// <para>This is the test that rules out judging the mechanism by comparing layer SETTINGS.
+    /// That reads the same for both layers here, so it would call this sub-layer and drop it.</para>
+    /// </summary>
+    [Fact]
+    public void A_whole_layer_height_scale_change_still_reaches_the_program()
+    {
+        var tp = new Toolpath();
+        // Same settings throughout; only the layers' thickness scale differs, uniformly within
+        // each layer, which is what a planar adaptive-thickness slice produces.
+        foreach (var (idx, z, hs) in new[] { (0, 4f, 1.0f), (1, 7f, 0.75f) })
+        {
+            var l = new ToolpathLayer(idx, z) { Height = 4f, PlaneNormal = Vector3.UnitZ };
+            for (int k = 0; k < 3; k++)
+                l.Moves.Add(new ToolpathMove(
+                    new Vector3(k * 200f, 0, z), new Vector3((k + 1) * 200f, 0, z), MoveKind.Extrude)
+                    { Normal = Vector3.UnitZ, HeightScale = hs });
+            tp.Layers.Add(l);
+        }
+
+        var s = Urm();
+        Assert.False(s.AllowSubLayerRpmChange);
+
+        var krl = KrlExporter.Export(tp, s);
+
+        var rates = RpmLines(krl)
+            .Select(l => System.Text.RegularExpressions.Regex.Match(l, @"RPM = ([\d.]+)"))
+            .Where(m => m.Success)
+            .Select(m => float.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))
+            .Where(v => v > 1f)
+            .Distinct()
+            .ToList();
+        Assert.True(rates.Count >= 2,
+            $"the thinned layer's flow never reached the program — only {rates.Count} rate(s): "
+          + string.Join(", ", rates)
+          + ". Adaptive-thickness flow is per-LAYER and must survive the sub-layer gate.");
+
+        // And nothing was dropped: every change here is a layer's first rate.
+        Assert.DoesNotContain("SUB-LAYER FLOW CORRECTION NOT APPLIED", krl);
+    }
+
+    /// <summary>
     /// A print with ONE rate throughout must be unchanged — that is the shape every historically
     /// good print had, and it must not acquire triggers it never needed.
     /// </summary>

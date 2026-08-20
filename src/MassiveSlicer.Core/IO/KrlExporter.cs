@@ -609,10 +609,10 @@ public static class KrlExporter
         // the first-layer RPM override — 22 % on layer 0 then 40 % on layer 1 both re-resolved to
         // 40 under layer 1's settings, so the change looked like zero and was suppressed.
         float lastExtrudeRpmPercent = -1f;
-        // The LAYER-level rate last written, i.e. before this move's own scales. Separating it
-        // from lastExtrudeRpmPercent is what lets the exporter tell a per-layer rate change from a
-        // sub-layer one, and gate only the second.
-        float lastExtrudeBasePercent = -1f;
+        // Has this layer had its rate written yet? The layer's first rate is the per-layer
+        // mechanism; a second one within the same layer is a sub-layer change with no handshake
+        // behind it. Reset at every layer boundary.
+        bool rateWrittenInLayer = false;
         string? lastExtrudeVelText = null;
 
         // Pre-smooth per-move normals along each contour with a forward-biased Gaussian
@@ -628,6 +628,8 @@ public static class KrlExporter
         for (int li = 0; li < toolpath.Layers.Count; li++)
         {
             var layer        = toolpath.Layers[li];
+            // A new layer may set a new rate — that is the per-layer mechanism.
+            rateWrittenInLayer = false;
             var (la, lb, lc) = KukaAbc(layer.PlaneNormal, s);
             var smoothedLayer = smoothedByLayer?[li];
 
@@ -837,21 +839,24 @@ public static class KrlExporter
                         needsRpmOn = false;
                         lastExtrudeAnoutText = extrudeKey;
                         lastExtrudeRpmPercent = ResolveRpmPercent(layerS, extrudeRpmScale);
-                        lastExtrudeBasePercent = ResolveRpmPercent(layerS, 1f);
+                        rateWrittenInLayer = true;
                         lastExtrudeVelText = velText;
                     }
                     else if (anoutChanged || velChanged)
                     {
-                        // Which mechanism is asking? A change in the LAYER's own rate is the
-                        // long-standing per-layer path — first-layer override, layer speed, adaptive
-                        // speed and flow. A change with the layer rate standing still is the
-                        // sub-layer one we added, driven by this move's own scales.
-                        float basePercent = ResolveRpmPercent(layerS, 1f);
-                        bool layerRateChanged =
-                            lastExtrudeBasePercent < 0f
-                            || MathF.Abs(basePercent - lastExtrudeBasePercent) >= MinRpmChangePercent;
+                        // Which mechanism is asking? "One rate per layer, held for the whole
+                        // layer" is the shape every good print on these cells has had, so the
+                        // layer's FIRST rate is the per-layer mechanism and anything after it is
+                        // the sub-layer one we added.
+                        //
+                        // ⚠️ Deliberately NOT a comparison of the layer SETTINGS. HeightScale rides on
+                        // the move, not on layerS, but on a planar slice it is uniform across a
+                        // layer — so a settings comparison would call adaptive-thickness flow
+                        // "sub-layer" and drop it, taking main 544's fix down with the new work.
+                        // Position within the layer captures both correctly.
+                        bool isLayerFirstRate = !rateWrittenInLayer;
 
-                        if (anoutChanged && (!s.DigitalStartStopEnabled || layerRateChanged))
+                        if (anoutChanged && (!s.DigitalStartStopEnabled || isLayerFirstRate))
                             // Untouched: this is the branch that has always carried per-layer rate,
                             // in the form it has always carried it. The ANOUT path takes every
                             // change here too, sub-layer included — it is not a latching protocol.
@@ -874,7 +879,7 @@ public static class KrlExporter
                             sb.AppendLine($"$VEL.CP = {velText}");
                         lastExtrudeAnoutText = extrudeKey;
                         lastExtrudeRpmPercent = ResolveRpmPercent(layerS, extrudeRpmScale);
-                        lastExtrudeBasePercent = ResolveRpmPercent(layerS, 1f);
+                        rateWrittenInLayer = true;
                         lastExtrudeVelText = velText;
                     }
 
