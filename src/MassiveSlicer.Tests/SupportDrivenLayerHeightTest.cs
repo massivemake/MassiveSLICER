@@ -15,6 +15,15 @@ namespace MassiveSlicer.Tests;
 /// These feed synthetic contours rather than meshes, so the geometry is exact and the arithmetic
 /// is checkable by hand.
 /// </summary>
+/// <summary>
+/// Joins the existing "AdaptiveLayerHeights" collection because it shares the slicer's
+/// diagnostic statics (AdaptiveLayerHeights.LastReasons,
+/// SupportDrivenLayerHeights.LastDecisions, ProximityFlowPostProcessor.LastRuns). xUnit runs
+/// test CLASSES in parallel, so without a shared collection these clobber each other: a test
+/// asserting on what a slice published would fail whenever another class sliced at the same
+/// moment. It passed when filtered and failed in the full suite -- a flaky test, not a bug.
+/// </summary>
+[Collection("AdaptiveLayerHeights")]
 public class SupportDrivenLayerHeightTest
 {
     private const float MinH = 2f, MaxH = 3f, Bead = 6f;

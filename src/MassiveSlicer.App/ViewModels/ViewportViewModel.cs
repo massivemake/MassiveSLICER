@@ -3644,22 +3644,21 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 double tSpeed = mv.TravelSpeedMps is { } o ? o * 1000.0 : add.TravelSpeed;
                 return $"{tSpeed:0} mm/s · RPM {KrlAnout.RpmIdlePercent:0}%";
             }
+            // RPM comes from ToolpathRpm.MoveScale — the SAME function the exporter, the RPM
+            // gradient and the export gate use. Computed by hand here it drifted: it multiplied
+            // HeightScale but not WidthScale, so this readout disagreed with the colours on screen
+            // wherever proximity correction had cut flow.
             double speed;
-            float rpmScale;
+            float rpmScale = ToolpathRpm.MoveScale(mv);
             if (mv.IsWipe)
             {
                 speed = add.WipeSpeed;
-                rpmScale = mv.WipeRpmScale;
             }
             else
             {
+                // Speed is its own chain: HeightScale and WidthScale change FLOW, never speed.
                 float sScale = Math.Max(mv.PrintSpeedScale, 1e-6f);
-                rpmScale = sScale * Math.Max(mv.HeightScale, 1e-6f);
-                if (mv.IsResumeRamp)
-                {
-                    sScale *= Math.Max(mv.ResumeSpeedScale, 1e-6f);
-                    rpmScale *= Math.Max(mv.ResumeRpmScale, 1e-6f);
-                }
+                if (mv.IsResumeRamp) sScale *= Math.Max(mv.ResumeSpeedScale, 1e-6f);
                 speed = add.PrintSpeed * sScale;
             }
             // An absolute demand (brim RPM) replaces the nominal-times-scale product outright —

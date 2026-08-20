@@ -18,6 +18,15 @@ namespace MassiveSlicer.Tests;
 /// someone adds a fourth thickness rule inside <c>Slice</c> instead of inside the builder, the
 /// first test here fails.
 /// </summary>
+/// <summary>
+/// Joins the existing "AdaptiveLayerHeights" collection because it shares the slicer's
+/// diagnostic statics (AdaptiveLayerHeights.LastReasons,
+/// SupportDrivenLayerHeights.LastDecisions, ProximityFlowPostProcessor.LastRuns). xUnit runs
+/// test CLASSES in parallel, so without a shared collection these clobber each other: a test
+/// asserting on what a slice published would fail whenever another class sliced at the same
+/// moment. It passed when filtered and failed in the full suite -- a flaky test, not a bug.
+/// </summary>
+[Collection("AdaptiveLayerHeights")]
 public class LayerLadderAgreementTest
 {
     /// <summary>A tapering box: wide at the bottom, narrowing with height, so the thickness
