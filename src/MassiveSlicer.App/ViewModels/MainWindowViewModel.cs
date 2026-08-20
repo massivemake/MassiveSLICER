@@ -492,7 +492,11 @@ public sealed class MainWindowViewModel : ViewModelBase
                 else if (RightPanel.ActiveTab == RightPanelTab.Scan)
                     RightPanel.Scan.BaseDataIndex = robot.KrlBaseIndex;
             }
+            if (e.PropertyName == nameof(RobotPanelViewModel.NozzleDiameterMm))
+                RightPanel.Additive.BeadWidth = robot.NozzleDiameterMm;
         };
+        // Seed bead width from the nozzle-size dropdown's default at startup.
+        RightPanel.Additive.BeadWidth = robot.NozzleDiameterMm;
 
         // After each cell swap: populate KRL dropdowns and select tool for active tab.
         Viewport.OnCellSwapCompleted = generation =>

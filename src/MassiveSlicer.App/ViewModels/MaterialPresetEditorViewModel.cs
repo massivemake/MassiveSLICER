@@ -14,6 +14,11 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
 
     // -- Identification ----------------------------------------------------
 
+    /// <summary>True once <see cref="LoadFrom"/> has loaded an existing library entry —
+    /// distinguishes "editing preset N" from "building a brand-new preset" so the dialog
+    /// can hide Delete when there's nothing in the library to delete yet.</summary>
+    public bool IsExistingPreset { get; private set; }
+
     private string _expectedAutoName = "ABS - Black";
 
     private string _name = "ABS - Black";
@@ -381,6 +386,8 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
 
     public void LoadFrom(MaterialPreset p)
     {
+        IsExistingPreset = true;
+
         // Setting MaterialType/Color fires TryAutoUpdateName. Without suppress, a custom
         // name like "PPGF" was treated as the prior auto-name and rewritten to "Other - Natural".
         _suppressAutoName = true;

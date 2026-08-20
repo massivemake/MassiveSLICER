@@ -344,6 +344,13 @@
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center"
                                 Spacing="8">
+                        <Button Content="Delete"
+                                Classes="ToolbarButton"
+                                Padding="14,6"
+                                Foreground="#ff8a8a"
+                                IsVisible="{Binding IsExistingPreset}"
+                                Click="OnDelete"
+                                ToolTip.Tip="Remove this preset from the material library — useful for cleaning up duplicates"/>
                         <Button Content="Cancel"
                                 Classes="ToolbarButton"
                                 Padding="14,6"

@@ -56,6 +56,52 @@
                                               RelativeSource={RelativeSource AncestorType={x:Type Window}},
                                               Mode=TwoWay}"
                               ToolTip.Tip="KRL tool number ($TOOL_DATA index) for live sync / export"/>
+                    <TextBlock Text="NOZZLE SIZE" Classes="LabelMuted" Margin="0,8,0,2"/>
+                    <ComboBox Margin="0,0,0,6" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.NozzleSizeOptions,
+                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                              SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.NozzleSizeSelectedIndex,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                              Mode=TwoWay}"
+                              ToolTip.Tip="Nozzle / bead diameter for this tool head — sets the slicer's bead width"/>
+
+                    <!-- Material preset (moved from MATERIAL section, right panel) -->
+                    <TextBlock Text="MATERIAL" Classes="LabelMuted" Margin="0,8,0,2"/>
+                    <Grid Margin="0,0,0,6" ColumnDefinitions="*,Auto,Auto">
+                        <ComboBox Grid.Column="0"
+                                  HorizontalAlignment="Stretch"
+                                  Margin="0,0,4,0"
+                                  PlaceholderText="No preset selected"
+                                  ItemsSource="{Binding DataContext.RightPanel.Additive.MaterialPresets,
+                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                  SelectedIndex="{Binding DataContext.RightPanel.Additive.SelectedPresetIndex,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                  Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Name}"/>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <Button Grid.Column="1"
+                                Classes="ToolbarButton"
+                                Padding="8,2"
+                                Margin="0,0,2,0"
+                                Click="OnEditMaterialClicked"
+                                IsEnabled="{Binding DataContext.RightPanel.Additive.HasSelectedPreset,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                ToolTip.Tip="Edit selected material preset">
+                            <ia:Icon Value="mdi-pencil" FontSize="14"/>
+                        </Button>
+                        <Button Grid.Column="2"
+                                Classes="ToolbarButton"
+                                Padding="8,2"
+                                Click="OnAddMaterialClicked"
+                                ToolTip.Tip="Add new material preset">
+                            <ia:Icon Value="mdi-plus" FontSize="16"/>
+                        </Button>
+                    </Grid>
+
                     <TextBlock Text="BASE #" Classes="LabelMuted" Margin="0,0,0,2"/>
                     <ComboBox Margin="0,0,0,0" HorizontalAlignment="Stretch"
                               ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseOptions,
