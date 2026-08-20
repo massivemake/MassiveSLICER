@@ -129,6 +129,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
                 OnPropertyChanged(nameof(ShowLayerPreview));
                 OnPropertyChanged(nameof(ShowMinLayerHeight));
+                OnPropertyChanged(nameof(ShowMaxLayerHeightChange));
             }
         }
     }
@@ -193,6 +194,30 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _minLayerHeight, Math.Clamp(value, 0.1, 100.0));
     }
 
+    private double _maxLayerHeightChangeMm;
+
+    /// <summary>
+    /// Largest thickness change allowed between adjacent layers (mm). 0 = off.
+    ///
+    /// Both height rules pick each layer independently, so nothing otherwise stops 4.00 -> 2.61 ->
+    /// 4.00 on consecutive layers. RPM follows real thickness while speed usually does not, so a
+    /// thickness cliff reaches the machine as an RPM cliff. Only ever THINS, so the stairstep
+    /// tolerance and the overlap target both still hold.
+    /// </summary>
+    public double MaxLayerHeightChangeMm
+    {
+        get => _maxLayerHeightChangeMm;
+        set => SetField(ref _maxLayerHeightChangeMm, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    /// <summary>
+    /// Visible whenever a rule can vary thickness — the cap only has something to smooth then.
+    /// Mirrors <see cref="ShowMinLayerHeight"/> deliberately: a control that silently governs a
+    /// result while hidden is exactly how Min layer height went missing before.
+    /// </summary>
+    public bool ShowMaxLayerHeightChange
+        => (_adaptiveLayerHeight || _supportDrivenLayerHeight) && _method == SliceMethod.Planar;
+
     private double _adaptiveMinFaceAreaMm2;
 
     /// <summary>
@@ -227,6 +252,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         {
             if (SetField(ref _supportDrivenLayerHeight, value))
                 OnPropertyChanged(nameof(ShowMinLayerHeight));
+                OnPropertyChanged(nameof(ShowMaxLayerHeightChange));
         }
     }
 
@@ -272,6 +298,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowAdaptiveLayerHeight));
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
                 OnPropertyChanged(nameof(ShowMinLayerHeight));
+                OnPropertyChanged(nameof(ShowMaxLayerHeightChange));
                 OnPropertyChanged(nameof(ShowSlicingMode));
                 OnPropertyChanged(nameof(ShowCurvedControls));
                 OnPropertyChanged(nameof(IsCurvedMethod));

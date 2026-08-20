@@ -2002,6 +2002,126 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "slew-report",
+            Description = "Layer-to-layer thickness and RPM steps in the current slice, and what "
+                        + "capping the change per layer would cost. Answers whether banding is "
+                        + "coming from thickness cliffs, and which cap to set",
+            Usage = "slew-report [toolpath name]",
+            Execute = (ctx, args) =>
+            {
+                var want = args.Trim();
+
+                void Walk(IEnumerable<OutlinerItemViewModel> items, List<OutlinerItemViewModel> into)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.IsToolpath) into.Add(item);
+                        Walk(item.Children, into);
+                    }
+                }
+
+                var toolpaths = new List<OutlinerItemViewModel>();
+                Walk(ctx.Main.Viewport.OutlinerItems, toolpaths);
+                if (want.Length > 0)
+                    toolpaths = toolpaths
+                        .Where(t => t.Name.Contains(want, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                if (toolpaths.Count == 0)
+                {
+                    ctx.LogError(want.Length > 0
+                        ? $"[slew] no toolpath matching '{want}'."
+                        : "[slew] no toolpaths in the scene.");
+                    return;
+                }
+
+                var add = ctx.Main.RightPanel.Additive;
+
+                foreach (var tpItem in toolpaths)
+                {
+                    var snap = ctx.Main.Viewport.GetToolpathSnapshot?.Invoke(tpItem.Node);
+                    if (snap is null)
+                    {
+                        ctx.LogError($"[slew] \"{tpItem.Name}\": no snapshot (not staged yet).");
+                        continue;
+                    }
+                    var tp = snap.Smoothed.Layers.Count > 0 ? snap.Smoothed : snap.Raw;
+                    if (tp.Layers.Count < 3)
+                    {
+                        ctx.LogError($"[slew] \"{tpItem.Name}\": needs at least 3 layers.");
+                        continue;
+                    }
+
+                    float nominal = snap.LayerHeight > 0f ? snap.LayerHeight : (float)add.LayerHeight;
+                    // Real thickness per layer. Falls back to the Z step when Height is unset,
+                    // so this still says something on a toolpath sliced before that was recorded.
+                    var h = tp.Layers.Select((l, i) => l.Height > 1e-4f
+                                ? l.Height
+                                : (i + 1 < tp.Layers.Count ? tp.Layers[i + 1].Z - l.Z : nominal))
+                            .ToArray();
+
+                    // RPM tracks thickness through HeightScale, so a thickness step of d mm is
+                    // (d / nominal) x the nominal RPM in percentage points. Same call
+                    // layer-speed-report uses, so the two cannot disagree.
+                    float bead = snap.BeadWidth > 0f ? snap.BeadWidth : (float)add.BeadWidth;
+                    float flow = (float)add.ActiveFlowRate;
+                    float nomPct = bead > 0f && flow > 0f && nominal > 0f
+                        ? KrlAnout.ComputeRpmPercent(bead, nominal, (float)add.PrintSpeed / 1000f, flow)
+                        : 0f;
+                    if (nomPct <= 0f)
+                        ctx.Log("[slew]   (bead / flow / layer height unusable — RPM points shown as 0)");
+
+                    var steps = new List<(float Mm, float Pts, float Z)>();
+                    for (int i = 1; i < h.Length; i++)
+                    {
+                        float d = Math.Abs(h[i] - h[i - 1]);
+                        steps.Add((d, nominal > 1e-4f ? nomPct * d / nominal : 0f, tp.Layers[i].Z));
+                    }
+
+                    int offNominal = h.Count(x => Math.Abs(x - nominal) > 1e-3f);
+                    ctx.Log($"[slew] \"{tpItem.Name}\": {h.Length} layers, nominal {nominal:0.##} mm, "
+                          + $"{offNominal} off nominal, nominal RPM {nomPct:0.#} %");
+                    ctx.Log($"[slew]   cap now: {(add.MaxLayerHeightChangeMm > 1e-4 ? $"{add.MaxLayerHeightChangeMm:0.##} mm" : "OFF")}");
+
+                    var worst = steps.OrderByDescending(x => x.Mm).First();
+                    ctx.Log($"[slew]   worst step {worst.Mm:0.###} mm = {worst.Pts:0.#} RPM points "
+                          + $"at Z {worst.Z:0.#}");
+                    foreach (int pts in new[] { 5, 10, 20 })
+                        ctx.Log($"[slew]   boundaries moving >{pts,2} RPM points: "
+                              + $"{steps.Count(x => x.Pts > pts)}");
+
+                    if (add.MaxLayerHeightChangeMm > 1e-4)
+                    {
+                        ctx.Log("[slew]   the cap is on, so the figures above are what it already "
+                              + "achieved. Set it to 0 and re-slice to see the uncapped baseline.");
+                        continue;
+                    }
+
+                    // What each cap would cost, on THIS ladder. Simulated rather than sliced, so
+                    // it is a projection — the real cost needs a re-slice.
+                    var zPos = new float[h.Length + 1];
+                    zPos[0] = tp.Layers[0].Z;
+                    for (int i = 0; i < h.Length; i++) zPos[i + 1] = zPos[i] + h[i];
+                    float minH = (float)Math.Min(add.MinLayerHeight, add.LayerHeight);
+
+                    ctx.Log("[slew]   projected cost of capping (simulated on this ladder):");
+                    foreach (float cap in new[] { 1.0f, 0.5f, 0.3f, 0.2f, 0.1f })
+                    {
+                        var capped = LayerHeightSlewLimiter.Apply(zPos, zPos[^1], cap, minH, nominal);
+                        float w = LayerHeightSlewLimiter.WorstChangeMm(capped, true);
+                        int extra = (capped.Length - 1) - h.Length;
+                        ctx.Log($"[slew]     cap {cap:0.0} mm -> +{extra,4} layers "
+                              + $"({100f * extra / h.Length,5:0.0} %), worst step {w:0.###} mm "
+                              + $"= {(nominal > 1e-4f ? nomPct * w / nominal : 0f):0.#} RPM points");
+                    }
+                    ctx.Log("[slew]   ⚠ pick by WORST STEP, not by the count over N — a loose cap "
+                          + "splits one cliff into several medium ramps and can raise the count "
+                          + "while improving the worst.");
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "support-check",
             Description = "The support-check overlay as text: which bead misses your overlap "
                         + "target over a stretch long enough that the slicer counted it as a "

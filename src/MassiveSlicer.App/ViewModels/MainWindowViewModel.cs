@@ -4288,6 +4288,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.AdaptiveLayerHeight    = copy.AdaptiveLayerHeight;
         live.AdaptiveQuality        = copy.AdaptiveQuality;
         live.MinLayerHeight         = copy.MinLayerHeight;
+        live.MaxLayerHeightChangeMm = copy.MaxLayerHeightChangeMm;
         live.AdaptiveMinFaceAreaMm2 = copy.AdaptiveMinFaceAreaMm2;
         live.SupportDrivenLayerHeight    = copy.SupportDrivenLayerHeight;
         live.SupportOverlapTargetPercent = copy.SupportOverlapTargetPercent;
@@ -4552,6 +4553,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.AdaptiveLayerHeight = p.AdaptiveLayerHeight;
         add.AdaptiveQuality     = p.AdaptiveQuality;
         add.MinLayerHeight      = p.MinLayerHeight;
+        add.MaxLayerHeightChangeMm = p.MaxLayerHeightChangeMm;
         add.AdaptiveMinFaceAreaMm2      = p.AdaptiveMinFaceAreaMm2;
         add.SupportDrivenLayerHeight    = p.SupportDrivenLayerHeight;
         add.SupportOverlapTargetPercent = p.SupportOverlapTargetPercent;
@@ -4894,6 +4896,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.AdaptiveLayerHeight = add.AdaptiveLayerHeight;
         p.AdaptiveQuality     = add.AdaptiveQuality;
         p.MinLayerHeight      = add.MinLayerHeight;
+        p.MaxLayerHeightChangeMm = add.MaxLayerHeightChangeMm;
         p.AdaptiveMinFaceAreaMm2      = add.AdaptiveMinFaceAreaMm2;
         p.SupportDrivenLayerHeight    = add.SupportDrivenLayerHeight;
         p.SupportOverlapTargetPercent = add.SupportOverlapTargetPercent;

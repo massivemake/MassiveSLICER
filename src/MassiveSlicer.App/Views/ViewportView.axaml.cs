@@ -1008,6 +1008,7 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.AdaptiveLayerHeight)
                                     or nameof(AdditiveSettingsViewModel.AdaptiveQuality)
                                     or nameof(AdditiveSettingsViewModel.MinLayerHeight)
+                                    or nameof(AdditiveSettingsViewModel.MaxLayerHeightChangeMm)
                                     or nameof(AdditiveSettingsViewModel.AdaptiveMinFaceAreaMm2)
                                     or nameof(AdditiveSettingsViewModel.SupportDrivenLayerHeight)
                                     or nameof(AdditiveSettingsViewModel.SupportOverlapTargetPercent)
@@ -4681,6 +4682,7 @@ public partial class ViewportView : UserControl
             AdaptiveLayerHeight = s.AdaptiveLayerHeight,
             AdaptiveQuality     = (float)s.AdaptiveQuality,
             MinLayerHeight      = (float)s.MinLayerHeight,
+            MaxLayerHeightChangeMm = (float)s.MaxLayerHeightChangeMm,
             AdaptiveMinFaceAreaMm2 = (float)s.AdaptiveMinFaceAreaMm2,
             SupportDrivenLayerHeight   = s.SupportDrivenLayerHeight,
             SupportOverlapTargetPercent = (float)s.SupportOverlapTargetPercent,
@@ -5938,6 +5940,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.AdaptiveLayerHeight),
         nameof(AdditiveSettingsViewModel.AdaptiveQuality),
         nameof(AdditiveSettingsViewModel.MinLayerHeight),
+        nameof(AdditiveSettingsViewModel.MaxLayerHeightChangeMm),
         nameof(AdditiveSettingsViewModel.AdaptiveMinFaceAreaMm2),
         nameof(AdditiveSettingsViewModel.SupportDrivenLayerHeight),
         nameof(AdditiveSettingsViewModel.SupportOverlapTargetPercent),

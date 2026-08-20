@@ -1572,6 +1572,22 @@
                                     </Grid>
                                 </StackPanel>
 
+                                <!-- Slew limit. Sits with Min layer height rather than inside the
+                                     adaptive block for the same reason: it applies to whichever
+                                     rule moved the planes, and a control that governs the result
+                                     while hidden is how Min layer height went missing before. -->
+                                <StackPanel IsVisible="{Binding Additive.ShowMaxLayerHeightChange}" Spacing="4" Margin="0,4,0,0">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Max change / layer (mm)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="10"
+                                                   ToolTip.Tip="Caps how much layer thickness may change from one layer to the next, so a 4 mm to 2 mm cliff becomes a ramp. 0 = off.&#x0a;&#x0a;Extruder RPM follows real thickness while robot speed usually does not, so a thickness cliff arrives at the machine as an RPM cliff the extruder cannot follow — that is what shows as banding.&#x0a;&#x0a;It only ever makes layers THINNER, and it starts stepping before the layer that needs to be thin, so the stairstep tolerance and the overlap target both still hold. Costs a few extra layers.&#x0a;&#x0a;Try 0.2. The first layer keeps its own height, so the step off layer 1 can exceed the cap."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MaxLayerHeightChangeMm, Mode=TwoWay}"/>
+                                    </Grid>
+                                </StackPanel>
+
                                 <StackPanel IsVisible="{Binding Additive.ShowAdaptiveControls}" Spacing="4" Margin="0,4,0,0">
                                     <Grid Margin="0,0,0,4">
                                         <Grid.ColumnDefinitions>

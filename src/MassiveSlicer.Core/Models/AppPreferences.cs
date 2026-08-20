@@ -190,6 +190,9 @@ public sealed class AppPreferences
     /// <summary>Minimum layer height used by adaptive slicing (mm).</summary>
     public double MinLayerHeight { get; set; } = 1.0;
 
+    /// <summary>Largest thickness change allowed between adjacent layers (mm). 0 = off.</summary>
+    public double MaxLayerHeightChangeMm { get; set; }
+
     /// <summary>Smallest triangle (mm2) allowed to dictate a layer thickness. 0 = bead footprint, negative = off.</summary>
     public double AdaptiveMinFaceAreaMm2 { get; set; }
 

@@ -77,6 +77,19 @@ public static class PlanarSlicer
                 searchCellMm: settings.BeadWidth);
         }
 
+        // Last of the three thickness rules, because it smooths whatever the other two decided —
+        // it needs the final ladder, not an intermediate one. Only ever thins, so both the
+        // stairstep tolerance and the overlap target still hold everywhere.
+        if (settings.MaxLayerHeightChangeMm > 1e-4f && zPositions.Length >= 3)
+        {
+            float slewMinH = settings.MinLayerHeight > 1e-4f
+                ? MathF.Min(settings.MinLayerHeight, settings.LayerHeight)
+                : settings.LayerHeight;
+            zPositions = LayerHeightSlewLimiter.Apply(
+                zPositions, zMax, settings.MaxLayerHeightChangeMm,
+                slewMinH, settings.LayerHeight);
+        }
+
         // Tree Support must reach the print bed (Layer 1). If the mesh floats above
         // Z=0, prepend buffer layers so foundation is L1… and the part shifts up —
         // never require "layer −1".

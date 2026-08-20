@@ -231,6 +231,30 @@ public sealed class SliceSettings
     /// </summary>
     public float AdaptiveMinFaceAreaMm2 { get; init; } = 0f;
 
+    /// <summary>
+    /// Largest thickness change allowed between adjacent layers (mm). 0 = off.
+    ///
+    /// Both height rules choose each layer independently — adaptive asks what the stairstep
+    /// tolerance allows at this Z, support-driven asks how thin the bead must be to land on the
+    /// layer below — and neither looks at what its neighbours got. Nothing stops 4.00 → 2.61 →
+    /// 4.00 on consecutive layers.
+    ///
+    /// That matters because extruder RPM tracks real thickness (see
+    /// <see cref="Slicing.Effects.LayerHeightFlowPostProcessor"/>) while robot speed usually does
+    /// not, so a thickness cliff becomes an RPM cliff. Measured on a 392-layer column at flat
+    /// 85 mm/s: one boundary moved RPM 25.5 points in a single layer. With a known extruder
+    /// transport lag of order seconds, a step that size cannot land where it is commanded — it
+    /// shows on the part as bands of visibly different thickness.
+    ///
+    /// <para><b>It can only ever make a layer THINNER.</b> A rise is limited by thinning the
+    /// layer above; a drop by thinning the layers below so the ladder walks down into a thin
+    /// region instead of falling into it. Both directions thin, and thinner always satisfies
+    /// both the stairstep tolerance and the overlap target — those are upper bounds. So the
+    /// layer that genuinely needs to be thin still gets its thickness; nothing is traded away
+    /// to buy the smoothing.</para>
+    /// </summary>
+    public float MaxLayerHeightChangeMm { get; init; } = 0f;
+
     // -- Support-driven layer height (3b) ------------------------------------------
 
     /// <summary>
@@ -277,7 +301,8 @@ public sealed class SliceSettings
     /// measured at 1.5x over-extrusion on 37 % of layers. Any future rule that moves a slice
     /// plane belongs in this property, not in a new condition somewhere downstream.
     /// </summary>
-    public bool VariesLayerThickness => AdaptiveLayerHeight || SupportDrivenLayerHeight;
+    public bool VariesLayerThickness
+        => AdaptiveLayerHeight || SupportDrivenLayerHeight || MaxLayerHeightChangeMm > 1e-4f;
 
     /// <summary>Sideways step (mm) at which a bead is considered under target.</summary>
     public float SupportTargetOffsetMm
