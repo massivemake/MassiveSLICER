@@ -97,14 +97,15 @@ public static class BeadSupport
     /// could not change any decision. One pass over the moves, not a per-layer pairwise
     /// search.
     /// </summary>
-    public static float[] MeasureOffsets(Toolpath toolpath, float beadWidthMm)
+    public static float[] MeasureOffsets(
+        Toolpath toolpath, float beadWidthMm, int maxRings = DefaultSearchRings)
     {
         int total = MoveCount(toolpath);
         if (total == 0 || beadWidthMm <= 0f) return [];
 
         var offsets = new float[total];
         Array.Fill(offsets, float.NaN);          // "not measured" until proven otherwise
-        Measure(toolpath, beadWidthMm, offsets);
+        Measure(toolpath, beadWidthMm, offsets, maxRings);
         return offsets;
     }
 
@@ -121,7 +122,8 @@ public static class BeadSupport
     /// leaving entries it did not measure untouched. Kept single so the render path and the
     /// report path cannot drift apart.
     /// </summary>
-    private static void Measure(Toolpath toolpath, float beadWidthMm, float[] dest)
+    private static void Measure(
+        Toolpath toolpath, float beadWidthMm, float[] dest, int maxRings = DefaultSearchRings)
     {
         float cell = MathF.Max(beadWidthMm, 0.5f);
 
@@ -138,7 +140,7 @@ public static class BeadSupport
                     if (prevGrid is { Count: > 0 })
                     {
                         var mid = (move.From + move.To) * 0.5f;
-                        dest[flat] = NearestSegmentDistance2D(mid, prevGrid, cell);
+                        dest[flat] = NearestSegmentDistance2D(mid, prevGrid, cell, maxRings);
                     }
                     InsertSegment(curGrid, move.From, move.To, cell);
                 }
@@ -354,23 +356,298 @@ public static class BeadSupport
     public static string Mm(float offsetMm)
         => float.IsPositiveInfinity(offsetMm) ? "unsupported" : $"{offsetMm:0.##} mm";
 
+    // -- Support check (target-relative, for the overlay and its report) --------------------
+
+    /// <summary>
+    /// What the support rule says about one bead. Deliberately mirrors
+    /// <c>SupportDrivenLayerHeights.Worst</c>: a stretch shorter than the bridge tolerance is one
+    /// the slicer chose NOT to act on, so calling it a failure would show the operator problems
+    /// the feature deliberately let go.
+    /// </summary>
+    public enum SupportVerdict : byte
+    {
+        /// <summary>Travel, or a layer with nothing beneath it. Never a pass and never a failure.</summary>
+        NotMeasured = 0,
+
+        /// <summary>Within the overlap target.</summary>
+        OnTarget = 1,
+
+        /// <summary>Past target, but its continuous run is short enough that the bead bridges it.</summary>
+        Bridged = 2,
+
+        /// <summary>Past target over a run longer than the bridge tolerance — a real miss.</summary>
+        Failed = 3,
+    }
+
+    /// <summary>One continuous stretch of bead that failed, with where to find it.</summary>
+    public sealed record SupportFailure(
+        int LayerIndex,
+        float Z,
+        float LengthMm,
+        float WorstOffsetMm,
+        int FirstFlatIndex);
+
+    /// <summary>
+    /// Per-move verdicts for a finished toolpath, measured against the SAME target and tolerance
+    /// the slicer used.
+    /// </summary>
+    public sealed record CheckResult(
+        SupportVerdict[] Verdict,
+        float[] OffsetMm,
+        float TargetOffsetMm,
+        float BridgeToleranceMm,
+        float BeadWidthMm,
+        float TotalExtrudedMm,
+        float ExtrudedMmPastTarget,
+        float ExtrudedMmFailed,
+        IReadOnlyList<SupportFailure> Failures)
+    {
+        public static CheckResult Empty { get; } =
+            new([], [], 0f, 0f, 0f, 0f, 0f, 0f, []);
+
+        public bool HasFailures => Failures.Count > 0;
+
+        /// <summary>Share of laid bead in a failing run, as a percentage of all laid bead.</summary>
+        public float FailedPercent
+            => TotalExtrudedMm > 1e-4f ? 100f * ExtrudedMmFailed / TotalExtrudedMm : 0f;
+
+        /// <summary>Share of laid bead past target at all, failing or bridged.</summary>
+        public float PastTargetPercent
+            => TotalExtrudedMm > 1e-4f ? 100f * ExtrudedMmPastTarget / TotalExtrudedMm : 0f;
+    }
+
+    /// <summary>
+    /// Classifies every bead against the overlap target, grouping into runs first so the
+    /// bridge tolerance can be applied the way the slicer applies it.
+    ///
+    /// Measured with <see cref="ReportingSearchRings"/> rather than the 3x3 default, because this
+    /// result is REPORTED in mm — a distance the overlay prints has to be a real one.
+    /// </summary>
+    /// <param name="targetOffsetMm">
+    /// <c>SliceSettings.SupportTargetOffsetMm</c> — bead width x (1 - overlap target).
+    /// </param>
+    /// <param name="bridgeToleranceMm"><c>SliceSettings.ResolvedBridgeToleranceMm</c>.</param>
+    public static CheckResult Check(
+        Toolpath toolpath, float beadWidthMm, float targetOffsetMm, float bridgeToleranceMm)
+    {
+        int total = MoveCount(toolpath);
+        if (total == 0 || beadWidthMm <= 0f || targetOffsetMm <= 0f) return CheckResult.Empty;
+
+        var offsets  = MeasureOffsets(toolpath, beadWidthMm, ReportingSearchRings);
+        var verdicts = new SupportVerdict[total];
+        var failures = new List<SupportFailure>();
+
+        float totalMm = 0f, pastMm = 0f, failedMm = 0f;
+
+        // Reused across runs so a part with no overhang allocates nothing per layer.
+        var runIdx = new List<int>();
+
+        int flat = 0;
+        for (int li = 0; li < toolpath.Layers.Count; li++)
+        {
+            var layer = toolpath.Layers[li];
+            runIdx.Clear();
+            float runWorst = 0f, runTotal = 0f;
+
+            // Closes the open run: everything in it becomes Bridged or Failed together, since
+            // the verdict is a property of the RUN, not of the individual bead.
+            void CloseRun()
+            {
+                if (runIdx.Count == 0) return;
+                bool failed = runTotal > bridgeToleranceMm;
+                var  v      = failed ? SupportVerdict.Failed : SupportVerdict.Bridged;
+                for (int k = 0; k < runIdx.Count; k++) verdicts[runIdx[k]] = v;
+                if (failed)
+                {
+                    failedMm += runTotal;
+                    failures.Add(new SupportFailure(li, layer.Z, runTotal, runWorst, runIdx[0]));
+                }
+                runIdx.Clear();
+                runWorst = 0f; runTotal = 0f;
+            }
+
+            for (int mi = 0; mi < layer.Moves.Count; mi++, flat++)
+            {
+                var move = layer.Moves[mi];
+                if (!ToolpathMoveKinds.IsCutSegment(move.Kind))
+                {
+                    // The bead stops here, so any open run genuinely ends — a travel is not a
+                    // continuation of the stretch before it.
+                    CloseRun();
+                    continue;
+                }
+
+                float len = Vector3.Distance(move.From, move.To);
+                totalMm += len;
+
+                float mm = offsets[flat];
+                if (float.IsNaN(mm))
+                {
+                    // Measured nothing (first layer, or nothing laid below). Not a pass.
+                    CloseRun();
+                    continue;
+                }
+
+                if (mm > targetOffsetMm)
+                {
+                    pastMm += len;
+                    runIdx.Add(flat);
+                    runTotal += len;
+                    if (mm > runWorst || float.IsPositiveInfinity(mm)) runWorst = mm;
+                }
+                else
+                {
+                    verdicts[flat] = SupportVerdict.OnTarget;
+                    CloseRun();
+                }
+            }
+            CloseRun();
+        }
+
+        failures.Sort((a, b) => b.LengthMm.CompareTo(a.LengthMm));
+        return new CheckResult(
+            verdicts, offsets, targetOffsetMm, bridgeToleranceMm, beadWidthMm,
+            totalMm, pastMm, failedMm, failures);
+    }
+
+    /// <summary>
+    /// Band boundaries for the support-check colour ramp. Hard steps between classes with a
+    /// slight gradient inside each, so a pass reads as a pass at a glance instead of asking the
+    /// eye to tell 25 % from 45 % on a smooth ramp.
+    /// </summary>
+    public const float BandOnTargetMax = 0.30f;
+
+    /// <inheritdoc cref="BandOnTargetMax"/>
+    public const float BandBridgedMin = 0.40f;
+
+    /// <inheritdoc cref="BandOnTargetMax"/>
+    public const float BandBridgedMax = 0.60f;
+
+    /// <inheritdoc cref="BandOnTargetMax"/>
+    public const float BandFailedMin = 0.70f;
+
+    /// <summary>
+    /// Packs a verdict plus its severity into the 0..1 score the renderer colours by, so the
+    /// existing single-float bead VAO can carry a banded map with no vertex-format change.
+    /// </summary>
+    public static float[] CheckScores(CheckResult r)
+    {
+        var scores = new float[r.Verdict.Length];
+        if (r.TargetOffsetMm <= 0f) return scores;
+
+        // Severity runs from target out to a full bead past target; beyond that it is pinned.
+        float span = MathF.Max(r.BeadWidthMm, r.TargetOffsetMm);
+
+        for (int i = 0; i < scores.Length; i++)
+        {
+            float mm = r.OffsetMm.Length > i ? r.OffsetMm[i] : float.NaN;
+            switch (r.Verdict[i])
+            {
+                case SupportVerdict.OnTarget:
+                    // How much of the allowance is used up — 0 stacked square, 0.30 right at target.
+                    float used = float.IsNaN(mm) ? 0f : Math.Clamp(mm / r.TargetOffsetMm, 0f, 1f);
+                    scores[i] = used * BandOnTargetMax;
+                    break;
+
+                case SupportVerdict.Bridged:
+                    scores[i] = BandBridgedMin
+                              + Severity(mm, r.TargetOffsetMm, span) * (BandBridgedMax - BandBridgedMin);
+                    break;
+
+                case SupportVerdict.Failed:
+                    scores[i] = BandFailedMin
+                              + Severity(mm, r.TargetOffsetMm, span) * (1f - BandFailedMin);
+                    break;
+
+                default:
+                    scores[i] = 0f;   // NotMeasured reads as the safe end, as the old heatmap did
+                    break;
+            }
+        }
+        return scores;
+    }
+
+    private static float Severity(float mm, float targetMm, float spanMm)
+    {
+        if (float.IsPositiveInfinity(mm)) return 1f;
+        if (float.IsNaN(mm)) return 0f;
+        return Math.Clamp((mm - targetMm) / MathF.Max(spanMm, 1e-4f), 0f, 1f);
+    }
+
+    /// <summary>One-line summary for the status bar and the console.</summary>
+    public static string Describe(CheckResult r)
+    {
+        if (r.TotalExtrudedMm <= 1e-4f) return "No bead measured — need at least two layers.";
+        if (!r.HasFailures)
+            return $"All bead within {r.TargetOffsetMm:0.##} mm of target "
+                 + $"({r.PastTargetPercent:0.###} % past target, all bridged).";
+        return $"{r.Failures.Count} stretch(es) past target over more than "
+             + $"{r.BridgeToleranceMm:0.##} mm — {r.ExtrudedMmFailed / 1000f:0.##} m "
+             + $"({r.FailedPercent:0.###} % of bead). Worst {Mm(r.Failures[0].WorstOffsetMm)} "
+             + $"over {r.Failures[0].LengthMm:0.#} mm at Z {r.Failures[0].Z:0.#}.";
+    }
+
+    /// <summary>
+    /// Rings of grid cells to scan outward from the point's own cell. 1 = the classic 3x3
+    /// neighbourhood, which can only report "nearer than one cell" or "infinity".
+    ///
+    /// ⚠️ Anything that divides BY the measured distance needs more than one ring. A 3x3 scan
+    /// returns <see cref="float.PositiveInfinity"/> for a bead further off than one cell, and
+    /// <c>SupportDrivenLayerHeights.Refine</c> then computes <c>needed = h * target / inf = 0</c>
+    /// and prints "would need h 0 mm" — a search-window artifact that reads as floating geometry.
+    /// One such layer measured 14.17 mm by brute force over 0.24 % of the contour.
+    /// </summary>
+    public const int DefaultSearchRings = 1;
+
+    /// <inheritdoc cref="DefaultSearchRings"/>
+    /// <remarks>
+    /// Used by anything that REPORTS a distance rather than just comparing it to one cell:
+    /// the support-check overlay and its console report. At a 6 mm bead this reaches 24 mm,
+    /// past every real overhang measured on a part so far. The ring walk early-exits as soon as
+    /// the best hit cannot be beaten from further out, so on well-supported bead — the common
+    /// case — it costs the same as the 3x3 scan.
+    /// </remarks>
+    public const int ReportingSearchRings = 4;
+
     private static float NearestSegmentDistance2D(
         Vector3 p,
         Dictionary<(int, int), List<(Vector3 a, Vector3 b)>> grid,
-        float cell)
+        float cell,
+        int maxRings = DefaultSearchRings)
     {
         int cx = (int)MathF.Floor(p.X / cell);
         int cy = (int)MathF.Floor(p.Y / cell);
         float best = float.PositiveInfinity;
-        for (int gx = cx - 1; gx <= cx + 1; gx++)
-        for (int gy = cy - 1; gy <= cy + 1; gy++)
-            if (grid.TryGetValue((gx, gy), out var segs))
-                foreach (var (a, b) in segs)
-                {
-                    float d = SegmentDistance2D(p, a, b);
-                    if (d < best) best = d;
-                }
+
+        for (int ring = 0; ring <= maxRings; ring++)
+        {
+            ScanRing(p, grid, cx, cy, ring, ref best);
+
+            // Nothing outside this ring can be nearer than the ring's own inner edge, so once
+            // the best hit is inside that edge the answer cannot improve. Checked AFTER the
+            // ring is scanned, so ring 0 alone never short-circuits a nearer ring-1 segment.
+            if (best <= ring * cell) break;
+        }
         return best;
+    }
+
+    private static void ScanRing(
+        Vector3 p,
+        Dictionary<(int, int), List<(Vector3 a, Vector3 b)>> grid,
+        int cx, int cy, int ring, ref float best)
+    {
+        for (int gx = cx - ring; gx <= cx + ring; gx++)
+        for (int gy = cy - ring; gy <= cy + ring; gy++)
+        {
+            // Only the perimeter of this ring is new — the interior was scanned already.
+            if (ring > 0 && Math.Abs(gx - cx) != ring && Math.Abs(gy - cy) != ring) continue;
+            if (!grid.TryGetValue((gx, gy), out var segs)) continue;
+            foreach (var (a, b) in segs)
+            {
+                float d = SegmentDistance2D(p, a, b);
+                if (d < best) best = d;
+            }
+        }
     }
 
     private static void InsertSegment(

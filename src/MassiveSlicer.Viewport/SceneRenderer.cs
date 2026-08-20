@@ -863,6 +863,18 @@ public sealed class SceneRenderer : IDisposable
             entry.Renderer.UpdateBeadOverhang(overhangPerFlatMove);
     }
 
+    /// <summary>
+    /// Uploads per-move SUPPORT CHECK scores — banded pass / bridged / failed against the overlap
+    /// target — into the same VAO slot the overhang heatmap uses. The two are alternative readings
+    /// of one measurement and are never drawn at once, so whichever was uploaded last is what
+    /// <see cref="ShowBeadOverhang"/> draws. Must be called on the GL thread.
+    /// </summary>
+    public void UpdateToolpathSupportCheck(SceneNode node, float[] scoresPerFlatMove)
+    {
+        if (_toolpaths.TryGetValue(node, out var entry))
+            entry.Renderer.UpdateSupportCheck(scoresPerFlatMove);
+    }
+
     public void UpdateToolpathBeadOrientation(SceneNode node, float[] orientationRatePerFlatMove)
     {
         if (_toolpaths.TryGetValue(node, out var entry))

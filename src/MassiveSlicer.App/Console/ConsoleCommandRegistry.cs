@@ -2002,6 +2002,136 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "support-check",
+            Description = "The support-check overlay as text: which bead misses your overlap "
+                        + "target over a stretch long enough that the slicer counted it as a "
+                        + "miss, and where. Unlike support-report (absolute mm) this is judged "
+                        + "against the target and the bridge tolerance, so it matches what the "
+                        + "overlay reddens and what support-driven layer height acted on",
+            Usage = "support-check [count] [toolpath name]",
+            Execute = (ctx, args) =>
+            {
+                // Leading integer is the row count; whatever follows filters by name.
+                var parts = args.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                int show  = 12;
+                string want = args.Trim();
+                if (parts.Length > 0 && int.TryParse(parts[0], out var n) && n > 0)
+                {
+                    show = n;
+                    want = parts.Length > 1 ? parts[1].Trim() : "";
+                }
+
+                void Walk(IEnumerable<OutlinerItemViewModel> items, List<OutlinerItemViewModel> into)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.IsToolpath) into.Add(item);
+                        Walk(item.Children, into);
+                    }
+                }
+
+                var toolpaths = new List<OutlinerItemViewModel>();
+                Walk(ctx.Main.Viewport.OutlinerItems, toolpaths);
+                if (want.Length > 0)
+                    toolpaths = toolpaths
+                        .Where(t => t.Name.Contains(want, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                if (toolpaths.Count == 0)
+                {
+                    ctx.LogError(want.Length > 0
+                        ? $"[support-check] no toolpath matching '{want}'."
+                        : "[support-check] no toolpaths in the scene.");
+                    return;
+                }
+
+                var add = ctx.Main.RightPanel.Additive;
+
+                foreach (var tpItem in toolpaths)
+                {
+                    var snap = ctx.Main.Viewport.GetToolpathSnapshot?.Invoke(tpItem.Node);
+                    if (snap is null)
+                    {
+                        ctx.LogError($"[support-check] \"{tpItem.Name}\": no snapshot (not staged yet).");
+                        continue;
+                    }
+
+                    // Target and tolerance derived exactly as SliceSettings derives them, so this
+                    // report cannot drift from the overlay or from the slicer's own decisions.
+                    float bead   = snap.BeadWidth;
+                    float target = bead * (1f - (float)Math.Clamp(add.SupportOverlapTargetPercent, 0.0, 100.0) / 100f);
+                    float tol    = add.SupportBridgeToleranceMm > 1e-4
+                                   ? (float)add.SupportBridgeToleranceMm : 2f * bead;
+
+                    if (target <= 0f)
+                    {
+                        ctx.LogError($"[support-check] \"{tpItem.Name}\": overlap target is 100 %, "
+                                   + "which leaves no allowance to measure against. Set "
+                                   + "SupportOverlapTargetPercent below 100.");
+                        continue;
+                    }
+
+                    var tp = snap.Smoothed.Layers.Count > 0 ? snap.Smoothed : snap.Raw;
+                    var r  = BeadSupport.Check(tp, bead, target, tol);
+
+                    if (r.TotalExtrudedMm <= 1e-4f)
+                    {
+                        ctx.LogError($"[support-check] \"{tpItem.Name}\": nothing to measure — "
+                                   + "needs at least two layers of extrusion.");
+                        continue;
+                    }
+
+                    ctx.Log($"[support-check] \"{tpItem.Name}\": {tp.Layers.Count} layers, bead "
+                          + $"{bead:0.##} mm · target {add.SupportOverlapTargetPercent:0.#} % overlap "
+                          + $"(step ≤ {target:0.##} mm) · bridges under {tol:0.##} mm");
+                    ctx.Log($"[support-check]   {r.TotalExtrudedMm / 1000f:0.#} m of bead; "
+                          + $"{r.PastTargetPercent:0.###} % past target, "
+                          + $"{r.FailedPercent:0.###} % in a stretch too long to bridge");
+
+                    if (!r.HasFailures)
+                    {
+                        ctx.Log("[support-check]   ✓ nothing misses the target over more than the "
+                              + "bridge tolerance.");
+                        // Said explicitly: a clean result here with support-driven OFF only means
+                        // the geometry happens to stack, not that anything is guarding it.
+                        if (!add.SupportDrivenLayerHeight)
+                            ctx.Log("[support-check]   note: Support-driven layer height is OFF — "
+                                  + "this part simply stacks well, nothing enforced it.");
+                        continue;
+                    }
+
+                    ctx.Log($"[support-check]   {r.Failures.Count} failing stretch(es), "
+                          + $"{r.ExtrudedMmFailed / 1000f:0.###} m of bead. Worst first:");
+                    foreach (var f in r.Failures.Take(show))
+                        ctx.Log($"[support-check]     L{f.LayerIndex,-5} Z {f.Z,8:0.0}  "
+                              + $"{f.LengthMm,7:0.#} mm of bead  worst step "
+                              + $"{BeadSupport.Mm(f.WorstOffsetMm)}");
+
+                    if (r.Failures.Count > show)
+                        ctx.Log($"[support-check]     … {r.Failures.Count - show} more "
+                              + $"(support-check {r.Failures.Count} to list them all)");
+
+                    // Points at the setting that actually governs the floor, since that is the
+                    // usual reason a stretch could not be thinned into target.
+                    if (add.SupportDrivenLayerHeight)
+                    {
+                        if (Math.Abs(add.MinLayerHeight - add.LayerHeight) < 1e-4)
+                            ctx.LogError("[support-check]   ⚠ Min layer height equals nominal layer "
+                                       + "height, so support-driven had NO room to thin anything. "
+                                       + "Lower Min layer height.");
+                        else
+                            ctx.Log($"[support-check]   floor is {add.MinLayerHeight:0.##} mm; "
+                                  + "stretches above could not reach target even there.");
+                    }
+                    else
+                        ctx.Log("[support-check]   Support-driven layer height is OFF — nothing tried "
+                              + "to fix these. Turn it on to have the slicer thin them.");
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "support-report",
             Description = "Bead support: how far sideways each bead sits from the material under it, "
                         + "in mm. The number behind the Bead overhang heatmap, as text — overall "

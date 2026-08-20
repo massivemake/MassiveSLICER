@@ -1132,9 +1132,11 @@ void main() {
         (1.000f, 0.50f, 0.00f, 0.80f),  // Purple      — Extreme
     ];
 
-    private static NVec3 OrientationColor(float t)
+    private static NVec3 OrientationColor(float t) => Ramp(_orientationStops, t);
+
+    /// <summary>Piecewise-linear colour ramp through an ordered stop table.</summary>
+    private static NVec3 Ramp((float t, float r, float g, float b)[] s, float t)
     {
-        var s = _orientationStops;
         if (t <= s[0].t) return new NVec3(s[0].r, s[0].g, s[0].b);
         for (int i = 1; i < s.Length; i++)
         {
@@ -1148,6 +1150,47 @@ void main() {
             }
         }
         return new NVec3(s[^1].r, s[^1].g, s[^1].b);
+    }
+
+    // Support check — BANDED, not a smooth ramp. The eye cannot separate 25 % from 45 % on a
+    // continuous white-to-red gradient, and the interesting boundary is exactly in there. Each
+    // class owns a band with a hard edge against its neighbours and a slight gradient inside it,
+    // so "on target" reads as on target at a glance and severity is still legible within a class.
+    //
+    // Bands match BeadSupport.Band* — score 0..0.30 on target, 0.40..0.60 bridged, 0.70..1 failed.
+    // The unused slivers between them are what make the edges hard.
+    private static readonly (float t, float r, float g, float b)[] _supportCheckStops =
+    [
+        (0.000f, 0.32f, 0.36f, 0.40f),  // Slate      — stacked square; deliberately dull
+        (0.300f, 0.55f, 0.62f, 0.66f),  // Light slate — right at target, still a pass
+        (0.400f, 1.00f, 0.78f, 0.20f),  // Amber      — past target but bridged
+        (0.600f, 1.00f, 0.60f, 0.00f),  // Deep amber — bridged, at the far end
+        (0.700f, 1.00f, 0.22f, 0.18f),  // Red        — FAILED: past target over a real run
+        (1.000f, 0.62f, 0.00f, 0.32f),  // Crimson    — failed and far off
+    ];
+
+    private static NVec3 SupportCheckColor(float t) => Ramp(_supportCheckStops, t);
+
+    /// <summary>
+    /// Bead coloured by the support check: does each bead meet the overlap target the slicer was
+    /// given, and if not, is its stretch long enough that the slicer counted it as a miss.
+    /// Shares the bead index buffer and the overhang VAO slot — the two are alternative readings
+    /// of the same geometry and are never drawn together.
+    /// </summary>
+    public void UpdateSupportCheck(float[] scoresPerFlatMove)
+    {
+        if (_beadOverhangVao != 0) { GL.DeleteVertexArray(_beadOverhangVao); GL.DeleteBuffer(_beadOverhangVbo); }
+        _beadOverhangVao = _beadOverhangVbo = _beadOverhangCount = 0;
+        if (_beadEbo == 0) return;
+        var data = BuildBeadColoredData(scoresPerFlatMove, SupportCheckColor);
+        if (data.Length > 0)
+        {
+            (_beadOverhangVao, _beadOverhangVbo) = BuildVao(data);
+            GL.BindVertexArray(_beadOverhangVao);
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, _beadEbo);   // share bead indices
+            GL.BindVertexArray(0);
+            _beadOverhangCount = _beadCount;
+        }
     }
 
     public void UpdateBeadOrientation(float[] scoresPerFlatMove)

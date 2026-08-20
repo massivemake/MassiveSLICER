@@ -450,7 +450,94 @@ public sealed partial class ViewportViewModel : ViewModelBase
         {
             if (!SetField(ref _showBeadOverhang, value)) return;
             if (value && _showOrientationPreview) { _showOrientationPreview = false; OnPropertyChanged(nameof(ShowOrientationPreview)); }
+            OnPropertyChanged(nameof(ShowSupportCheckLegend));
+            OnPropertyChanged(nameof(ShowAbsoluteOverhangLegend));
         }
+    }
+
+    private bool _beadOverhangUseTarget = true;
+    /// <summary>
+    /// Colour the bead overlay against the OVERLAP TARGET rather than on an absolute 0-100 %
+    /// of bead width.
+    ///
+    /// The absolute map cannot answer the question support-driven layer height is actually
+    /// asked: on a 6 mm bead a 3 mm offset renders mid-red, yet it is 50 % overlap — exactly
+    /// on target if the target is 50 %. It also paints short stretches red that the slicer
+    /// deliberately let go because a bead bridges them. Both make the picture disagree with
+    /// the feature, which is why an operator cannot tell from it what is actually unfixable.
+    ///
+    /// Defaults on, and the toggle is offered so the old absolute reading is still reachable
+    /// for parts sliced without a support target in mind.
+    /// </summary>
+    public bool BeadOverhangUseTarget
+    {
+        get => _beadOverhangUseTarget;
+        set
+        {
+            if (!SetField(ref _beadOverhangUseTarget, value)) return;
+            OnPropertyChanged(nameof(ShowSupportCheckLegend));
+            OnPropertyChanged(nameof(ShowAbsoluteOverhangLegend));
+        }
+    }
+
+    /// <summary>Target-relative legend: the overlay is on AND reading against the target.</summary>
+    public bool ShowSupportCheckLegend => _showBeadOverhang && _beadOverhangUseTarget;
+
+    /// <summary>The original absolute-percent legend, for when the target reading is off.</summary>
+    public bool ShowAbsoluteOverhangLegend => _showBeadOverhang && !_beadOverhangUseTarget;
+
+    private string _supportCheckSummary = "";
+    /// <summary>One-line verdict from <c>BeadSupport.Describe(CheckResult)</c>.</summary>
+    public string SupportCheckSummary
+    {
+        get => _supportCheckSummary;
+        private set => SetField(ref _supportCheckSummary, value);
+    }
+
+    private string _supportCheckTargetLabel = "";
+    /// <summary>"target 3 mm · bridges 12 mm" — names the numbers the colours mean.</summary>
+    public string SupportCheckTargetLabel
+    {
+        get => _supportCheckTargetLabel;
+        private set => SetField(ref _supportCheckTargetLabel, value);
+    }
+
+    private int _supportCheckFailureCount;
+    /// <summary>Number of failing stretches — past target over more than the bridge tolerance.</summary>
+    public int SupportCheckFailureCount
+    {
+        get => _supportCheckFailureCount;
+        private set
+        {
+            if (!SetField(ref _supportCheckFailureCount, value)) return;
+            OnPropertyChanged(nameof(HasSupportCheckFailures));
+        }
+    }
+
+    public bool HasSupportCheckFailures => _supportCheckFailureCount > 0;
+
+    /// <summary>
+    /// Publishes the support-check outcome for the legend, the status line and the timeline.
+    /// Called off the render path — the measurement itself must not run on the GL thread.
+    /// </summary>
+    internal void SetSupportCheck(
+        string summary, string targetLabel, int failureCount, bool[] failedPerMove)
+    {
+        SupportCheckSummary      = summary;
+        SupportCheckTargetLabel  = targetLabel;
+        SupportCheckFailureCount = failureCount;
+        _scrubSupportFail        = failedPerMove;
+        RecomputeScrubMarkers();
+    }
+
+    /// <summary>Clears it — no toolpath, or the overlay is off.</summary>
+    internal void ClearSupportCheck()
+    {
+        SupportCheckSummary      = "";
+        SupportCheckTargetLabel  = "";
+        SupportCheckFailureCount = 0;
+        _scrubSupportFail        = [];
+        RecomputeScrubMarkers();
     }
 
     private bool _showOrientationPreview = false;
@@ -3942,6 +4029,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
     private bool[] _scrubReachable = [];
     private bool[] _scrubSingular  = [];
     private bool[] _scrubCollision = [];
+    /// <summary>Moves in a stretch that missed the overlap target over more than the bridge
+    /// tolerance. Set by the support check, not by robot validation.</summary>
+    private bool[] _scrubSupportFail = [];
 
     private IReadOnlyList<double> _scrubUnreachableMarkers = [];
     public IReadOnlyList<double> ScrubUnreachableMarkers
@@ -3957,6 +4047,16 @@ public sealed partial class ViewportViewModel : ViewModelBase
         private set => SetField(ref _scrubSingularityMarkers, value);
     }
 
+    private IReadOnlyList<double> _scrubSupportMarkers = [];
+    /// <summary>Timeline ticks for bead that missed the overlap target — see
+    /// <see cref="SetSupportCheck"/>. Separate channel so it reads independently of the
+    /// robot-validation ticks.</summary>
+    public IReadOnlyList<double> ScrubSupportMarkers
+    {
+        get => _scrubSupportMarkers;
+        private set => SetField(ref _scrubSupportMarkers, value);
+    }
+
     private IReadOnlyList<double> _scrubCollisionMarkers = [];
     /// <summary>Digital-twin collision ticks (orange) — robot body vs env/self/material.</summary>
     public IReadOnlyList<double> ScrubCollisionMarkers
@@ -3966,10 +4066,12 @@ public sealed partial class ViewportViewModel : ViewModelBase
     }
 
     /// <summary>Timeline tick legend visibility (any validation markers present).</summary>
-    public bool ShowScrubLegend => HasUnreachableMarkers || HasSingularityMarkers || HasCollisionMarkers;
+    public bool ShowScrubLegend => HasUnreachableMarkers || HasSingularityMarkers
+                                  || HasCollisionMarkers || HasSupportMarkers;
     public bool HasUnreachableMarkers => _scrubUnreachableMarkers.Count > 0;
     public bool HasSingularityMarkers => _scrubSingularityMarkers.Count > 0;
     public bool HasCollisionMarkers   => _scrubCollisionMarkers.Count > 0;
+    public bool HasSupportMarkers     => _scrubSupportMarkers.Count > 0;
 
     internal void SetScrubMarkers(bool[] reachable, bool[] singular, bool[]? collision = null)
     {
@@ -4084,13 +4186,21 @@ public sealed partial class ViewportViewModel : ViewModelBase
             double x = max > 0 ? ScrubThumbWidth / 2.0 + (double)i / max * (w - ScrubThumbWidth) - 0.5 : 0;
             if (_scrubCollision[i]) col.Add(x);
         }
+        var sup = new List<double>();
+        for (int i = 0; i < _scrubSupportFail.Length; i++)
+        {
+            double x = max > 0 ? ScrubThumbWidth / 2.0 + (double)i / max * (w - ScrubThumbWidth) - 0.5 : 0;
+            if (_scrubSupportFail[i]) sup.Add(x);
+        }
         ScrubUnreachableMarkers = unr;
         ScrubSingularityMarkers = sin;
         ScrubCollisionMarkers   = col;
+        ScrubSupportMarkers     = sup;
         OnPropertyChanged(nameof(ShowScrubLegend));
         OnPropertyChanged(nameof(HasUnreachableMarkers));
         OnPropertyChanged(nameof(HasSingularityMarkers));
         OnPropertyChanged(nameof(HasCollisionMarkers));
+        OnPropertyChanged(nameof(HasSupportMarkers));
 
         var kf   = new List<double>();
         var lane = new List<MassiveSlicer.Controls.KeyframeLaneItem>();

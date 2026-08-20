@@ -972,7 +972,12 @@
                                           ToolTip.Tip="Magenta on every move demanding more than 99 % extruder RPM — the extruder cannot deliver it, and these block export. On by default in the RPM view."/>
                                 <CheckBox Content="Bead overhang heatmap" FontSize="11"
                                           IsChecked="{Binding ShowBeadOverhang, Mode=TwoWay}"
-                                          ToolTip.Tip="Bead colored by overhang percentage (see legend)"/>
+                                          ToolTip.Tip="Bead colored by how well each bead is supported by the one below (see legend)"/>
+                                <CheckBox Content="Check against overlap target" FontSize="11"
+                                          Margin="16,0,0,0"
+                                          IsEnabled="{Binding ShowBeadOverhang}"
+                                          IsChecked="{Binding BeadOverhangUseTarget, Mode=TwoWay}"
+                                          ToolTip.Tip="Color by PASS / FAIL against your overlap target instead of an absolute percentage of bead width, and only redden stretches long enough that the slicer counted them as a miss. Uncheck for the old absolute reading."/>
                                 <CheckBox Content="Orientation preview" FontSize="11"
                                           IsChecked="{Binding ShowOrientationPreview, Mode=TwoWay}"
                                           ToolTip.Tip="Bead colored by tool orientation change rate"/>
@@ -1740,6 +1745,12 @@
                                              MarkerBrush="#E8901A"
                                              Height="6" VerticalAlignment="Center"
                                              IsHitTestVisible="False"/>
+                        <!-- Support-check misses — same red as the "Missed" band in the
+                             support legend, so a tick and a red bead read as one thing -->
+                        <ctrl:ScrubMarkerBar Markers="{Binding ScrubSupportMarkers}"
+                                             MarkerBrush="#FF382E"
+                                             Height="6" VerticalAlignment="Center"
+                                             IsHitTestVisible="False"/>
                         <!-- TCP keyframe markers — lime ticks -->
                         <ctrl:ScrubMarkerBar Markers="{Binding ScrubKeyframeMarkers}"
                                              MarkerBrush="#7ed87e"
@@ -1799,6 +1810,11 @@
                         <Border Width="3" Height="10" Background="#E8901A" VerticalAlignment="Center"/>
                         <TextBlock Text="Collision" FontSize="10" Classes="LabelMuted" VerticalAlignment="Center"/>
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                IsVisible="{Binding HasSupportMarkers}">
+                        <Border Width="3" Height="10" Background="#FF382E" VerticalAlignment="Center"/>
+                        <TextBlock Text="Missed overlap" FontSize="10" Classes="LabelMuted" VerticalAlignment="Center"/>
+                    </StackPanel>
                     <TextBlock Text="Alt-click or double-click a tick to inspect"
                                FontSize="10" Opacity="0.55" VerticalAlignment="Center"/>
                 </StackPanel>
@@ -1836,7 +1852,7 @@
 
         <!-- Bead overhang legend — bottom-right, floats above the Live I/O dock,
              timelines, and anything else parked in that corner -->
-        <Border IsVisible="{Binding ShowBeadOverhang}"
+        <Border IsVisible="{Binding ShowAbsoluteOverhangLegend}"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Bottom"
                 Margin="{Binding BottomRightLegendMargin}"
@@ -1873,6 +1889,51 @@
                     <TextBlock  Grid.Row="4" Grid.Column="2" Text="100%" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
                     <TextBlock  Grid.Row="4" Grid.Column="4" Text="Unsupported"        Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
                 </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- Support check legend — the target-relative reading. Banded rather than a smooth
+             ramp: the eye cannot separate 25 % from 45 % on a continuous gradient, and the
+             boundary that matters sits right in there. -->
+        <Border IsVisible="{Binding ShowSupportCheckLegend}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="{Binding BottomRightLegendMargin}"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="5"
+                Opacity="0.88"
+                Padding="8,6"
+                MaxWidth="330">
+            <StackPanel>
+                <TextBlock Text="SUPPORT CHECK"
+                           Classes="LabelMuted"
+                           FontSize="9"
+                           Margin="0,0,0,2"/>
+                <TextBlock Text="{Binding SupportCheckTargetLabel}"
+                           Classes="LabelMuted"
+                           FontSize="9"
+                           Margin="0,0,0,5"/>
+                <Grid ColumnDefinitions="14,6,Auto,10,Auto" RowDefinitions="Auto,Auto,Auto">
+                    <!-- On target -->
+                    <Rectangle Grid.Row="0" Grid.Column="0" Width="12" Height="12" Fill="#525C66" RadiusX="2" RadiusY="2" VerticalAlignment="Center"/>
+                    <TextBlock  Grid.Row="0" Grid.Column="2" Text="On target" FontSize="10" VerticalAlignment="Center"/>
+                    <TextBlock  Grid.Row="0" Grid.Column="4" Text="within the overlap target" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center"/>
+                    <!-- Bridged -->
+                    <Rectangle Grid.Row="1" Grid.Column="0" Width="12" Height="12" Fill="#FFC733" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="1" Grid.Column="2" Text="Bridged" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="1" Grid.Column="4" Text="past target, short enough to bridge" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <!-- Missed -->
+                    <Rectangle Grid.Row="2" Grid.Column="0" Width="12" Height="12" Fill="#FF382E" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="2" Grid.Column="2" Text="Missed" FontSize="10" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="2" Grid.Column="4" Text="the slicer could not fix this" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                </Grid>
+                <TextBlock Text="{Binding SupportCheckSummary}"
+                           Classes="LabelMuted"
+                           FontSize="10"
+                           TextWrapping="Wrap"
+                           Margin="0,6,0,0"/>
             </StackPanel>
         </Border>
 
