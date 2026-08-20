@@ -32,8 +32,18 @@ public static class BeadProximity
     /// </summary>
     public const float PathSkipBeads = 2.5f;
 
-    /// <summary>Index-space companion to <see cref="PathSkipBeads"/>, for very short segments.</summary>
-    public const int PathSkipMoves = 12;
+    // ⛔ There was a PathSkipMoves = 12 here — "ignore neighbours within 12 moves along the path".
+    // It was a crude proxy for the arc-distance filter and it silently missed most of the target.
+    // Measured on a real part: of four internal arms per layer, only ONE was corrected. The other
+    // three are drawn as out-one-wall / U-turn / back-the-other, so their two walls sit just TWO
+    // moves apart in the path and the index test discarded them — even though they are ~350 mm
+    // apart ALONG the path, far past the arc skip. The one that worked did so only because the
+    // path happened to wander 18 moves between its walls.
+    //
+    // Arc distance is the correct filter and already excludes a bead's own continuation: two
+    // adjacent segments are half-their-lengths apart along the path, which for ordinary chords is
+    // well inside the skip. Long segments that ARE far apart along the path are exactly what we
+    // want to find, and perpendicular connectors are excluded by the direction test instead.
 
     /// <summary>
     /// |cos| between travel directions for two runs to count as running ALONGSIDE each other.
@@ -96,7 +106,7 @@ public static class BeadProximity
                     if (!grid.TryGetValue((gx, gy), out var bucket)) continue;
                     foreach (int j in bucket)
                     {
-                        if (j == i || Math.Abs(j - i) <= PathSkipMoves) continue;
+                        if (j == i) continue;
 
                         // Cyclic: a closed contour's last segment is adjacent to its first.
                         float da = MathF.Abs(arc[j] - arc[i]);

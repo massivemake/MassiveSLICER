@@ -134,6 +134,75 @@ public class ProximityFlowTest
         Assert.Empty(ProximityFlowPostProcessor.LastRuns);
     }
 
+    /// <summary>
+    /// ⭐ Regression from the real part. An internal arm is drawn as OUT one wall, a short U-turn at
+    /// the tip, then BACK along the other wall — so its two walls sit only TWO moves apart in the
+    /// path while being ~350 mm apart ALONG it.
+    ///
+    /// An index-space skip ("ignore neighbours within 12 moves") discarded exactly this shape. Live
+    /// on Jeff's part it corrected 1 of 4 arms: the three U-turn arms were skipped, and the one that
+    /// worked did so only because the path wandered 18 moves between its walls. Arc distance is the
+    /// correct filter; index distance is not a substitute for it.
+    /// </summary>
+    [Fact]
+    public void An_arm_drawn_as_a_U_turn_is_corrected_on_both_walls()
+    {
+        var tp = new Toolpath();
+        var l  = Layer(0, 4f);
+        Seg(l, 0f, 0f, 350f, 0f);       // out along one wall  (index 0)
+        Seg(l, 350f, 0f, 350f, 6f);     // U-turn at the tip   (index 1)
+        Seg(l, 350f, 6f, 0f, 6f);       // back along the other (index 2)
+        tp.Layers.Add(l);
+
+        // The fixture must actually have the walls 2 moves apart, or it is not testing the bug.
+        Assert.Equal(3, l.Moves.Count);
+
+        ProximityFlowPostProcessor.Apply(tp, Settings());
+
+        Assert.Equal(0.75f, l.Moves[0].WidthScale, 3);
+        Assert.Equal(0.75f, l.Moves[2].WidthScale, 3);
+        // The tip connector runs across the gap, not alongside it — the direction test excludes it.
+        Assert.Equal(1f, l.Moves[1].WidthScale, 3);
+    }
+
+    /// <summary>
+    /// The other half of that: four such arms in one layer must ALL be found, not just whichever
+    /// one happens to sit far enough away in the move list.
+    /// </summary>
+    [Fact]
+    public void All_four_U_turn_arms_in_a_layer_are_corrected()
+    {
+        var tp = new Toolpath();
+        var l  = Layer(0, 4f);
+        // four arms radiating out, each out-and-back with a tip U-turn, well separated from each other
+        void Arm(float ox, float oy, bool horizontal)
+        {
+            if (horizontal)
+            {
+                Seg(l, ox, oy, ox + 350f, oy);
+                Seg(l, ox + 350f, oy, ox + 350f, oy + 6f);
+                Seg(l, ox + 350f, oy + 6f, ox, oy + 6f);
+            }
+            else
+            {
+                Seg(l, ox, oy, ox, oy + 350f);
+                Seg(l, ox, oy + 350f, ox + 6f, oy + 350f);
+                Seg(l, ox + 6f, oy + 350f, ox + 6f, oy);
+            }
+        }
+        Arm(0f,    0f,    true);
+        Arm(0f,    500f,  true);
+        Arm(1000f, 0f,    false);
+        Arm(1200f, 0f,    false);
+        tp.Layers.Add(l);
+
+        ProximityFlowPostProcessor.Apply(tp, Settings());
+
+        int corrected = l.Moves.Count(m => m.WidthScale < 0.9f);
+        Assert.Equal(8, corrected);      // two walls per arm, four arms
+        Assert.Equal(8, ProximityFlowPostProcessor.LastRuns.Count(r => r.Corrected));
+    }
+
     // -- The two traps -----------------------------------------------------------------------
 
     /// <summary>

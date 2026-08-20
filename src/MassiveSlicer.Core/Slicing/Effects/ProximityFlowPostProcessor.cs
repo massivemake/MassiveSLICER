@@ -108,6 +108,7 @@ public static class ProximityFlowPostProcessor
         float  closest = float.PositiveInfinity;
         int    layerIndex = 0;
         float  layerZ = 0f;
+        Vector3? prevEnd = null;   // where the open run's last bead finished
 
         void Close()
         {
@@ -117,6 +118,7 @@ public static class ProximityFlowPostProcessor
                     (float)(scaleSum / count), len >= minRunMm, first, count));
             first = -1; count = 0; len = 0.0; scaleSum = 0.0;
             closest = float.PositiveInfinity;
+            prevEnd = null;
         }
 
         int flat = 0;
@@ -137,11 +139,19 @@ public static class ProximityFlowPostProcessor
                     // Contiguity: a run must be an unbroken index range, so a gap in the indices
                     // starts a new run rather than extending this one.
                     if (count > 0 && flat != first + count) Close();
+
+                    // And unbroken in SPACE. Two different features whose beads happen to be
+                    // adjacent in the move list are not one stretch — merging them would pool
+                    // their lengths, so two short stretches that each deserve to be left alone
+                    // could jointly clear the threshold and both get corrected.
+                    if (prevEnd is { } pe && Vector3.Distance(pe, move.From) > 1e-3f) Close();
+
                     if (count == 0) first = flat;
                     count++;
                     len      += Vector3.Distance(move.From, move.To);
                     scaleSum += BeadProximity.ScaleForGap(gaps[flat], beadWidthMm);
                     if (gaps[flat] < closest) closest = gaps[flat];
+                    prevEnd = move.To;
                 }
                 else Close();
 
