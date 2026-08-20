@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 
@@ -65,6 +65,68 @@ public sealed class KrlMidPathRpmTest
            .Where(l => l.Contains("RPM =") && !l.StartsWith(";"))
            .ToList();
 
+    // -- URM latches at the handshake ---------------------------------------------------------
+
+    /// <summary>
+    /// ⭐⭐ The one that matters most. URM is a start/stop protocol: the Caracol latches screw speed
+    /// at the <c>$OUT[7]</c>/<c>$OUT[8]</c> handshake and holds it for the segment. A bare
+    /// <c>RPM = x</c> written mid-path moves the pendant's "set" field and nothing else.
+    ///
+    /// Verified against a known-good print: it writes RPM exactly FIVE times in 174,000 lines —
+    /// init, MAT idle, once inside the start handshake, and off at the end. Mid-path rate change had
+    /// never been done on this machine. A real export then carried 1,717 unhandshaken writes and the
+    /// extruder stopped following its setpoint entirely, including manual booth entry.
+    /// </summary>
+    [Fact]
+    public void URM_does_not_emit_unhandshaken_mid_path_rate_changes_by_default()
+    {
+        // Off by default: mid-path rate change must be opted into, never assumed.
+        Assert.False(Urm().AllowSubLayerRpmChange);
+
+        // Two beads at different rates in ONE continuous path — no travel, so no handshake.
+        var krl = KrlExporter.Export(Beads(1.0f, 0.75f), Urm());
+
+        var rates = RpmLines(krl)
+            .Select(l => System.Text.RegularExpressions.Regex.Match(l, @"RPM = ([\d.]+)"))
+            .Where(m => m.Success)
+            .Select(m => float.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))
+            .Where(v => v > 1f)
+            .Distinct()
+            .ToList();
+
+        Assert.Single(rates);
+        Assert.DoesNotContain(RpmLines(krl), l => l.Contains("rpm change"));
+    }
+
+    /// <summary>A dropped correction must be stated in the program, not silently omitted.</summary>
+    [Fact]
+    public void A_dropped_correction_is_announced_in_the_program()
+    {
+        var krl = KrlExporter.Export(Beads(1.0f, 0.75f), Urm());
+        Assert.Contains("FLOW CORRECTION NOT APPLIED", krl);
+        Assert.Contains("within-layer extrusion-rate change(s) were ", krl);
+    }
+
+    /// <summary>
+    /// A single-rate print must gain no warning — that is every historically good URM print.
+    /// </summary>
+    [Fact]
+    public void A_single_rate_urm_print_carries_no_warning()
+    {
+        var krl = KrlExporter.Export(Beads(1.0f, 1.0f, 1.0f), Urm());
+        Assert.DoesNotContain("FLOW CORRECTION NOT APPLIED", krl);
+    }
+
+    /// <summary>Non-URM ($ANOUT) exports are unaffected — that path has always changed mid-path.</summary>
+    [Fact]
+    public void The_anout_path_still_varies_rate_mid_path()
+    {
+        var s = Urm() with { DigitalStartStopEnabled = false };
+        var krl = KrlExporter.Export(Beads(1.0f, 0.75f), s);
+        int writes = System.Text.RegularExpressions.Regex.Matches(krl, @"ANOUT\[4\]").Count;
+        Assert.True(writes >= 2, $"expected the ANOUT path to still vary; got {writes} write(s)");
+    }
+
     // -- the fix ------------------------------------------------------------------------------
 
     /// <summary>
@@ -75,7 +137,8 @@ public sealed class KrlMidPathRpmTest
     public void A_mid_path_rate_change_is_emitted_as_a_synchronised_trigger()
     {
         // 1.0 then 0.75 — an outer wall followed by a crowded arm.
-        var krl = KrlExporter.Export(Beads(1.0f, 0.75f), Urm());
+        // Explicitly opted in: this test is about the FORM of the write, not whether URM allows it.
+        var krl = KrlExporter.Export(Beads(1.0f, 0.75f), Urm() with { AllowSubLayerRpmChange = true });
         var lines = RpmLines(krl);
 
         // The change itself must be synchronised.
@@ -93,7 +156,8 @@ public sealed class KrlMidPathRpmTest
     [Fact]
     public void The_triggered_value_is_the_correct_reduced_rate()
     {
-        var krl = KrlExporter.Export(Beads(1.0f, 0.75f), Urm());
+        var krl = KrlExporter.Export(
+            Beads(1.0f, 0.75f), Urm() with { AllowSubLayerRpmChange = true });
         var change = RpmLines(krl).First(l => l.Contains("rpm change"));
 
         var num = System.Text.RegularExpressions.Regex.Match(change, @"RPM = ([\d.]+)");
@@ -127,7 +191,8 @@ public sealed class KrlMidPathRpmTest
     [Fact]
     public void A_change_bigger_than_the_deadband_is_still_written()
     {
-        var krl = KrlExporter.Export(Beads(1.0f, 0.75f), Urm());
+        var krl = KrlExporter.Export(
+            Beads(1.0f, 0.75f), Urm() with { AllowSubLayerRpmChange = true });
         var nums = RpmLines(krl)
             .Select(l => System.Text.RegularExpressions.Regex.Match(l, @"RPM = ([\d.]+)"))
             .Where(m => m.Success)
@@ -201,6 +266,57 @@ public sealed class KrlMidPathRpmTest
         Assert.True(nums.Count >= 2,
             $"only {nums.Count} rate(s) written ({string.Join(", ", nums)}) — the layer-1 rate was "
           + "suppressed, so the deadband is comparing a stale scale against new layer settings");
+    }
+
+    /// <summary>
+    /// The discriminator itself, in one program: a per-LAYER rate change and a sub-layer one, with
+    /// the sub-layer gate OFF. The per-layer change must be written and the sub-layer change must
+    /// not — no travel anywhere, so nothing but the mechanism tells them apart.
+    ///
+    /// <para>This is the guarantee that matters. Per-layer rate has printed successfully on these
+    /// cells for a long time; the sub-layer path is the new thing. A guard that cannot tell them
+    /// apart takes the working mechanism down with the broken one, which is exactly what an earlier
+    /// blanket "no rate change mid-path in URM" rule did.</para>
+    /// </summary>
+    [Fact]
+    public void A_per_layer_rate_change_is_kept_while_a_sub_layer_one_is_dropped()
+    {
+        var tp = new Toolpath();
+        foreach (var (idx, z) in new[] { (0, 4f), (1, 8f) })
+        {
+            var l = new ToolpathLayer(idx, z) { Height = 4f, PlaneNormal = Vector3.UnitZ };
+            // Two beads per layer: the second is crowded, so it asks for a sub-layer reduction.
+            l.Moves.Add(new ToolpathMove(
+                new Vector3(0, 0, z), new Vector3(300f, 0, z), MoveKind.Extrude)
+                { Normal = Vector3.UnitZ });
+            l.Moves.Add(new ToolpathMove(
+                new Vector3(300f, 0, z), new Vector3(600f, 0, z), MoveKind.Extrude)
+                { Normal = Vector3.UnitZ, WidthScale = 0.75f });
+            tp.Layers.Add(l);
+        }
+
+        // Layer 0 forced to 22 %; layer 1 runs at the geometric rate. That is the per-layer change.
+        var s = Urm() with { FirstLayerRpmPercent = 22f };
+        Assert.False(s.AllowSubLayerRpmChange);
+
+        var krl = KrlExporter.Export(tp, s);
+
+        // Per-layer: both layer rates present.
+        Assert.Contains("RPM = 22", krl);
+        var rates = RpmLines(krl)
+            .Select(l => System.Text.RegularExpressions.Regex.Match(l, @"RPM = ([\d.]+)"))
+            .Where(m => m.Success)
+            .Select(m => float.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))
+            .Where(v => v > 1f)
+            .Distinct()
+            .ToList();
+        Assert.True(rates.Count >= 2,
+            $"the per-layer rate change was swallowed — only {rates.Count} rate(s): "
+          + string.Join(", ", rates));
+
+        // Sub-layer: the 0.75 reduction never reaches the program, and says so.
+        Assert.DoesNotContain(RpmLines(krl), l => l.Contains("rpm change"));
+        Assert.Contains("SUB-LAYER FLOW CORRECTION NOT APPLIED", krl);
     }
 
     /// <summary>

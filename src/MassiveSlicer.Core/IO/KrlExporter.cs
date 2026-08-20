@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Numerics;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -96,6 +96,37 @@ public sealed record KrlExportSettings
     /// </list>
     /// </summary>
     public bool DigitalStartStopEnabled { get; init; }
+
+    /// <summary>
+    /// Allow extrusion-rate changes <b>WITHIN</b> a layer while URM / Digital Start-Stop is active.
+    /// <b>Off, and it should stay off unless Caracol confirms the cell supports it.</b>
+    ///
+    /// <para><b>This gates only the sub-layer mechanism.</b> Per-LAYER rate changes are untouched by
+    /// this flag and always emit: the first-layer RPM override, per-layer speed, and adaptive speed
+    /// and flow all resolve to a rate through the LAYER's settings, and that mechanism predates the
+    /// sub-layer work and has printed successfully for a long time. What this flag governs is the
+    /// deviation a single MOVE asks for on top of its layer's rate —
+    /// <see cref="Models.ToolpathMove.HeightScale"/>, <see cref="Models.ToolpathMove.WidthScale"/>,
+    /// <see cref="Models.ToolpathMove.PrintSpeedScale"/>, combined in
+    /// <see cref="ToolpathRpm.MoveScale"/>. Those vary bead to bead, and that is new.</para>
+    ///
+    /// <para>URM is a start/stop protocol: the Caracol latches the screw speed at a START event —
+    /// the <c>$OUT[7]</c> / <c>$OUT[8]</c> handshake in <see cref="KrlExporter"/>'s post-travel
+    /// block — and runs that rate for the whole segment. A bare <c>RPM = x</c> written between two
+    /// LIN moves updates the KRL variable, so the pendant's "set" field moves, but nothing latches
+    /// it and "real" holds the last handshaken value.</para>
+    ///
+    /// <para>⚠️ Verified against a known-good print: it writes RPM exactly FIVE times in 174,000
+    /// lines — init, MAT idle, once inside the start handshake, and off at the end. Sub-layer rate
+    /// change had never been done on this machine until adaptive-thickness and proximity flow
+    /// correction started varying it per move; a real export then carried 1,717 unhandshaken
+    /// writes. On the machine, "set" tracked them and "real" stopped following — and once in that
+    /// state the Caracol stopped accepting manual booth entries either.</para>
+    ///
+    /// <para>The per-layer boundary is where the handshake normally happens, which is why that path
+    /// works and this one does not.</para>
+    /// </summary>
+    public bool AllowSubLayerRpmChange { get; init; }
 
     /// <summary>Caracol S&amp;S: wait after screw-off before travel motion (sec). Default 0.5.</summary>
     public float SsPreTravelWaitSec { get; init; } = 0.5f;
@@ -567,6 +598,8 @@ public static class KrlExporter
         bool ssStopActive = false;
         float? pendingResumeWaitSec = null;
         float lastExtrudeSpeedMps = -1f;
+        int   midPathRpmDropped = 0;      // rate changes URM cannot latch mid-path
+        float midPathRpmDroppedMm = 0f;
         float lastExtrudeRpmScale = -1f;
         string? lastExtrudeAnoutText = null;
         // The resolved percentage LAST WRITTEN to the controller. The deadband has to compare
@@ -576,6 +609,10 @@ public static class KrlExporter
         // the first-layer RPM override — 22 % on layer 0 then 40 % on layer 1 both re-resolved to
         // 40 under layer 1's settings, so the change looked like zero and was suppressed.
         float lastExtrudeRpmPercent = -1f;
+        // The LAYER-level rate last written, i.e. before this move's own scales. Separating it
+        // from lastExtrudeRpmPercent is what lets the exporter tell a per-layer rate change from a
+        // sub-layer one, and gate only the second.
+        float lastExtrudeBasePercent = -1f;
         string? lastExtrudeVelText = null;
 
         // Pre-smooth per-move normals along each contour with a forward-biased Gaussian
@@ -800,21 +837,44 @@ public static class KrlExporter
                         needsRpmOn = false;
                         lastExtrudeAnoutText = extrudeKey;
                         lastExtrudeRpmPercent = ResolveRpmPercent(layerS, extrudeRpmScale);
+                        lastExtrudeBasePercent = ResolveRpmPercent(layerS, 1f);
                         lastExtrudeVelText = velText;
                     }
                     else if (anoutChanged || velChanged)
                     {
-                        if (anoutChanged && !s.DigitalStartStopEnabled)
+                        // Which mechanism is asking? A change in the LAYER's own rate is the
+                        // long-standing per-layer path — first-layer override, layer speed, adaptive
+                        // speed and flow. A change with the layer rate standing still is the
+                        // sub-layer one we added, driven by this move's own scales.
+                        float basePercent = ResolveRpmPercent(layerS, 1f);
+                        bool layerRateChanged =
+                            lastExtrudeBasePercent < 0f
+                            || MathF.Abs(basePercent - lastExtrudeBasePercent) >= MinRpmChangePercent;
+
+                        if (anoutChanged && (!s.DigitalStartStopEnabled || layerRateChanged))
+                            // Untouched: this is the branch that has always carried per-layer rate,
+                            // in the form it has always carried it. The ANOUT path takes every
+                            // change here too, sub-layer included — it is not a latching protocol.
                             sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "layer speed", useTrigger: false));
-                        else if (anoutChanged && s.DigitalStartStopEnabled)
-                            // Synchronised: this is a MID-PATH rate change, so it has to land where
-                            // the nozzle is rather than wherever the advance run has got to.
+                        else if (anoutChanged && s.AllowSubLayerRpmChange)
+                            // Synchronised: a sub-layer change has to land where the nozzle is
+                            // rather than wherever the advance run has got to.
                             sb.AppendLine(FormatExtruderOn(
                                 layerS, extrudeRpmScale, "rpm change", useTrigger: true));
+                        else if (anoutChanged)
+                        {
+                            // ⛔ URM latches the screw speed at the START handshake and holds it for
+                            // the segment. An unhandshaken sub-layer write moves the pendant's "set"
+                            // and nothing else — see AllowSubLayerRpmChange. Dropped deliberately,
+                            // and counted so the caller can say how much correction did not survive.
+                            midPathRpmDropped++;
+                            midPathRpmDroppedMm += System.Numerics.Vector3.Distance(move.From, move.To);
+                        }
                         if (velChanged)
                             sb.AppendLine($"$VEL.CP = {velText}");
                         lastExtrudeAnoutText = extrudeKey;
                         lastExtrudeRpmPercent = ResolveRpmPercent(layerS, extrudeRpmScale);
+                        lastExtrudeBasePercent = ResolveRpmPercent(layerS, 1f);
                         lastExtrudeVelText = velText;
                     }
 
@@ -826,6 +886,25 @@ public static class KrlExporter
 
                 lastPos = to;
             }
+        }
+
+        // A dropped flow correction must not be silent. URM latches the screw speed at the start
+        // handshake, so a mid-path rate change cannot reach the machine — the operator needs to know
+        // the printed part will NOT carry the correction the viewport showed.
+        if (midPathRpmDropped > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine(";⚠ SUB-LAYER FLOW CORRECTION NOT APPLIED TO THIS PROGRAM");
+            sb.AppendLine($";  {midPathRpmDropped} within-layer extrusion-rate change(s) were "
+                        + $"dropped, covering {midPathRpmDroppedMm / 1000f:0.###} m of bead.");
+            sb.AppendLine(";  URM / Digital Start-Stop latches screw speed at the $OUT[7]/$OUT[8]");
+            sb.AppendLine(";  start handshake and holds it for the whole segment, so a rate change");
+            sb.AppendLine(";  written between two LIN moves moves the pendant's \"set\" field only.");
+            sb.AppendLine(";  Per-LAYER rates ARE applied — first-layer override, layer speed and");
+            sb.AppendLine(";  adaptive speed/flow all land at a handshake and are unaffected.");
+            sb.AppendLine(";  To enable mid-path changes, confirm with Caracol that the cell supports");
+            sb.AppendLine(";  them, then set AllowSubLayerRpmChange.");
+            sb.AppendLine();
         }
 
         // -- Final retreat --------------------------------------------------------
