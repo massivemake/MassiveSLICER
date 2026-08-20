@@ -5053,23 +5053,42 @@ public partial class ViewportView : UserControl
     private void DrainBeadOverlayRefresh()
     {
         if (!_beadOverlayDirty) return;
-        _beadOverlayDirty = false;
 
         var inputs = _beadOverlay;
+
+        // Drop a stale summary whenever the target reading is not what is on screen — either the
+        // overlay is off, or it is showing the absolute map, which measures a different thing and
+        // publishes nothing. Without this the legend keeps reporting failures for a picture the
+        // user is no longer looking at.
+        if (!inputs.ShowOverhang || !inputs.UseTarget || inputs.TargetOffsetMm <= 0f)
+            Dispatcher.UIThread.Post(() => _vm?.ClearSupportCheck());
+
         if (!inputs.ShowOverhang && !inputs.ShowOrientation)
         {
-            // Overlay just went off: drop the stale summary so the legend does not keep
-            // reporting failures for a picture that is no longer on screen.
-            Dispatcher.UIThread.Post(() => _vm?.ClearSupportCheck());
+            _beadOverlayDirty = false;
             return;
         }
 
+        int built = 0, skipped = 0;
         foreach (var (node, toolpath) in _toolpathByNode)
         {
-            if (!node.Visible) continue;
+            // A hidden toolpath is not drawn, so building its overlay would be pure cost.
+            if (!node.Visible) { skipped++; continue; }
             _toolpathMetaByNode.TryGetValue(node, out var meta);
             UploadBeadOverlays(node, toolpath, meta.BeadWidth > 0 ? meta.BeadWidth : 6f);
+            built++;
         }
+
+        // Stay dirty while there is something we deliberately skipped, so un-hiding a toolpath
+        // fills its overlay in. Deliberately does NOT request another frame — that would spin
+        // every frame for a permanently hidden toolpath. Anything that could change the answer
+        // (visibility, selection, camera) already requests a render of its own, and this is
+        // picked up then.
+        //
+        // Clearing the flag here instead is what made the overlay silently stay blank when the
+        // toggle was flipped at a moment with no visible toolpath: the flag was consumed, and
+        // nothing ever re-armed it.
+        _beadOverlayDirty = built == 0 && skipped > 0;
     }
 
     private void StageToolpathMaps(PendingToolpathEntry entry)
