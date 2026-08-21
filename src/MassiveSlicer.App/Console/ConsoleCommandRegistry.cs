@@ -306,6 +306,81 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "proximity-report",
+            Description = "Find where beads on the SAME layer run alongside each other closer than "
+                        + "a bead width — internal arms whose spacing the model fixes. Reports "
+                        + "geometry only; changes nothing",
+            Usage = "proximity-report [count]",
+            Execute = (ctx, args) =>
+            {
+                var tp = ctx.Main.Viewport.ActiveScrubToolpath;
+                if (tp is null) { ctx.LogError("[proximity] no active toolpath — slice first."); return; }
+
+                int show   = int.TryParse(args.Trim(), out var n) && n > 0 ? n : 10;
+                float bead = (float)ctx.Main.RightPanel.Additive.BeadWidth;
+
+                // Measured on demand. Nothing to enable and no stored state, because nothing acts
+                // on the result — what to do about a detected arm is a separate decision.
+                var runs = MassiveSlicer.Core.Slicing.BeadProximityReport.Measure(tp, bead);
+                if (runs.Count == 0)
+                {
+                    ctx.Log($"[proximity] bead {bead:0.##} mm · no bead runs alongside another "
+                          + "closer than a bead width.");
+                    return;
+                }
+
+                int features = 0;
+                double featureLen = 0, shortLen = 0, excessLen = 0;
+                float worst = float.PositiveInfinity;
+                foreach (var r in runs)
+                {
+                    if (r.IsLongRun)
+                    {
+                        features++; featureLen += r.LengthMm;
+                        excessLen += r.LengthMm * MassiveSlicer.Core.Slicing
+                                     .BeadProximityReport.ExcessRatio(r.MeanGapMm, bead);
+                    }
+                    else shortLen += r.LengthMm;
+                    if (r.ClosestGapMm < worst) worst = r.ClosestGapMm;
+                }
+
+                ctx.Log($"[proximity] bead {bead:0.##} mm · parallel features are runs over "
+                      + $"{MassiveSlicer.Core.Slicing.BeadProximityReport.DefaultLongRunMm:0.#} mm");
+                ctx.Log($"[proximity]   {runs.Count} crowded run(s); {features} are parallel features");
+                ctx.Log($"[proximity]   {featureLen / 1000.0:0.###} m of feature bead, "
+                      + $"{shortLen / 1000.0:0.###} m of incidental near-misses");
+                ctx.Log($"[proximity]   closest parallel gap {worst:0.##} mm");
+                if (features > 0)
+                    ctx.Log($"[proximity]   the features carry ~{excessLen / 1000.0:0.###} m of bead "
+                          + "more than the space between them holds");
+
+                ctx.Log("[proximity]   longest runs first:");
+                foreach (var r in runs.Take(show))
+                {
+                    float overlap = Math.Max(bead - r.MeanGapMm, 0f);
+                    float excess  = MassiveSlicer.Core.Slicing
+                                    .BeadProximityReport.ExcessRatio(r.MeanGapMm, bead);
+                    ctx.Log($"[proximity]     L{r.LayerIndex,-5} Z {r.Z,8:0.0}  "
+                          + $"{r.LengthMm,7:0.#} mm  gap {r.ClosestGapMm:0.##} mm  "
+                          + $"overlap {overlap:0.##} mm  {excess * 100f,5:0.#}% over  "
+                          + (r.IsLongRun ? "feature" : "near-miss"));
+                }
+                if (runs.Count > show)
+                    ctx.Log($"[proximity]     … {runs.Count - show} more "
+                          + $"(proximity-report {runs.Count} to list them all)");
+
+                // The measurement uses NOMINAL bead width, which is a volume figure. A rounded bead
+                // measures wider than nominal on a correctly-flowing print (32 mm2 at 4 mm tall
+                // reads ~8.9 mm across), and that spread cancels out of the comparison — so a
+                // caliper reading wider than the setting is NOT evidence of over-extrusion.
+                ctx.Log("[proximity]   note: gaps compare against nominal bead width (a volume "
+                      + "figure). A caliper reads wider than nominal on a correct bead; that is the "
+                      + "rounded profile, not extra material.");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "tpdump",
             Description = "Debug: dump the active toolpath moves to a CSV file",
             Usage = "tpdump <path.csv>",
