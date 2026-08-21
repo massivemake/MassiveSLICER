@@ -761,7 +761,10 @@ public static class PlanarSlicer
             }
         }
 
-        ContourSeamPlanner.EmitOptimizedContours(tracks, z, layer, settings.ZigZagSeam, layer.Index);
+        // Bead width as the stitch threshold, the same number the layer-change step uses, so the two
+        // levels cannot disagree about what counts as "close enough to keep printing".
+        ContourSeamPlanner.EmitOptimizedContours(
+            tracks, z, layer, settings.ZigZagSeam, layer.Index, settings.BeadWidth);
         var partPolys = FilterFillPolys(insetContours, insetClosed, surfaceMode);
         if (partPolys.Count == 0)
             partPolys = insetContours.Where(c => c.Count >= 3).ToList();

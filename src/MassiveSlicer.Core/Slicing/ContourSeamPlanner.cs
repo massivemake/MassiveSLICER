@@ -100,12 +100,31 @@ public static class ContourSeamPlanner
         InsertSeamAndRotate(contour, bestEdge, bestT, ref prevSeamXY);
     }
 
+    /// <param name="stitchMaxXyMm">
+    /// Contour-to-contour steps no longer than this keep extruding instead of becoming a travel.
+    /// 0 disables it, which is the original behaviour.
+    ///
+    /// <para><b>Why this exists.</b> Every step between contours used to become a travel with no
+    /// distance test at all, while the LAYER-change step one level up
+    /// (<see cref="PlanarSlicer"/>) has always stitched anything within a bead width. On a part whose
+    /// arm walls slice into two separate contours, the 6 mm U-turn at each arm tip therefore came out
+    /// as a travel — and under Caracol URM a travel is not a small thing: extruder off, decelerate to
+    /// an exact stop, <c>WAIT SEC 0.5</c>, move, restart, <c>WAIT SEC 0.15</c>. Measured on
+    /// Cow_Collumn_Bottom_01: <b>226 travels in the whole part, 224 of them exactly 6.00 mm, and all
+    /// 226 immediately after a &gt;300 mm arm wall</b> — i.e. every travel in the part was an arm tip.
+    /// In the matching export that was 206 dead stops and <b>137 s of pure WAIT</b>, which is the
+    /// hang seen on the machine.</para>
+    ///
+    /// <para>A part whose arm is a single continuous contour (Swan_Column_Top_02) has zero travels and
+    /// is unaffected, which is exactly the behaviour being restored here.</para>
+    /// </param>
     public static void EmitOptimizedContours(
         IReadOnlyList<PlanarSlicer.ContourTrack> tracks,
         float z,
         ToolpathLayer layer,
         bool zigZag,
-        int layerIndex)
+        int layerIndex,
+        float stitchMaxXyMm = 0f)
     {
         var remaining = tracks.ToList();
         var printed   = new List<(Vector2 a, Vector2 b)>();
@@ -166,7 +185,8 @@ public static class ContourSeamPlanner
             if (chosen.IsClosed || !zigZag)
                 PrepareContourEntry(contour, normals, chosen.IsClosed, bestEntry, bestReverse);
 
-            EmitSingleContour(contour, normals, chosen.IsClosed, z, layer, ref lastPos, printed, zigZagReverse);
+            EmitSingleContour(contour, normals, chosen.IsClosed, z, layer, ref lastPos, printed,
+                              zigZagReverse, stitchMaxXyMm);
         }
     }
 
@@ -210,7 +230,8 @@ public static class ContourSeamPlanner
         ToolpathLayer layer,
         ref Vector2 lastPos,
         List<(Vector2 a, Vector2 b)> printed,
-        bool reversed)
+        bool reversed,
+        float stitchMaxXyMm)
     {
         int n = c.Count;
         int spanMoveStart = layer.Moves.Count; // first move index this contour will emit
@@ -231,7 +252,21 @@ public static class ContourSeamPlanner
                 first = v;
                 firstNorm = norm;
                 if (!float.IsNaN(lastPos.X))
-                    layer.Moves.Add(new ToolpathMove(new Vector3(lastPos.X, lastPos.Y, z), p, MoveKind.Travel));
+                {
+                    var from = new Vector3(lastPos.X, lastPos.Y, z);
+                    float xy = Vector2.Distance(lastPos, new Vector2(p.X, p.Y));
+
+                    // Mirrors the layer-change rule in PlanarSlicer: a short step keeps printing, a
+                    // long one is a real travel. Emitted as a PLAIN extrude, deliberately not flagged
+                    // IsWall (it is a connector, not skin) and not IsLayerStitch (that means
+                    // between-layers, and effects skip those — this connector is real bead that must
+                    // carry flow corrections like any other).
+                    if (xy > stitchMaxXyMm)
+                        layer.Moves.Add(new ToolpathMove(from, p, MoveKind.Travel));
+                    else if (xy > 0.01f)
+                        layer.Moves.Add(new ToolpathMove(from, p, MoveKind.Extrude));
+                    // else: contours already meet — no move needed at all.
+                }
             }
             else
             {
