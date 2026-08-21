@@ -91,6 +91,30 @@ public static class KukaOrientation
         return (aRad * R2D, bRad * R2D, cRad * R2D);
     }
 
+    /// <summary>
+    /// T12 mill ABC: tool +Z is the cutter axis into the work (−surfaceNormal).
+    /// Extruder <see cref="AbcFromNormal"/> uses X-approach and would point the spindle sideways.
+    /// </summary>
+    public static (float A, float B, float C) AbcFromMillNormal(Vector3 surfaceNormal)
+    {
+        var n = surfaceNormal.LengthSquared() > 1e-12f
+            ? Vector3.Normalize(surfaceNormal)
+            : Vector3.UnitZ;
+        var z = -n;
+        var hint = MathF.Abs(z.Z) > 0.9f ? Vector3.UnitX : Vector3.UnitZ;
+        var x = Vector3.Cross(hint, z);
+        if (x.LengthSquared() < 1e-12f)
+            x = Vector3.Cross(Vector3.UnitY, z);
+        x = Vector3.Normalize(x);
+        var y = Vector3.Cross(z, x);
+        var m = new Matrix4x4(
+            x.X, x.Y, x.Z, 0f,
+            y.X, y.Y, y.Z, 0f,
+            z.X, z.Y, z.Z, 0f,
+            0f, 0f, 0f, 1f);
+        return KukaIkSolver.MatrixToAbc(m);
+    }
+
     static Vector3 Rodrigues(Vector3 v, Vector3 axis, float sinTheta, float cosTheta)
         => v * cosTheta + Vector3.Cross(axis, v) * sinTheta + axis * Vector3.Dot(axis, v) * (1f - cosTheta);
 }

@@ -410,6 +410,34 @@ public sealed class GltfNumericalIkSolver
         return (cr * xF + sr * yF, zF, sr * xF - cr * yF);
     }
 
+    /// <summary>
+    /// Mill T12: cutter along tool +Z into the work (−surfaceNormal). Do not reuse
+    /// <see cref="TargetRotFromGlobalOrientation"/> (extruder X-approach).
+    /// </summary>
+    public (Vector3 r0, Vector3 r1, Vector3 r2) TargetRotFromMillNormal(
+        Vector3 surfaceNormal, float yawDeg = 0f)
+    {
+        var n = surfaceNormal.LengthSquared > 1e-12f ? surfaceNormal.Normalized() : Vector3.UnitZ;
+        var z = -n;
+        var hint = MathF.Abs(z.Z) > 0.9f ? Vector3.UnitX : Vector3.UnitZ;
+        var x = Vector3.Cross(hint, z);
+        if (x.LengthSquared < 1e-12f)
+            x = Vector3.Cross(Vector3.UnitY, z);
+        x = x.Normalized();
+        var y = Vector3.Cross(z, x);
+        if (MathF.Abs(yawDeg) > 1e-4f)
+        {
+            float cy = MathF.Cos(yawDeg * MathF.PI / 180f);
+            float sy = MathF.Sin(yawDeg * MathF.PI / 180f);
+            var x2 = x * cy + y * sy;
+            var y2 = y * cy - x * sy;
+            x = x2;
+            y = y2;
+        }
+        float cr = MathF.Cos(_toolFrameRoll), sr = MathF.Sin(_toolFrameRoll);
+        return (cr * x + sr * y, z, sr * x - cr * y);
+    }
+
     private static Vector3 Rod(Vector3 v, Vector3 axis, float sinT, float cosT)
         => v * cosT + Vector3.Cross(axis, v) * sinT + axis * Vector3.Dot(axis, v) * (1f - cosT);
 
