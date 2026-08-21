@@ -1,12 +1,10 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
-using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using MassiveSlicer.App.Behaviors;
-using MassiveSlicer.Core.IO;
 using MassiveSlicer.ViewModels;
 
 namespace MassiveSlicer.App.Views;
@@ -61,75 +59,4 @@ public partial class LeftPanelView : UserControl
             e.Handled = true;
     }
 
-    // -- Material preset (moved from RightPanelView -- now lives under NOZZLE SIZE) ---------
-
-    private async void OnAddMaterialClicked(object? sender, RoutedEventArgs e)
-    {
-        if (TopLevel.GetTopLevel(this) is not Window parent) return;
-        if (parent.DataContext is not MainWindowViewModel main) return;
-        var vm = main.RightPanel;
-
-        // Default the calibration head to whichever extruder the active cell uses.
-        var newEditor = new MaterialPresetEditorViewModel { CalibIsHf = vm.Additive.ActiveExtruderIsHf };
-        var dialog = new MaterialPresetDialog { DataContext = newEditor };
-        var result = await dialog.ShowDialog<Core.Models.MaterialPreset?>(parent);
-        if (result is null) return;
-
-        AddMaterialPreset(vm, result);
-    }
-
-    private async void OnEditMaterialClicked(object? sender, RoutedEventArgs e)
-    {
-        if (TopLevel.GetTopLevel(this) is not Window parent) return;
-        if (parent.DataContext is not MainWindowViewModel main) return;
-        var vm = main.RightPanel;
-
-        int idx = vm.Additive.SelectedPresetIndex;
-        if (idx < 0 || idx >= vm.Additive.MaterialPresets.Count) return;
-
-        var editor = new MaterialPresetEditorViewModel();
-        editor.LoadFrom(vm.Additive.MaterialPresets[idx]);
-        // Never calibrated on this preset? Default to the active cell's head.
-        if (string.IsNullOrEmpty(vm.Additive.MaterialPresets[idx].CalibratedOn))
-            editor.CalibIsHf = vm.Additive.ActiveExtruderIsHf;
-
-        var dialog = new MaterialPresetDialog { DataContext = editor };
-        var result = await dialog.ShowDialog<Core.Models.MaterialPreset?>(parent);
-        if (result is null)
-        {
-            if (dialog.DeleteRequested)
-            {
-                vm.Additive.MaterialPresets.RemoveAt(idx);
-                vm.Additive.SelectedPresetIndex = Math.Min(idx, vm.Additive.MaterialPresets.Count - 1);
-                SaveMaterialsReportingErrors(vm);
-            }
-            return;
-        }
-
-        // JSON import marks SaveAsNew so the open preset is left alone and a new entry is added.
-        if (dialog.SaveAsNew)
-        {
-            AddMaterialPreset(vm, result);
-            return;
-        }
-
-        vm.Additive.MaterialPresets[idx] = result;
-        vm.Additive.SelectedPresetIndex  = idx;
-        SaveMaterialsReportingErrors(vm);
-    }
-
-    private static void AddMaterialPreset(RightPanelViewModel vm, Core.Models.MaterialPreset preset)
-    {
-        vm.Additive.MaterialPresets.Add(preset);
-        vm.Additive.SelectedPresetIndex = vm.Additive.MaterialPresets.Count - 1;
-        SaveMaterialsReportingErrors(vm);
-    }
-
-    /// <summary>Saves the material library and surfaces a failure instead of swallowing it.</summary>
-    private static void SaveMaterialsReportingErrors(RightPanelViewModel vm)
-    {
-        MaterialPresetsLoader.Save(vm.Additive.MaterialPresets);
-        if (MaterialPresetsLoader.LastSaveError is { } err)
-            vm.Presets.StatusMessage = $"⚠ Material library NOT saved: {err}";
-    }
 }

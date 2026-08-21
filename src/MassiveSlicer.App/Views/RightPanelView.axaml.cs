@@ -204,7 +204,16 @@ public partial class RightPanelView : UserControl
 
         var dialog = new MaterialPresetDialog { DataContext = editor };
         var result = await dialog.ShowDialog<Core.Models.MaterialPreset?>(parent);
-        if (result is null) return;
+        if (result is null)
+        {
+            if (dialog.DeleteRequested)
+            {
+                vm.Additive.MaterialPresets.RemoveAt(idx);
+                vm.Additive.SelectedPresetIndex = Math.Min(idx, vm.Additive.MaterialPresets.Count - 1);
+                SaveMaterialsReportingErrors(vm);
+            }
+            return;
+        }
 
         // JSON import marks SaveAsNew so the open preset is left alone and a new entry is added.
         if (dialog.SaveAsNew)
