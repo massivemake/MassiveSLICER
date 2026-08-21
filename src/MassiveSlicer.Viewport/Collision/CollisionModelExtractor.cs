@@ -285,4 +285,16 @@ public static class CollisionModelExtractor
 
     /// <summary>OpenTK → Numerics for chain-root matrices captured at validation time.</summary>
     public static NMatrix ToNumericsMatrix(in TkMatrix4 m) => ToNumerics(m);
+
+    /// <summary>
+    /// Numerics → OpenTK, the exact inverse of <see cref="ToNumericsMatrix"/>. Field-by-field:
+    /// both libraries store row-major with the translation in row 4 and transform row vectors,
+    /// so no transpose or convention change is involved. Used to hand a rotation computed in
+    /// Core (System.Numerics) to the scene graph (OpenTK).
+    /// </summary>
+    public static TkMatrix4 ToOpenTkMatrix(in NMatrix m) => new(
+        m.M11, m.M12, m.M13, m.M14,
+        m.M21, m.M22, m.M23, m.M24,
+        m.M31, m.M32, m.M33, m.M34,
+        m.M41, m.M42, m.M43, m.M44);
 }

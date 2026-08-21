@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Numerics;
 using System.Windows.Input;
 using Avalonia.Threading;
@@ -867,6 +868,32 @@ public sealed class RobotPanelViewModel : ViewModelBase
 
     public int KrlToolIndex { get; private set; }
     public int KrlBaseIndex { get; private set; }
+
+    // -- Nozzle sizing ----------------------------------------------------------
+    // Placeholder preset list -- Nick is supplying the real preset values once he's
+    // seen this in the app.
+
+    private static readonly double[] NozzleDiameterPresetsMm = [4.0, 6.0, 8.0, 10.0];
+
+    /// <summary>Preset nozzle/bead diameters shown between TOOL # and BASE #.</summary>
+    public ObservableCollection<string> NozzleSizeOptions { get; } =
+        new(NozzleDiameterPresetsMm.Select(mm => $"{mm:0.#} mm"));
+
+    private int _nozzleSizeSelectedIndex = 1; // 6 mm -- matches SliceSettings.BeadWidth's default
+
+    public int NozzleSizeSelectedIndex
+    {
+        get => _nozzleSizeSelectedIndex;
+        set
+        {
+            if ((uint)value >= (uint)NozzleDiameterPresetsMm.Length) return;
+            if (!SetField(ref _nozzleSizeSelectedIndex, value)) return;
+            OnPropertyChanged(nameof(NozzleDiameterMm));
+        }
+    }
+
+    /// <summary>Selected nozzle diameter in mm -- feeds the slicer's bead width.</summary>
+    public double NozzleDiameterMm => NozzleDiameterPresetsMm[_nozzleSizeSelectedIndex];
 
     /// <summary>Populates the KRL Tool and Base dropdowns from cell data.</summary>
     public void SetKrlFrameOptions(
