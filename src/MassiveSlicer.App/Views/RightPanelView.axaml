@@ -615,40 +615,12 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
-                            <!-- Filter drawer: dropdown revealing a list of per-field filters.
-                                 Layout: Low and High fields in line, side by side, above the
-                                 track. (A third "converge to one value" field was tried and
-                                 dropped — separate dev later, not part of this control.) The
-                                 Low/High inversion bug is fixed in the ViewModel's own clamp only
-                                 — an earlier attempt ALSO bound each field's Minimum/Maximum to
-                                 the other's live value, which caused NumericUpDown to auto-correct
-                                 its own Value whenever the bound Minimum/Maximum changed, silently
-                                 dragging one bound to chase the other. Removed; the ViewModel
-                                 clamp alone already prevents inversion with no such side effect.
-
-                                 The two handles render directly ON the track (same Y) as plain
-                                 non-hit-testable Ellipses — a shared parent Canvas owns ALL
-                                 pointer interaction (OnRangeTrack* in the code-behind) instead of
-                                 two independent Thumbs. Two prior attempts both used per-handle
-                                 hit-testing (two overlapping Sliders, then two Avalonia Thumbs)
-                                 and both had the same failure mode once the handles touched:
-                                 whichever element is topmost in z-order wins EVERY subsequent
-                                 hit-test permanently, and that element is itself clamped against
-                                 the other, so neither can ever move again — "stuck together
-                                 forever". The fix is to stop hit-testing the handles at all: the
-                                 Canvas picks which bound (Lower/Upper) a gesture controls by
-                                 PROXIMITY to the press point when the handles are separated, or —
-                                 when they're exactly coincident and proximity is a tie — by the
-                                 DIRECTION of the first subsequent move (right = Upper, left =
-                                 Lower), locked for that one gesture. See
-                                 NumericRangeFilterViewModel.DecideActiveLowerBound's doc comment
-                                 for why a fixed tie-break can't work here. Verified against the
-                                 exact reported scenario with a real unit test:
-                                 NumericRangeFilterViewModelTest in MassiveSlicer.Tests, both
-                                 escape directions from a dead tie.
-
-                                 Non-numeric fields get a choice dropdown. Bounds/options recompute
-                                 as presets are added. -->
+                            <!-- Filter drawer: dropdown revealing a list of per-field filters, all
+                                 as choice dropdowns over whatever values have actually been saved
+                                 (numeric fields included — see PresetsCardViewModel.
+                                 MakeNumericChoiceFilter) rather than free-form ranges, so there's
+                                 nothing to pick that no preset actually uses. Options recompute as
+                                 presets are added. -->
                             <Border IsVisible="{Binding Presets.IsFilterDrawerOpen}"
                                     Background="#1a1a1a" CornerRadius="6" Padding="8"
                                     BorderBrush="{DynamicResource Border1}" BorderThickness="1">
@@ -661,52 +633,6 @@
                                         <Button Grid.Column="2" Content="Reset" FontSize="9" Padding="6,2"
                                                 Command="{Binding Presets.ResetFiltersCommand}"/>
                                     </Grid>
-
-                                    <ItemsControl ItemsSource="{Binding Presets.NumericFilters}">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <StackPanel Spacing="4" Margin="0,0,0,10">
-                                                    <TextBlock Text="{Binding FieldName}" FontSize="10" Opacity="0.8"/>
-                                                    <Grid ColumnDefinitions="*,6,*">
-                                                        <NumericUpDown Grid.Column="0" FontSize="10"
-                                                                       Value="{Binding LowerValue, Mode=TwoWay}"
-                                                                       Minimum="{Binding DatasetMin}" Maximum="{Binding DatasetMax}"
-                                                                       Increment="0.5" FormatString="F2"
-                                                                       ToolTip.Tip="Low"/>
-                                                        <NumericUpDown Grid.Column="2" FontSize="10"
-                                                                       Value="{Binding UpperValue, Mode=TwoWay}"
-                                                                       Minimum="{Binding DatasetMin}" Maximum="{Binding DatasetMax}"
-                                                                       Increment="0.5" FormatString="F2"
-                                                                       ToolTip.Tip="High"/>
-                                                    </Grid>
-                                                    <Canvas Height="16" Width="220" HorizontalAlignment="Left"
-                                                            Background="Transparent"
-                                                            PointerPressed="OnRangeTrackPointerPressed"
-                                                            PointerMoved="OnRangeTrackPointerMoved"
-                                                            PointerReleased="OnRangeTrackPointerReleased">
-                                                        <Border Canvas.Top="6" Height="4" Width="220" CornerRadius="2"
-                                                                Background="#5a5a5a" IsHitTestVisible="False"/>
-                                                        <Border Canvas.Top="6" Height="4" CornerRadius="2"
-                                                                Background="{DynamicResource ColorSuccess}"
-                                                                Canvas.Left="{Binding FillX}" Width="{Binding FillWidth}"
-                                                                IsHitTestVisible="False"/>
-                                                        <Ellipse Width="14" Height="14" Canvas.Top="1"
-                                                                 Canvas.Left="{Binding LowerThumbX}"
-                                                                 Fill="{DynamicResource ColorSuccess}"
-                                                                 Stroke="#0A0E14" StrokeThickness="1.5"
-                                                                 IsHitTestVisible="False"
-                                                                 ToolTip.Tip="Low"/>
-                                                        <Ellipse Width="14" Height="14" Canvas.Top="1"
-                                                                 Canvas.Left="{Binding UpperThumbX}"
-                                                                 Fill="{DynamicResource ColorSuccess}"
-                                                                 Stroke="#0A0E14" StrokeThickness="1.5"
-                                                                 IsHitTestVisible="False"
-                                                                 ToolTip.Tip="High"/>
-                                                    </Canvas>
-                                                </StackPanel>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
 
                                     <ItemsControl ItemsSource="{Binding Presets.ChoiceFilters}">
                                         <ItemsControl.ItemTemplate>
@@ -776,7 +702,7 @@
                                      DoubleTapped="OnPresetDoubleTapped">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" Margin="0,3">
+                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto" Margin="0,3">
                                             <Border Grid.Column="0" Background="{DynamicResource AccentMuted}"
                                                     CornerRadius="4" Padding="4,1" VerticalAlignment="Center">
                                                 <TextBlock Text="{Binding SummaryBadge}" FontSize="9" FontWeight="SemiBold"
@@ -821,6 +747,32 @@
                                             </Border>
                                             <TextBlock Grid.Column="5" Text="{Binding LastPrintedDisplay}" FontSize="9"
                                                        Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                            <Button Grid.Column="6" Width="18" Height="18" Padding="0" Margin="2,0,0,0"
+                                                    Background="Transparent" BorderThickness="0"
+                                                    Foreground="{DynamicResource TextMuted}" Content="⋮" FontSize="13"
+                                                    ToolTip.Tip="Rename / Update / Delete">
+                                                <Button.Flyout>
+                                                    <Flyout Placement="BottomEdgeAlignedRight">
+                                                        <StackPanel Width="130" Spacing="1">
+                                                            <Button Content="Rename" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                    Background="Transparent" BorderThickness="0"
+                                                                    Command="{Binding $parent[Window].DataContext.RightPanel.Presets.BeginRenameCommand}"
+                                                                    CommandParameter="{Binding}"/>
+                                                            <Button Content="Update" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                    Background="Transparent" BorderThickness="0"
+                                                                    Command="{Binding $parent[Window].DataContext.RightPanel.Presets.UpdatePresetCommand}"
+                                                                    CommandParameter="{Binding}"
+                                                                    ToolTip.Tip="Overwrite this preset with the panel's current settings"/>
+                                                            <Separator Margin="0,2"/>
+                                                            <Button Content="Delete" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                    Background="Transparent" BorderThickness="0"
+                                                                    Foreground="{DynamicResource ColorError}"
+                                                                    Command="{Binding $parent[Window].DataContext.RightPanel.Presets.DeletePresetCommand}"
+                                                                    CommandParameter="{Binding}"/>
+                                                        </StackPanel>
+                                                    </Flyout>
+                                                </Button.Flyout>
+                                            </Button>
                                         </Grid>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
@@ -842,7 +794,7 @@
                                                      DoubleTapped="OnPresetDoubleTapped">
                                                 <ListBox.ItemTemplate>
                                                     <DataTemplate>
-                                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" Margin="10,3,0,3">
+                                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto" Margin="10,3,0,3">
                                                             <Border Grid.Column="0" Background="{DynamicResource AccentMuted}"
                                                                     CornerRadius="4" Padding="4,1" VerticalAlignment="Center">
                                                                 <TextBlock Text="{Binding SummaryBadge}" FontSize="9" FontWeight="SemiBold"
@@ -887,6 +839,32 @@
                                                             </Border>
                                                             <TextBlock Grid.Column="5" Text="{Binding LastPrintedDisplay}" FontSize="9"
                                                                        Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                                            <Button Grid.Column="6" Width="18" Height="18" Padding="0" Margin="2,0,0,0"
+                                                                    Background="Transparent" BorderThickness="0"
+                                                                    Foreground="{DynamicResource TextMuted}" Content="⋮" FontSize="13"
+                                                                    ToolTip.Tip="Rename / Update / Delete">
+                                                                <Button.Flyout>
+                                                                    <Flyout Placement="BottomEdgeAlignedRight">
+                                                                        <StackPanel Width="130" Spacing="1">
+                                                                            <Button Content="Rename" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                                    Background="Transparent" BorderThickness="0"
+                                                                                    Command="{Binding $parent[Window].DataContext.RightPanel.Presets.BeginRenameCommand}"
+                                                                                    CommandParameter="{Binding}"/>
+                                                                            <Button Content="Update" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                                    Background="Transparent" BorderThickness="0"
+                                                                                    Command="{Binding $parent[Window].DataContext.RightPanel.Presets.UpdatePresetCommand}"
+                                                                                    CommandParameter="{Binding}"
+                                                                                    ToolTip.Tip="Overwrite this preset with the panel's current settings"/>
+                                                                            <Separator Margin="0,2"/>
+                                                                            <Button Content="Delete" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                                    Background="Transparent" BorderThickness="0"
+                                                                                    Foreground="{DynamicResource ColorError}"
+                                                                                    Command="{Binding $parent[Window].DataContext.RightPanel.Presets.DeletePresetCommand}"
+                                                                                    CommandParameter="{Binding}"/>
+                                                                        </StackPanel>
+                                                                    </Flyout>
+                                                                </Button.Flyout>
+                                                            </Button>
                                                         </Grid>
                                                     </DataTemplate>
                                                 </ListBox.ItemTemplate>
@@ -895,6 +873,23 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+
+                            <!-- Rename (right-click a preset above) -->
+                            <Border IsVisible="{Binding Presets.IsRenameDialogOpen}"
+                                    Background="#1a1a1a" CornerRadius="6" Padding="8"
+                                    BorderBrush="{DynamicResource AccentHover}" BorderThickness="1">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="RENAME PRESET" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
+                                    <TextBox Classes="PanelTextBox" Text="{Binding Presets.RenameNameText, Mode=TwoWay}"
+                                             Watermark="Preset name…"/>
+                                    <Grid ColumnDefinitions="*,6,*">
+                                        <Button Grid.Column="0" Content="Cancel" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                                Command="{Binding Presets.CancelRenameCommand}"/>
+                                        <Button Grid.Column="2" Content="Rename" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                                Command="{Binding Presets.CommitRenameCommand}"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
 
                             <!-- Select + apply + share -->
                             <Grid ColumnDefinitions="*,6,*,6,*">

@@ -72,54 +72,6 @@ public partial class RightPanelView : UserControl
         vm.Presets.LoadSelectedCommand.Execute(null);
     }
 
-    /// <summary>
-    /// A presets-card range filter's track owns ALL pointer interaction itself — the two handles
-    /// are plain non-hit-testable Ellipses, not independent Thumbs (two earlier attempts using
-    /// per-handle hit-testing both had the same failure: whichever element is topmost in z-order
-    /// wins every hit-test once the handles are coincident, permanently, since the losing handle
-    /// can then never be clicked again — "stuck together forever"). Pressing here picks which
-    /// bound (Lower/Upper) the gesture controls — see NumericRangeFilterViewModel.DecideActiveLowerBound
-    /// for the proximity/direction logic — and that choice is locked in <see cref="RangeDragState"/>
-    /// for the rest of the one gesture.
-    /// </summary>
-    private void OnRangeTrackPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (sender is not Canvas canvas) return;
-        if (canvas.DataContext is not NumericRangeFilterViewModel filter) return;
-
-        var x = e.GetPosition(canvas).X;
-        var state = new RangeDragState { PressX = x, IsLower = filter.DecideActiveLowerBound(x, x) };
-        canvas.Tag = state;
-
-        e.Pointer.Capture(canvas);
-        if (state.IsLower is { } isLower) filter.SetFromTrackX(isLower, x);
-    }
-
-    private void OnRangeTrackPointerMoved(object? sender, PointerEventArgs e)
-    {
-        if (sender is not Canvas canvas) return;
-        if (canvas.Tag is not RangeDragState state) return;
-        if (canvas.DataContext is not NumericRangeFilterViewModel filter) return;
-
-        var x = e.GetPosition(canvas).X;
-        state.IsLower ??= filter.DecideActiveLowerBound(state.PressX, x);
-        if (state.IsLower is { } isLower) filter.SetFromTrackX(isLower, x);
-    }
-
-    private void OnRangeTrackPointerReleased(object? sender, PointerReleasedEventArgs e)
-    {
-        if (sender is Canvas canvas) canvas.Tag = null;
-        e.Pointer.Capture(null);
-    }
-
-    /// <summary>Per-gesture state for one range-filter track — stored transiently in the
-    /// Canvas.Tag while a pointer is down, cleared on release.</summary>
-    private sealed class RangeDragState
-    {
-        public double PressX;
-        public bool? IsLower;
-    }
-
     /// <summary>Enter in the presets search box pins the current text as a removable tag.</summary>
     private void OnSearchTextKeyDown(object? sender, KeyEventArgs e)
     {
