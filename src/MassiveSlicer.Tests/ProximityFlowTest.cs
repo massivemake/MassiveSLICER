@@ -386,8 +386,11 @@ public class ProximityFlowTest
         Assert.Equal(100f, new SliceSettings().ProximityMinRunLengthMm, 3);
 
         // The rate cap, by contrast, defaults ON. Shipping it off would ship the exact behaviour
-        // that saturated the extruder drive.
-        Assert.Equal(2f, new SliceSettings().MaxFlowChangePercentPerSecond, 3);
+        // that saturated the extruder drive. Raised 2 -> 15 %/s 2026-08-21: at 2 %/s the 0.75 -> 1.00
+        // climb took 1,380 mm — two arm lengths — so the correction could never settle. 15 %/s lands
+        // it inside half an arm. The step size is capped separately, so this buys closer steps and
+        // not bigger ones.
+        Assert.Equal(15f, new SliceSettings().MaxFlowChangePercentPerSecond, 3);
 
         var tp = new Toolpath();
         var l  = Layer(0, 4f);
@@ -653,5 +656,103 @@ public class ProximityFlowTest
         Assert.Equal(1f, BeadProximity.ScaleForGap(6f, 0f), 4);
         ProximityFlowPostProcessor.Apply(new Toolpath(), Settings());
         Assert.Empty(ProximityFlowPostProcessor.LastRuns);
+    }
+
+    // -- Exit anticipation (2026-08-21) --------------------------------------------------------
+
+    /// <summary>Two parallel walls 6 mm apart, long enough to be a real structure, ramp cap live.</summary>
+    private static Toolpath TwoLongWalls(float lengthMm)
+    {
+        var l = Layer(0, 4f);
+        Run(l, 0f, 0f, lengthMm);
+        Run(l, 6f, 0f, lengthMm);
+        var tp = new Toolpath();
+        tp.Layers.Add(l);
+        return tp;
+    }
+
+    private static SliceSettings AnticipationSettings(bool anticipate) => new()
+    {
+        BeadWidth                     = Bead,
+        LayerHeight                   = 4f,
+        FirstLayerHeight              = 4f,
+        PrintSpeedMps                 = 0.1f,     // 100 mm/s
+        ProximityCorrectionEnabled    = true,
+        ProximityMinRunLengthMm       = 100f,
+        MaxFlowChangePercentPerSecond = 15f,
+        ProximityAnticipateExit       = anticipate,
+    };
+
+    /// <summary>
+    /// ⭐⭐ <b>Jeff's second requirement:</b> be at full bead width BY the exit, not a ramp-length
+    /// after it. The last crowded move must therefore be back at full flow when anticipation is on —
+    /// and must NOT be when it is off, which is the control that keeps this from passing vacuously.
+    /// </summary>
+    [Fact]
+    public void The_climb_starts_early_so_flow_is_full_by_the_structure_exit()
+    {
+        float LastCrowdedScale(bool anticipate)
+        {
+            var tp = TwoLongWalls(1200f);
+            ProximityFlowPostProcessor.Apply(tp, AnticipationSettings(anticipate));
+            // The structure's exit is the last extruding move of the layer.
+            return tp.Layers[0].Moves.Last(m => m.Kind == MoveKind.Extrude).WidthScale;
+        }
+
+        float on  = LastCrowdedScale(true);
+        float off = LastCrowdedScale(false);
+
+        Assert.Equal(1f, on, 3);
+        Assert.True(off < 0.95f,
+            $"CONTROL FAILED: without anticipation the exit already sat at {off:0.###}, so this test "
+          + "cannot tell whether anticipation did anything");
+    }
+
+    /// <summary>
+    /// The anticipation is a COST — crowded bead handed back to full flow — and it has to be reported
+    /// as one. An earlier metric on this feature counted give-back as success and reported 97.4 %
+    /// where the truth was 49.6 %; the guard against repeating that is that effectiveness is measured
+    /// against what the geometry asked for, not against the reduced ask.
+    /// </summary>
+    [Fact]
+    public void The_given_back_bead_is_reported_and_does_not_flatter_effectiveness()
+    {
+        var tp = TwoLongWalls(1200f);
+        ProximityFlowPostProcessor.Apply(tp, AnticipationSettings(anticipate: true));
+
+        float anticipated = ProximityFlowPostProcessor.LastAnticipated;
+        Assert.True(anticipated > 0f, "nothing was reported as given back, yet the exit reached full flow");
+
+        var withAnticipation = ProximityFlowPostProcessor.LastSlew;
+
+        var tp2 = TwoLongWalls(1200f);
+        ProximityFlowPostProcessor.Apply(tp2, AnticipationSettings(anticipate: false));
+        var without = ProximityFlowPostProcessor.LastSlew;
+
+        // Same geometry asks for the same thing either way. If the denominator moved, the metric is
+        // measuring the policy instead of the part.
+        Assert.Equal(without.WantedReductionMm, withAnticipation.WantedReductionMm, 1);
+
+        // And giving bead back cannot LOOK like an improvement in what was delivered.
+        Assert.True(withAnticipation.DeliveredOnCrowdedMm <= without.DeliveredOnCrowdedMm + 1e-3f,
+            "anticipation reported MORE delivered on crowded bead than not anticipating at all");
+    }
+
+    /// <summary>
+    /// ⚠️ A structure barely longer than the lead must be left alone. Releasing its tail would hand
+    /// the whole correction back and leave the crowded bead at full flow — worse than arriving late.
+    /// Correcting the bead is the point; arriving on time is the refinement.
+    /// </summary>
+    [Fact]
+    public void A_structure_shorter_than_the_lead_keeps_its_correction()
+    {
+        var tp = TwoLongWalls(120f);      // just over the 100 mm run threshold, well under the lead
+        ProximityFlowPostProcessor.Apply(tp, AnticipationSettings(anticipate: true));
+
+        var extrudes = tp.Layers[0].Moves.Where(m => m.Kind == MoveKind.Extrude).ToList();
+        Assert.Contains(extrudes, m => m.WidthScale < 0.99f);
+        Assert.Equal(0f, ProximityFlowPostProcessor.LastAnticipated, 3);
+        Assert.True(ProximityFlowPostProcessor.LastAnticipationSkipped > 0,
+            "the structure was skipped but nothing said so — a silent cap");
     }
 }

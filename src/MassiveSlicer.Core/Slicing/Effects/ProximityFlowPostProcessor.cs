@@ -97,9 +97,35 @@ public static class ProximityFlowPostProcessor
             ? HoldThroughStructures(toolpath, targets)
             : 0f;
 
+        // What the geometry ASKED for, before any anticipation gives part of it back. The limiter
+        // measures its effectiveness against this, never against the reduced ask — lowering the
+        // denominator to flatter the result is the exact mistake that once reported 97.4 % for a
+        // 49.6 % correction.
+        var wanted = settings.ProximityAnticipateExit ? (float[])targets.Clone() : targets;
+
+        LastAnticipated = settings.ProximityAnticipateExit
+            ? AnticipateExits(toolpath, targets, settings)
+            : 0f;
+
         s_last   = [.. runs.Select(r => r.ToPublic())];
-        LastSlew = FlowSlewLimiter.Apply(toolpath, targets, settings);
+        LastSlew = FlowSlewLimiter.Apply(toolpath, targets, settings, wanted);
     }
+
+    private static int s_anticipationSkipped;
+
+    /// <summary>
+    /// Structures left alone by the exit anticipation because they were shorter than twice the lead —
+    /// releasing their tail would have cancelled the correction instead of merely retiming it. Not a
+    /// silent cap: <c>flow-slew</c> prints it.
+    /// </summary>
+    public static int LastAnticipationSkipped => s_anticipationSkipped;
+
+    /// <summary>
+    /// Bead length (mm) of CROWDED bead whose target was returned to full flow early so the climb
+    /// finishes by the structure exit. This is correction deliberately given up — the cost side of
+    /// <see cref="SliceSettings.ProximityAnticipateExit"/>, and it must never be read as delivery.
+    /// </summary>
+    public static float LastAnticipated { get; private set; }
 
     /// <summary>Bead length (mm) whose target was HELD rather than measured — uncrowded bead inside a
     /// structure that is deliberately kept at the reduced flow. Diagnostics.</summary>
@@ -135,6 +161,124 @@ public static class ProximityFlowPostProcessor
     /// <para>Brim is never held — it is a bed-adhesion feature and deliberately adjacent.</para>
     /// </summary>
     /// <returns>Bead length (mm) whose target was held rather than measured.</returns>
+    /// <summary>
+    /// Starts the climb back to full flow EARLY, so flow arrives at full width exactly as the
+    /// structure ends rather than a ramp-length after it.
+    ///
+    /// <para><b>Why.</b> The limiter deliberately has no lookahead: it spends the ramp only on moves
+    /// that want the change, so leaving a structure under-extrudes the wall beyond it until flow
+    /// recovers. That was 59.7 m of lean wall on the validation part even with the structure hold in
+    /// place. Anticipating the exit trades a slice of the correction for a wall that is right from
+    /// the first millimetre.</para>
+    ///
+    /// <para><b>What it costs, and why the rate matters so much.</b> The lead is however far the
+    /// machine travels while the flow climbs, so it is set by
+    /// <see cref="SliceSettings.MaxFlowChangePercentPerSecond"/> and the print speed — NOT by
+    /// geometry. At the old 2 %/s that was ~1,380 mm at 92 mm/s: two arm lengths of crowded bead
+    /// deliberately over-fed, to save 59.7 m of lean wall. A losing trade, and why this was parked.
+    /// At 15 %/s it is ~245 mm, which is what makes it worth having at all.</para>
+    ///
+    /// <para><b>Bounded by the structure, never beyond it.</b> The climb may reach back only as far
+    /// as the structure's own entry: anticipating past it would run rich on bead belonging to
+    /// whatever came before, which no measurement here justifies. Where the structure is shorter
+    /// than the lead, flow arrives late and the shortfall is simply reported rather than paid for
+    /// out of a neighbouring feature.</para>
+    ///
+    /// <para>⚠️ The returned length is CROWDED bead given back. It is a cost, not delivery. The
+    /// limiter is handed the pre-anticipation targets so its effectiveness still measures against
+    /// what the geometry asked for.</para>
+    /// </summary>
+    /// <returns>Bead length (mm) of crowded bead returned to full flow ahead of the exit.</returns>
+    internal static float AnticipateExits(Toolpath toolpath, float[] targets, SliceSettings settings)
+    {
+        float ratePerSec = MathF.Max(settings.MaxFlowChangePercentPerSecond, 0f) / 100f;
+        if (ratePerSec <= 0f) return 0f;
+
+        float nominalMmS = MathF.Max(settings.PrintSpeedMps * 1000f, 1e-3f);
+        double given     = 0.0;
+        int    layerBase = 0;
+        s_anticipationSkipped = 0;
+
+        foreach (var layer in toolpath.Layers)
+        {
+            var moves = layer.Moves;
+            int chainStart = 0;
+            Vector3? prevEnd = null;
+
+            void CloseChain(int endExclusive)
+            {
+                // The structure is the span of reduced target within this chain, same boundary the
+                // hold uses. Its LAST reduced move is the exit.
+                int first = -1, last = -1;
+                for (int i = chainStart; i < endExclusive; i++)
+                    if (targets[layerBase + i] < 1f - 1e-5f) { if (first < 0) first = i; last = i; }
+
+                if (first < 0 || last < first) return;
+
+                // Time the climb needs, walked at the same step size the limiter will use, so the
+                // schedule the limiter follows lands on full flow exactly at the exit.
+                float hold = FlowSlewLimiter.HoldSeconds(ratePerSec);
+                float step = MathF.Max(ratePerSec * hold, 1e-4f);
+                float from = targets[layerBase + last];
+                int   steps = 0;
+                for (float v = MathF.Max(from, 1e-3f); v < 1f - 1e-5f; v *= 1f + step) steps++;
+                float leadSeconds = steps * hold;
+                if (leadSeconds <= 0f) return;
+
+                // ⚠️ Never anticipate a structure that is not comfortably longer than the lead.
+                // Releasing the tail of a SHORT structure eats the whole correction: a 120 mm crowded
+                // run with a 267 mm lead would be handed back end-to-end and come out at full flow,
+                // which is worse than arriving late. Correcting the bead is the point; arriving on
+                // time is the refinement, so when the two conflict the correction wins.
+                float spanSeconds = 0f;
+                for (int i = first; i <= last; i++)
+                {
+                    var sm = moves[i];
+                    if (sm.Kind != MoveKind.Extrude || sm.IsBrim || sm.IsWipe) continue;
+                    spanSeconds += Vector3.Distance(sm.From, sm.To)
+                                 / MathF.Max(nominalMmS * MathF.Max(sm.PrintSpeedScale, 1e-3f), 1e-3f);
+                }
+                if (spanSeconds < 2f * leadSeconds) { s_anticipationSkipped++; return; }
+
+                // Walk back from the exit, releasing moves to full flow until the lead is covered.
+                // Never past `first`: the structure's own entry is the limit.
+                float covered = 0f;
+                for (int i = last; i >= first && covered < leadSeconds; i--)
+                {
+                    var m = moves[i];
+                    if (m.Kind != MoveKind.Extrude || m.IsBrim || m.IsWipe) continue;
+
+                    float len = Vector3.Distance(m.From, m.To);
+                    float sec = len / MathF.Max(nominalMmS * MathF.Max(m.PrintSpeedScale, 1e-3f), 1e-3f);
+
+                    if (targets[layerBase + i] < 1f - 1e-5f) given += len;
+                    targets[layerBase + i] = 1f;
+                    covered += sec;
+                }
+            }
+
+            for (int mi = 0; mi < moves.Count; mi++)
+            {
+                var move = moves[mi];
+                bool breaksChain = move.Kind == MoveKind.Travel
+                                   || (prevEnd is { } pe && Vector3.Distance(pe, move.From) > 1e-3f);
+
+                if (breaksChain)
+                {
+                    CloseChain(mi);
+                    chainStart = move.Kind == MoveKind.Travel ? mi + 1 : mi;
+                }
+
+                prevEnd = move.Kind == MoveKind.Travel ? null : move.To;
+            }
+
+            CloseChain(moves.Count);
+            layerBase += moves.Count;
+        }
+
+        return (float)given;
+    }
+
     internal static float HoldThroughStructures(Toolpath toolpath, float[] targets)
     {
         double held = 0.0;

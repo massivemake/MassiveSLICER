@@ -199,11 +199,15 @@ public sealed class AppPreferences
     /// <summary>Shortest crowded stretch worth correcting (mm).</summary>
     public double ProximityMinRunLengthMm { get; set; } = 100.0;
 
-    /// <summary>Fastest commanded flow change within a layer (% of current per second). 0 = off.</summary>
-    public double MaxFlowChangePercentPerSecond { get; set; } = 2.0;
+    /// <summary>Fastest commanded flow change within a layer (% of current per second). 0 = off.
+    /// 15 = the full 0.75 -> 1.00 climb inside half an arm; see SliceSettings for the derivation.</summary>
+    public double MaxFlowChangePercentPerSecond { get; set; } = 15.0;
 
     /// <summary>Hold reduced flow across a whole structure rather than ramping between its features.</summary>
     public bool ProximityHoldThroughStructure { get; set; } = true;
+
+    /// <summary>Climb back to full flow early so it arrives by the structure exit, not after it.</summary>
+    public bool ProximityAnticipateExit { get; set; } = true;
 
     /// <summary>Smallest triangle (mm2) allowed to dictate a layer thickness. 0 = bead footprint, negative = off.</summary>
     public double AdaptiveMinFaceAreaMm2 { get; set; }

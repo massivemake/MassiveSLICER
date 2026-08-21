@@ -318,8 +318,28 @@ public sealed class SliceSettings
     /// the coworker's self-imposed guess that happened to work, and if the real limit is nearer
     /// 10 %/s this correction becomes fully effective.</para>
     /// </summary>
-    public float MaxFlowChangePercentPerSecond { get; init; } = 2f;
+    /// <para><b>Raised 2 -> 15 %/s on 2026-08-21, Jeff's call.</b> The deciding measurement: at 2 %/s
+    /// a 0.75 -> 1.00 climb takes 6 steps of 5 % = 15 s = <b>1,380 mm at 92 mm/s</b> — two whole arm
+    /// lengths to change flow, which is why the correction oscillated and never settled. He asked for
+    /// the full climb inside HALF an arm (~172 mm on the validation part, 1.9 s), and that is ~15 %/s.
+    /// ⚠️ This is 7.5x the reference export's measured 1.98 %/s, so it is past anything a machine has
+    /// been observed to follow — the tracking limit is still unmeasured. The step SIZE is held at
+    /// <see cref="Effects.FlowSlewLimiter.MaxRampStepFraction"/> (10 %, the top of the reference's
+    /// range) so the extra rate buys closer-spaced steps rather than bigger ones.</para>
+    public float MaxFlowChangePercentPerSecond { get; init; } = 15f;
 
+
+    /// <summary>
+    /// Start the climb back to full flow BEFORE the structure ends, so flow is at full bead width by
+    /// the exit instead of a ramp-length after it. <b>On by default.</b>
+    ///
+    /// <para>The cost is real and reported separately as anticipated bead: the lead is spent on
+    /// crowded bead running progressively rich. Its length is set by the rate, not the geometry —
+    /// ~245 mm at 15 %/s and 92 mm/s, against ~1,380 mm at the old 2 %/s, which is why this was not
+    /// worth building until the rate rose. Bounded by the structure's own entry, so it can never
+    /// over-feed a neighbouring feature.</para>
+    /// </summary>
+    public bool ProximityAnticipateExit { get; init; } = true;
     /// <summary>
     /// Hold the reduced flow across a whole structure instead of climbing back out of it between
     /// crowded features. <b>On by default.</b>

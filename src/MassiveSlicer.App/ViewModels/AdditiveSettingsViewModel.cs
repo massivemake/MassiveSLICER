@@ -258,6 +258,18 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _proximityHoldThroughStructure, value);
     }
 
+    private bool _proximityAnticipateExit = true;
+
+    /// <summary>
+    /// Climb back to full flow early so it arrives by the structure exit rather than a ramp-length
+    /// after it. On by default; not in the panel, reachable via <c>addset</c> for A/B against a print.
+    /// </summary>
+    public bool ProximityAnticipateExit
+    {
+        get => _proximityAnticipateExit;
+        set => SetField(ref _proximityAnticipateExit, value);
+    }
+
     private double _maxLayerHeightChangeMm;
 
     /// <summary>

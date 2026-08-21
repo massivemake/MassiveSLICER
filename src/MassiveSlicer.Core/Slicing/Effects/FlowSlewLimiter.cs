@@ -96,6 +96,38 @@ public static class FlowSlewLimiter
     /// </summary>
     public const float RampStepSeconds = 2.5f;
 
+    /// <summary>
+    /// Largest relative step the ramp will write, whatever the rate. The hold period is derived from
+    /// this and the rate (see <see cref="HoldSeconds"/>) rather than being fixed, so raising the rate
+    /// buys a SHORTER ramp instead of a bigger step.
+    ///
+    /// <para><b>Why 10 %.</b> The reference export's steps run to about there and no further: median
+    /// 4.77 % relative, and only 3 of 1312 (0.23 %) exceed 10 %, both of the two over 20 % being its
+    /// 1.00 -> 82.62 start/stop transitions. So 10 % is the top of the range a machine is known to
+    /// have followed smoothly. Beyond it we would be guessing again, and guessing big is what
+    /// saturated the drive in the first place.</para>
+    ///
+    /// <para>⚠️ Note this is the one thing that must NOT scale with the rate. At a fixed 2.5 s hold,
+    /// 15 %/s would write a single 33 % step — a slam wearing a ramp's clothing, and exactly the
+    /// failure this class exists to prevent.</para>
+    /// </summary>
+    public const float MaxRampStepFraction = 0.10f;
+
+    /// <summary>
+    /// How long one ramp step is held at <paramref name="ratePerSec"/> (relative, per second).
+    ///
+    /// <para>The step is <c>rate x hold</c>, so holding <see cref="RampStepSeconds"/> at a high rate
+    /// would produce one enormous step. Instead the hold shrinks until the step sits at
+    /// <see cref="MaxRampStepFraction"/>: a faster rate then means more, closer-spaced steps of the
+    /// same proven size, and the climb simply finishes sooner. At or below 4 %/s the cap never binds
+    /// and this returns <see cref="RampStepSeconds"/> unchanged, so the 2 %/s behaviour that was
+    /// matched against the reference file is bit-for-bit what it always was.</para>
+    /// </summary>
+    public static float HoldSeconds(float ratePerSec)
+        => ratePerSec <= 0f
+            ? RampStepSeconds
+            : MathF.Min(RampStepSeconds, MaxRampStepFraction / ratePerSec);
+
     /// <summary>What the last <see cref="Apply"/> did. Diagnostics; nothing reads it to decide.</summary>
     /// <param name="WantedReductionMm">
     /// What the correction asked for: sum of (1 - target) x length over crowded bead.
@@ -146,7 +178,14 @@ public static class FlowSlewLimiter
     /// idempotent: re-running recomputes targets from geometry rather than treating an
     /// already-limited value as the goal.
     /// </param>
-    public static Stats Apply(Toolpath toolpath, float[] targetScale, SliceSettings settings)
+    /// <param name="wantedScale">
+    /// Optional pre-anticipation targets, used ONLY as the denominator for
+    /// <see cref="Stats.Effectiveness"/>. When the exit anticipation hands part of the correction
+    /// back, the ask must still be measured against what the geometry wanted — shrinking the
+    /// denominator instead is how a 49.6 % correction once got reported as 97.4 %.
+    /// </param>
+    public static Stats Apply(Toolpath toolpath, float[] targetScale, SliceSettings settings,
+                              float[]? wantedScale = null)
     {
         float ratePerSec = MathF.Max(settings.MaxFlowChangePercentPerSecond, 0f) / 100f;
         float nominalMmS = MathF.Max(settings.PrintSpeedMps * 1000f, 1e-3f);
@@ -205,7 +244,10 @@ public static class FlowSlewLimiter
 
                 float length = Vector3.Distance(move.From, move.To);
 
-                if (rampable) wanted += (1f - target) * length;
+                float asked = wantedScale is not null && flat < wantedScale.Length
+                    ? wantedScale[flat]
+                    : target;
+                if (rampable) wanted += (1f - asked) * length;
 
                 if (!rampable)
                 {
@@ -239,7 +281,8 @@ public static class FlowSlewLimiter
                 }
 
                 float speed   = nominalMmS * MathF.Max(move.PrintSpeedScale, 1e-3f);
-                float stepLen = MathF.Max(speed * RampStepSeconds, 1e-3f);
+                float holdSec = HoldSeconds(ratePerSec);
+                float stepLen = MathF.Max(speed * holdSec, 1e-3f);
 
                 // Already where it needs to be — the overwhelmingly common case, and it must not
                 // split anything.
@@ -271,7 +314,7 @@ public static class FlowSlewLimiter
                 // constant (5 % at the 2 %/s default) while the distance it is held over scales with
                 // speed. That is exactly the reference file's shape — constant ~4.8 % steps, spacing
                 // set by how fast the robot happens to be moving.
-                float stepFraction = ratePerSec * RampStepSeconds;
+                float stepFraction = ratePerSec * holdSec;
 
                 int   emitted = 0;
                 float pos     = 0f;

@@ -529,4 +529,76 @@ public class FlowSlewLimiterTest
 
         Assert.All(l.Moves, m => Assert.InRange(m.WidthScale, MassiveSlicer.Core.Slicing.BeadProximity.MinScale, 1f));
     }
+
+    // -- The half-arm requirement (2026-08-21) -------------------------------------------------
+
+    /// <summary>
+    /// ⭐⭐ <b>Jeff's requirement:</b> the full 0.75 -> 1.00 flow change must finish inside <b>half an
+    /// arm</b>, and it must get there without a slam.
+    ///
+    /// <para><b>Why this test exists.</b> At the old 2 %/s the climb took 6 steps of 5 % = 15 s =
+    /// <b>1,380 mm at 92 mm/s</b> — two whole arm lengths. That is why the correction oscillated
+    /// instead of settling: it was still travelling toward the target when the next feature arrived.
+    /// This asserts the two halves of the fix together, because either alone is wrong: a rate high
+    /// enough to finish in half an arm, and a step size still inside what a machine has been seen to
+    /// follow. Raising the rate with a fixed hold period would satisfy the distance with a single
+    /// 33 % step, which is the drive-saturating slam this whole class exists to prevent.</para>
+    /// </summary>
+    [Fact]
+    public void The_full_climb_finishes_within_half_an_arm_without_slamming()
+    {
+        const float speed   = 92f;    // the validation part's print speed
+        const float halfArm = 172f;   // half a Swan_Column_Top_02 arm (~345 mm)
+
+        var l = Layer();
+        Move(l, 1000f);
+        FlowSlewLimiter.Apply(One(l), [0.75f], S(ratePctPerSec: 15f, speedMmS: speed));
+
+        // Distance covered BEFORE the first segment that carries the target — i.e. how far the ramp
+        // spent getting there. Measuring to the END of that segment would measure the whole move.
+        float before = 0f, arrivedAfter = float.NaN;
+        foreach (var m in l.Moves)
+        {
+            if (MathF.Abs(m.WidthScale - 0.75f) <= 1e-4f) { arrivedAfter = before; break; }
+            before += Len(m);
+        }
+
+        Assert.False(float.IsNaN(arrivedAfter), "the ramp never reached the 0.75 target at all");
+        Assert.True(arrivedAfter <= halfArm,
+            $"the climb took {arrivedAfter:0.#} mm — more than half an arm ({halfArm:0.#} mm), which is "
+          + "the oscillation this change exists to remove");
+
+        // No single written step may be a slam, however fast the rate.
+        float prev = 1f, worst = 0f;
+        foreach (var m in l.Moves)
+        {
+            if (m.Kind != MoveKind.Extrude) continue;
+            float step = MathF.Abs(m.WidthScale - prev) / MathF.Max(prev, 1e-6f);
+            if (step > worst) worst = step;
+            prev = m.WidthScale;
+        }
+        Assert.True(worst <= FlowSlewLimiter.MaxRampStepFraction + 1e-3f,
+            $"worst step {worst * 100f:0.##} % exceeds the {FlowSlewLimiter.MaxRampStepFraction * 100f:0.#} % "
+          + "ceiling — the rate rise turned into a bigger step instead of a shorter ramp");
+
+        AssertRateRespected(l, 15f, speed);
+    }
+
+    /// <summary>
+    /// The hold period must fall out of the rate, not stay fixed — and the old 2 %/s behaviour must be
+    /// untouched, because that is the setting matched against the known-good reference export.
+    /// </summary>
+    [Theory]
+    [InlineData(1f,  2.5f)]      // slow: the ceiling never binds, hold unchanged
+    [InlineData(2f,  2.5f)]      // the historical default — must be bit-for-bit what it was
+    [InlineData(4f,  2.5f)]      // exactly at the ceiling: 4 %/s x 2.5 s = 10 %
+    [InlineData(15f, 0.6667f)]   // fast: hold shrinks so the step stays at 10 %
+    public void The_hold_period_shrinks_so_the_step_never_grows(float ratePct, float expectedHold)
+    {
+        float hold = FlowSlewLimiter.HoldSeconds(ratePct / 100f);
+        Assert.Equal(expectedHold, hold, 3);
+        Assert.True(ratePct / 100f * hold <= FlowSlewLimiter.MaxRampStepFraction + 1e-4f,
+            "step size exceeded its ceiling");
+    }
+
 }

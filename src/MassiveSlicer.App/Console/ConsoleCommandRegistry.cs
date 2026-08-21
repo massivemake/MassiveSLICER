@@ -2118,6 +2118,12 @@ public sealed class ConsoleCommandRegistry
                           ? $" — {MassiveSlicer.Core.Slicing.Effects.ProximityFlowPostProcessor.LastHold / 1000.0:0.###} m "
                             + "of uncrowded bead inside a structure held at the reduced flow"
                           : " — flow climbs back up between arms and down again into the next"));
+                ctx.Log($"[proximity]   anticipate exit: "
+                      + $"{(add.ProximityAnticipateExit ? "ON" : "OFF")}"
+                      + (add.ProximityAnticipateExit
+                          ? $" — {MassiveSlicer.Core.Slicing.Effects.ProximityFlowPostProcessor.LastAnticipated / 1000.0:0.###} m "
+                            + "of crowded bead handed back to full flow so it arrives by the exit"
+                          : " — flow is still climbing after the structure ends"));
                 ctx.Log($"[proximity]   {runs.Count} crowded run(s); {corrected} long enough to correct");
                 ctx.Log($"[proximity]   {corrLen / 1000.0:0.###} m corrected, "
                       + $"{skipLen / 1000.0:0.###} m left alone as too short to act on");
@@ -2165,9 +2171,14 @@ public sealed class ConsoleCommandRegistry
                 double rate     = add.MaxFlowChangePercentPerSecond;
                 float  speedMmS = (float)add.PrintSpeed;
 
+                // The hold is DERIVED from the rate so the step never grows past its ceiling —
+                // printing the 2.5 s constant here read as "2.5 s" at every rate, which is wrong
+                // and hid the whole point of the change.
+                float holdSec = MassiveSlicer.Core.Slicing.Effects.FlowSlewLimiter
+                                    .HoldSeconds((float)rate / 100f);
                 ctx.Log($"[flow-slew] cap now: {(rate > 1e-6 ? $"{rate:0.##} %/s" : "OFF")} · "
-                      + $"print speed {speedMmS:0.#} mm/s · ramp step "
-                      + $"{MassiveSlicer.Core.Slicing.Effects.FlowSlewLimiter.RampStepSeconds:0.##} s");
+                      + $"print speed {speedMmS:0.#} mm/s · ramp step {holdSec:0.###} s "
+                      + $"= {rate * holdSec:0.##} % per step, {speedMmS * holdSec:0.#} mm apart");
                 if (rate <= 1e-6)
                     ctx.Log("[flow-slew]   ⚠ OFF means the whole correction lands on one move. That is "
                           + "what saturated the drive — addset MaxFlowChangePercentPerSecond 2");
@@ -2300,8 +2311,17 @@ public sealed class ConsoleCommandRegistry
                           + $"({(add.ProximityHoldThroughStructure ? "ON" : "OFF")}) — intended, not a cost");
                     ctx.Log($"[flow-slew]   ⚠ collateral: {s.CollateralOnFreeMm / 1000.0:0.###} m of "
                           + "reduction landed on bead that was NOT crowded and NOT held — the ramp "
-                          + "still climbing after the structure ended. Under-extruded wall; this is "
-                          + "the parked exit-ramp problem, measured.");
+                          + "still climbing after the structure ended. Under-extruded wall.");
+
+                    // The third bucket, and it belongs apart from both of the above: bead the exit
+                    // anticipation deliberately handed BACK to full flow before the structure ended.
+                    // Crowded bead running rich — the cost of arriving at full width by the exit.
+                    float anticipated = MassiveSlicer.Core.Slicing.Effects
+                                            .ProximityFlowPostProcessor.LastAnticipated;
+                    ctx.Log($"[flow-slew]   anticipated exit: {anticipated / 1000.0:0.###} m of "
+                          + "CROWDED bead returned to full flow before the exit so flow arrives at "
+                          + $"full width by it ({(add.ProximityAnticipateExit ? "ON" : "OFF")}) — "
+                          + "correction deliberately given up. Never read this as delivery.");
                 }
 
                 ctx.Log("[flow-slew]   biggest steps first:");
