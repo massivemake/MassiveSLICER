@@ -41,8 +41,18 @@ public static class ProximityFlowPostProcessor
     public static IReadOnlyList<Run> LastRuns => s_last;
     private static Run[] s_last = [];
 
+    /// <summary>
+    /// What the rate limiter did to this pass's targets — how much of the intended correction
+    /// actually survived the drive's slew cap. Diagnostics.
+    /// </summary>
+    public static FlowSlewLimiter.Stats LastSlew { get; private set; } = FlowSlewLimiter.Stats.Empty;
+
     /// <summary>Drops published runs, so a report cannot describe a slice that is no longer live.</summary>
-    public static void ResetRuns() => s_last = [];
+    public static void ResetRuns()
+    {
+        s_last   = [];
+        LastSlew = FlowSlewLimiter.Stats.Empty;
+    }
 
     /// <summary>
     /// Stamps <see cref="ToolpathMove.WidthScale"/> on crowded bead whose run is long enough to act
@@ -67,19 +77,20 @@ public static class ProximityFlowPostProcessor
             if (r.Corrected)
                 for (int i = 0; i < r.MoveCount; i++) qualifying.Add(r.FirstFlatIndex + i);
 
-        int flat = 0;
-        foreach (var layer in toolpath.Layers)
+        // This pass states the TARGET flow per move. How fast the extruder is allowed to travel
+        // toward that target is FlowSlewLimiter's business, and keeping the two apart is what keeps
+        // both idempotent: the target is always recomputed from geometry, never read back off a move
+        // that has already been rate-limited.
+        var targets = new float[gaps.Length];
+        Array.Fill(targets, 1f);
+        foreach (int i in qualifying)
         {
-            for (int mi = 0; mi < layer.Moves.Count; mi++, flat++)
-            {
-                if (!qualifying.Contains(flat)) continue;
-                float scale = BeadProximity.ScaleForGap(gaps[flat], bead);
-                if (scale >= 1f) continue;
-                layer.Moves[mi] = layer.Moves[mi] with { WidthScale = scale };
-            }
+            float scale = BeadProximity.ScaleForGap(gaps[i], bead);
+            if (scale < 1f) targets[i] = scale;
         }
 
-        s_last = [.. runs.Select(r => r.ToPublic())];
+        s_last   = [.. runs.Select(r => r.ToPublic())];
+        LastSlew = FlowSlewLimiter.Apply(toolpath, targets, settings);
     }
 
     /// <summary>A run under construction — carries the contiguous move count so Apply can reach

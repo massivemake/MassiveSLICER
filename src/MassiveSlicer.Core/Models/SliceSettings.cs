@@ -285,6 +285,41 @@ public sealed class SliceSettings
     /// </summary>
     public float ProximityMinRunLengthMm { get; init; } = 100f;
 
+    /// <summary>
+    /// Cap on how fast commanded extrusion flow may change WITHIN a layer, as a percentage of the
+    /// current value per second. Default 2 (= 5 % per 2.5 s). 0 = no limit.
+    ///
+    /// <para><b>Why this exists.</b> The proximity correction used to stamp its full scale onto the
+    /// first crowded move — on a real column a 0.75 factor arriving as an instant ~24-point RPM drop,
+    /// about 300 times in one program. The extruder drive cannot track a step that size: once it
+    /// saturates, real speed stops following set and the booth stops accepting manual offsets.</para>
+    ///
+    /// <para><b>Where the number comes from.</b> A coworker's known-good export changes RPM mid-layer
+    /// 1311 times and the controller follows every one. It makes BIGGER total swings than ours did —
+    /// 39 points, 89 % — because it WALKS them: 4.3 points per step, about 5 % relative, median
+    /// 213 mm apart at 92 mm/s. That is 5 % per 2.5 s, so 2 %/s. Our failed export moved 13.6 points
+    /// per step with 1029 of 1714 steps over 10 points. Same write form, same handshake count; only
+    /// the step size differed.</para>
+    ///
+    /// <para><b>Relative, not percentage points</b> — 5 % of the current value, matching how the
+    /// working file behaves. Within a layer this is exactly a relative cap on commanded RPM, because
+    /// <see cref="ToolpathMove.PrintSpeedScale"/> and <see cref="ToolpathMove.HeightScale"/> are both
+    /// layer-constant, so <see cref="ToolpathMove.WidthScale"/> is the only per-move factor left.</para>
+    ///
+    /// <para><b>Per second, not per mm</b> — drive saturation is a time phenomenon, so this tightens
+    /// automatically when print speed drops. Deliberately unlike <see cref="MaxLayerHeightChangeMm"/>,
+    /// which stays in mm: that one is a geometry budget planned into the Z ladder before the print
+    /// starts, and mm is its natural unit.</para>
+    ///
+    /// <para>⚠️ <b>A compliant ramp cannot fully correct an arm at current speeds.</b> A 608 mm arm
+    /// wall is 6.6 s at 92 mm/s; at 2 %/s that reaches ~0.88, not 0.75, just as the arm ends. Entry
+    /// over-extrusion is accepted for now — see the exit-lookahead note on
+    /// <c>FlowSlewLimiter</c>. Nobody has yet found where the drive ACTUALLY stops tracking; 2 %/s is
+    /// the coworker's self-imposed guess that happened to work, and if the real limit is nearer
+    /// 10 %/s this correction becomes fully effective.</para>
+    /// </summary>
+    public float MaxFlowChangePercentPerSecond { get; init; } = 2f;
+
     // -- Support-driven layer height (3b) ------------------------------------------
 
     /// <summary>

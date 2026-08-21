@@ -2072,6 +2072,93 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "flow-slew",
+            Description = "How fast commanded flow actually changes along the path within a layer. "
+                        + "Measured off the LIVE toolpath rather than read back from the limiter, "
+                        + "so it can catch the limiter being wrong. This is the number that broke "
+                        + "the Caracol: it slammed ~24 RPM points about 300 times per program",
+            Usage = "flow-slew [count]",
+            Execute = (ctx, args) =>
+            {
+                int show = int.TryParse(args.Trim(), out var n) && n > 0 ? n : 10;
+                var tp   = ctx.Main.Viewport.ActiveScrubToolpath;
+                var add  = ctx.Main.RightPanel.Additive;
+
+                if (tp is null) { ctx.LogError("[flow-slew] no active toolpath — slice first."); return; }
+
+                double rate     = add.MaxFlowChangePercentPerSecond;
+                float  speedMmS = (float)add.PrintSpeed;
+
+                ctx.Log($"[flow-slew] cap now: {(rate > 1e-6 ? $"{rate:0.##} %/s" : "OFF")} · "
+                      + $"print speed {speedMmS:0.#} mm/s · ramp step "
+                      + $"{MassiveSlicer.Core.Slicing.Effects.FlowSlewLimiter.RampStepSeconds:0.##} s");
+                if (rate <= 1e-6)
+                    ctx.Log("[flow-slew]   ⚠ OFF means the whole correction lands on one move. That is "
+                          + "what saturated the drive — addset MaxFlowChangePercentPerSecond 2");
+
+                // Walk the real commanded scale, in path order, exactly as the exporter would write
+                // it. Deliberately re-derived from the moves instead of trusting the limiter's own
+                // bookkeeping: if something downstream reintroduced a step, this is what shows it.
+                var steps = new List<(float Rel, float Sec, int Layer, float Z, float From, float To)>();
+                float prev = 1f;
+                bool  seen = false;
+
+                foreach (var lyr in tp.Layers)
+                    foreach (var m in lyr.Moves)
+                    {
+                        if (m.Kind != MoveKind.Extrude || m.IsBrim || m.IsWipe) continue;
+
+                        float cur = MassiveSlicer.Core.IO.ToolpathRpm.MoveScale(m);
+                        if (!seen) { prev = cur; seen = true; continue; }
+
+                        if (Math.Abs(cur - prev) > 1e-5f)
+                        {
+                            float len = System.Numerics.Vector3.Distance(m.From, m.To);
+                            float sec = speedMmS > 1e-3f ? len / speedMmS : 0f;
+                            steps.Add((Math.Abs(cur - prev) / Math.Max(prev, 1e-6f), sec,
+                                       lyr.Index, lyr.Z, prev, cur));
+                        }
+                        prev = cur;
+                    }
+
+                if (steps.Count == 0)
+                {
+                    ctx.Log("[flow-slew]   commanded flow never changes within a layer — nothing to cap.");
+                    return;
+                }
+
+                var s = MassiveSlicer.Core.Slicing.Effects.ProximityFlowPostProcessor.LastSlew;
+                ctx.Log($"[flow-slew]   {steps.Count} flow changes; worst "
+                      + $"{steps.Max(x => x.Rel) * 100f:0.##} % relative");
+                foreach (float pct in new[] { 5f, 10f, 20f })
+                    ctx.Log($"[flow-slew]   steps over {pct,2:0} %: {steps.Count(x => x.Rel * 100f > pct)}");
+
+                // The honest headline: a compliant ramp cannot fully correct an arm at these speeds,
+                // so say how much of the intended reduction actually reached the machine.
+                if (s.WantedReductionMm > 1e-3f)
+                    ctx.Log($"[flow-slew]   correction delivered: {s.DeliveredReductionMm / 1000.0:0.###} m "
+                          + $"of the {s.WantedReductionMm / 1000.0:0.###} m wanted = "
+                          + $"{s.Effectiveness * 100f:0.#} %  ({s.MovesRamped} moves subdivided, "
+                          + $"+{s.SegmentsAdded} segments)");
+
+                ctx.Log("[flow-slew]   biggest steps first:");
+                foreach (var x in steps.OrderByDescending(x => x.Rel).Take(show))
+                    ctx.Log($"[flow-slew]     L{x.Layer,-5} Z {x.Z,8:0.0}  "
+                          + $"x{x.From:0.###} -> x{x.To:0.###}  {x.Rel * 100f,6:0.##} % "
+                          + $"over {x.Sec,6:0.###} s");
+
+                if (steps.Count > show)
+                    ctx.Log($"[flow-slew]     … {steps.Count - show} more "
+                          + $"(flow-slew {steps.Count} to list them all)");
+
+                ctx.Log("[flow-slew]   ⚠ 2 %/s is a working reference file's self-imposed rule, not a "
+                      + "measured machine limit. Nobody has found where the drive actually stops "
+                      + "tracking — if it is nearer 10 %/s, the delivered figure above goes way up.");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "slew-report",
             Description = "Layer-to-layer thickness and RPM steps in the current slice, and what "
                         + "capping the change per layer would cost. Answers whether banding is "

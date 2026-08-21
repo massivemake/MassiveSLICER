@@ -34,13 +34,26 @@ public class ProximityFlowTest
 {
     private const float Bead = 8f;
 
-    private static SliceSettings Settings(bool on = true, float minRun = 100f) => new()
+    /// <summary>
+    /// ⚠️ <b>The flow slew cap is OFF here on purpose.</b> These tests pin what the correction
+    /// TARGETS — which beads are crowded, and by how much. FlowSlewLimiter then decides how fast the
+    /// extruder is allowed to travel toward that target, and with it enabled a 400 mm run at
+    /// 100 mm/s only reaches ~0.92 of the way, so every exact-value assertion below would be reading
+    /// the ramp rather than the measurement. Two mechanisms that can each mask the other have to be
+    /// tested apart; that lesson was learned here the hard way, when the seam fixture was being
+    /// rescued by the perpendicular check and the crossing fixture by the run-length threshold.
+    /// The limiter has its own tests in <c>FlowSlewLimiterTest</c>, and the two are exercised
+    /// together in <see cref="The_limiter_walks_toward_the_target_and_never_past_it"/>.
+    /// </summary>
+    private static SliceSettings Settings(bool on = true, float minRun = 100f, float ratePctPerSec = 0f) => new()
     {
-        BeadWidth                  = Bead,
-        LayerHeight                = 4f,
-        FirstLayerHeight           = 4f,
-        ProximityCorrectionEnabled = on,
-        ProximityMinRunLengthMm    = minRun,
+        BeadWidth                     = Bead,
+        LayerHeight                   = 4f,
+        FirstLayerHeight              = 4f,
+        PrintSpeedMps                 = 0.1f,      // 100 mm/s
+        ProximityCorrectionEnabled    = on,
+        ProximityMinRunLengthMm       = minRun,
+        MaxFlowChangePercentPerSecond = ratePctPerSec,
     };
 
     private static ToolpathLayer Layer(int i, float z) =>
@@ -361,6 +374,10 @@ public class ProximityFlowTest
         Assert.False(new SliceSettings().ProximityCorrectionEnabled);
         Assert.Equal(100f, new SliceSettings().ProximityMinRunLengthMm, 3);
 
+        // The rate cap, by contrast, defaults ON. Shipping it off would ship the exact behaviour
+        // that saturated the extruder drive.
+        Assert.Equal(2f, new SliceSettings().MaxFlowChangePercentPerSecond, 3);
+
         var tp = new Toolpath();
         var l  = Layer(0, 4f);
         Run(l, 0f, 0f, 400f);
@@ -404,6 +421,69 @@ public class ProximityFlowTest
         tp.Layers.Add(l);
 
         Assert.Equal(0.75f, ToolpathClone.Copy(tp).Layers[0].Moves[0].WidthScale, 4);
+    }
+
+    /// <summary>
+    /// The two mechanisms composed, which is how they actually run: this pass names the target, and
+    /// <see cref="FlowSlewLimiter"/> decides how fast flow may travel toward it. Nothing may
+    /// overshoot the target, and the first crowded move must NOT already be sitting on it — instant
+    /// arrival is precisely what saturated the extruder drive.
+    /// </summary>
+    [Fact]
+    public void The_limiter_walks_toward_the_target_and_never_past_it()
+    {
+        var tp = new Toolpath();
+        var l  = Layer(0, 4f);
+        Run(l, 0f, 0f, 400f);
+        Travel(l, 400f, 0f, 0f, 6f);
+        Run(l, 6f, 0f, 400f);
+        tp.Layers.Add(l);
+
+        ProximityFlowPostProcessor.Apply(tp, Settings(ratePctPerSec: 2f));
+
+        var extrudes = l.Moves.Where(m => m.Kind == MoveKind.Extrude).ToList();
+
+        Assert.Contains(extrudes, m => m.WidthScale < 0.999f);
+        Assert.All(extrudes, m => Assert.True(m.WidthScale >= 0.75f - 1e-4f,
+            $"a move landed at {m.WidthScale:0.####}, past the 0.75 target"));
+
+        Assert.True(extrudes[0].WidthScale > 0.99f,
+            $"the first crowded move is already at {extrudes[0].WidthScale:0.####} — the correction "
+          + "is still arriving in one step, which is what broke the Caracol");
+
+        Assert.True(ProximityFlowPostProcessor.LastSlew.Steps > 0);
+        Assert.True(ProximityFlowPostProcessor.LastSlew.Effectiveness < 1f,
+            "400 mm at 100 mm/s is 4 s, not enough to deliver the whole 25 % — an effectiveness of "
+          + "1.0 means the cap was not applied");
+    }
+
+    /// <summary>
+    /// Idempotency with the cap ON is a harder promise than with it off: the second pass re-measures
+    /// a path the first pass SUBDIVIDED, so the gaps, the runs and the targets are all recomputed
+    /// over a different move list. Splitting a straight segment must not change any of them.
+    /// </summary>
+    [Fact]
+    public void Applying_twice_with_the_cap_on_does_not_compound()
+    {
+        var tp = new Toolpath();
+        var l  = Layer(0, 4f);
+        Run(l, 0f, 0f, 400f);
+        Travel(l, 400f, 0f, 0f, 6f);
+        Run(l, 6f, 0f, 400f);
+        tp.Layers.Add(l);
+
+        ProximityFlowPostProcessor.Apply(tp, Settings(ratePctPerSec: 2f));
+        var once = l.Moves.Select(m => (m.From, m.To, m.WidthScale)).ToArray();
+
+        ProximityFlowPostProcessor.Apply(tp, Settings(ratePctPerSec: 2f));
+
+        Assert.Equal(once.Length, l.Moves.Count);
+        for (int i = 0; i < once.Length; i++)
+        {
+            Assert.Equal(once[i].From,       l.Moves[i].From);
+            Assert.Equal(once[i].To,         l.Moves[i].To);
+            Assert.Equal(once[i].WidthScale, l.Moves[i].WidthScale, 5);
+        }
     }
 
     [Fact]

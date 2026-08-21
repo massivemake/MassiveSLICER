@@ -4291,6 +4291,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.MaxLayerHeightChangeMm = copy.MaxLayerHeightChangeMm;
         live.ProximityCorrectionEnabled = copy.ProximityCorrectionEnabled;
         live.ProximityMinRunLengthMm    = copy.ProximityMinRunLengthMm;
+        live.MaxFlowChangePercentPerSecond = copy.MaxFlowChangePercentPerSecond;
         live.AdaptiveMinFaceAreaMm2 = copy.AdaptiveMinFaceAreaMm2;
         live.SupportDrivenLayerHeight    = copy.SupportDrivenLayerHeight;
         live.SupportOverlapTargetPercent = copy.SupportOverlapTargetPercent;
@@ -4558,6 +4559,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.MaxLayerHeightChangeMm = p.MaxLayerHeightChangeMm;
         add.ProximityCorrectionEnabled = p.ProximityCorrectionEnabled;
         add.ProximityMinRunLengthMm    = p.ProximityMinRunLengthMm;
+        add.MaxFlowChangePercentPerSecond = p.MaxFlowChangePercentPerSecond;
         add.AdaptiveMinFaceAreaMm2      = p.AdaptiveMinFaceAreaMm2;
         add.SupportDrivenLayerHeight    = p.SupportDrivenLayerHeight;
         add.SupportOverlapTargetPercent = p.SupportOverlapTargetPercent;
@@ -4903,6 +4905,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.MaxLayerHeightChangeMm = add.MaxLayerHeightChangeMm;
         p.ProximityCorrectionEnabled = add.ProximityCorrectionEnabled;
         p.ProximityMinRunLengthMm    = add.ProximityMinRunLengthMm;
+        p.MaxFlowChangePercentPerSecond = add.MaxFlowChangePercentPerSecond;
         p.AdaptiveMinFaceAreaMm2      = add.AdaptiveMinFaceAreaMm2;
         p.SupportDrivenLayerHeight    = add.SupportDrivenLayerHeight;
         p.SupportOverlapTargetPercent = add.SupportOverlapTargetPercent;

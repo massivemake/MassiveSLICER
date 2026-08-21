@@ -227,6 +227,24 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _proximityMinRunLengthMm, Math.Clamp(value, 0.0, 10000.0));
     }
 
+    private double _maxFlowChangePercentPerSecond = 2.0;
+
+    /// <summary>
+    /// Fastest the commanded flow may change WITHIN a layer, as a percent of the current value per
+    /// second. 0 = no limit.
+    ///
+    /// Deliberately defaults ON, unlike the proximity toggle it protects: stamping a correction on
+    /// in one step is what saturated the extruder drive, so shipping this off would ship the
+    /// failure. 2 %/s is what a known-good export from another cell actually does — 5 % per 2.5 s.
+    /// Not in the panel while the real limit is unknown; reachable via <c>addset</c> and reported by
+    /// the <c>flow-slew</c> console command.
+    /// </summary>
+    public double MaxFlowChangePercentPerSecond
+    {
+        get => _maxFlowChangePercentPerSecond;
+        set => SetField(ref _maxFlowChangePercentPerSecond, Math.Clamp(value, 0.0, 100.0));
+    }
+
     private double _maxLayerHeightChangeMm;
 
     /// <summary>
