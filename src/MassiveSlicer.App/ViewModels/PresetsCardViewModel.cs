@@ -25,6 +25,9 @@ public sealed class PrintPresetSample
     public bool IsFavorite { get; set; }
     public bool IsSeeded { get; init; }
 
+    /// <summary>ERP library id when synced to lab.massivemake.com; null if local-only.</summary>
+    public string? ErpId { get; set; }
+
     /// <summary>Always captured/applied — not gated by a field-group checkbox (the material
     /// preset library is its own separate concept; see SaveNewPreset/ApplyPresetToAdditive).</summary>
     public string Material { get; init; } = "";
@@ -552,6 +555,15 @@ public sealed class PresetsCardViewModel : ViewModelBase
     public ObservableCollection<PresetGroupViewModel> GroupedPresets { get; } = new();
     public ObservableCollection<PresetFieldGroupOption> SaveFieldGroups { get; }
     public ObservableCollection<ChoiceFilterViewModel> ChoiceFilters { get; } = new();
+
+    /// <summary>
+    /// Optional hook: after a local print-preset save, push the record to the ERP
+    /// (wired by MainWindowViewModel from ErpViewModel).
+    /// </summary>
+    public Action<PrintPresetRecord>? PushToErp { get; set; }
+
+    /// <summary>When true, <see cref="PersistUserPresets"/> only writes disk (no ERP push).</summary>
+    private bool _suppressErpPush;
 
     /// <summary>Committed search terms (each removable, all AND'd together — "zigzag" + "7200"
     /// narrows to presets matching both, not either). The live, not-yet-committed text in
@@ -1545,7 +1557,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
     private static PrintPresetRecord ToRecord(PrintPresetSample p) => new()
     {
         Name = p.Name, Folder = p.Folder, CreatedUtc = p.CreatedUtc, LastPrintedUtc = p.LastPrintedUtc,
-        IsFavorite = p.IsFavorite, Material = p.Material,
+        IsFavorite = p.IsFavorite, ErpId = p.ErpId, Material = p.Material,
 
         BeadWidth = p.BeadWidth, LayerHeight = p.LayerHeight, TiltAngle = p.TiltAngle, TiltAngleX = p.TiltAngleX,
         MultiPlanarAxisX = p.MultiPlanarAxisX,
@@ -1623,7 +1635,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
     private static PrintPresetSample FromRecord(PrintPresetRecord r) => new()
     {
         Name = r.Name, Folder = r.Folder, CreatedUtc = r.CreatedUtc, LastPrintedUtc = r.LastPrintedUtc,
-        IsFavorite = r.IsFavorite, IsSeeded = false, Material = r.Material,
+        IsFavorite = r.IsFavorite, IsSeeded = false, ErpId = r.ErpId, Material = r.Material,
 
         BeadWidth = r.BeadWidth, LayerHeight = r.LayerHeight, TiltAngle = r.TiltAngle, TiltAngleX = r.TiltAngleX,
         MultiPlanarAxisX = r.MultiPlanarAxisX,
@@ -1713,9 +1725,44 @@ public sealed class PresetsCardViewModel : ViewModelBase
     /// Writes every NON-seeded preset to disk — call after anything that adds/edits a real
     /// (Save'd or Imported) preset. Seed/sample presets are never written here; only what the
     /// user actually made lives on disk (see PrintPresetSample.IsSeeded).
+    /// Also pushes each row to the ERP when <see cref="PushToErp"/> is wired and connected.
     /// </summary>
     private void PersistUserPresets()
-        => PrintPresetsLoader.Save(AllPresets.Where(p => !p.IsSeeded).Select(ToRecord));
+    {
+        var records = AllPresets.Where(p => !p.IsSeeded).Select(ToRecord).ToList();
+        PrintPresetsLoader.Save(records);
+        if (_suppressErpPush || PushToErp is null) return;
+        // Push only the most recently touched row would be ideal; pushing all non-seeded is
+        // fine for small libraries and keeps server ids stamped after first upload.
+        foreach (var rec in records)
+            PushToErp(rec);
+    }
+
+    /// <summary>
+    /// Reloads the print-preset list from AppData after an ERP pull (does not re-push).
+    /// </summary>
+    public void ReloadFromDiskAfterErpSync()
+    {
+        var selectedName = SelectedPreset?.Name;
+        _suppressErpPush = true;
+        try
+        {
+            AllPresets.Clear();
+            foreach (var record in PrintPresetsLoader.Load())
+                AllPresets.Add(FromRecord(record));
+            EnsureMasterDefaultsPreset();
+            RefreshFilterBoundsFromData();
+            RecomputeSiblingLinks();
+            if (selectedName is { } name)
+                SelectedPreset = AllPresets.FirstOrDefault(p => p.Name == name);
+            Refresh();
+            StatusMessage = $"Presets library refreshed from ERP ({AllPresets.Count(p => !p.IsSeeded)} saved)";
+        }
+        finally
+        {
+            _suppressErpPush = false;
+        }
+    }
 
     /// <summary>
     /// Recomputes every filter's dataset bounds/options from the live preset list — call after

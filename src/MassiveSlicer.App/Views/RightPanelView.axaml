@@ -3434,6 +3434,19 @@
                                             <TextBlock FontSize="10" Opacity="0.55"
                                                        Text="{Binding Subtractive.SelectedBit.ToolNumber, StringFormat={}Tool #{0}}"/>
                                         </StackPanel>
+                                        <Grid ColumnDefinitions="*,120">
+                                            <TextBlock Text="Cylinder length" Classes="LabelMuted" FontSize="11"
+                                                       VerticalAlignment="Center"
+                                                       ToolTip.Tip="Stick-out from the disc centre along the SpindleBit face normal. Does not change cutter diameter."/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                                <NumericUpDown Value="{Binding Subtractive.PreviewCylinderLengthMm, Mode=TwoWay}"
+                                                               Minimum="0.5" Maximum="400" Increment="1"
+                                                               FormatString="F1" FontSize="11"
+                                                               MinHeight="30"/>
+                                                <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted"
+                                                           VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
                                         <!-- Same SpindleRpm as TOOLPATHING → MOVEMENT; either side updates both. -->
                                         <Grid ColumnDefinitions="*,120">
                                             <TextBlock Text="Spindle speed" Classes="LabelMuted" FontSize="11"
@@ -3574,7 +3587,7 @@
                                 <Expander Classes="SectionExpander" Header="SELECT AREA" IsExpanded="True" Margin="0,4,0,0">
                                     <StackPanel Margin="0,2,0,6" Spacing="6">
                                         <TextBlock Classes="LabelMuted" FontSize="10" TextWrapping="Wrap" Margin="8,2,8,2"
-                                                   Text="Soft-brush the machining region on the model (imports/scans only — not robot/bed/cell). Alt erases. Brush size &amp; falloff are on the bottom bar."/>
+                                                   Text="Soft-brush the machining region on the model (imports/scans only — not robot/bed/cell). Alt erases. Box and Lasso paint only the front surface — they do not select through. Brush size &amp; falloff are on the bottom bar."/>
 
                                         <UniformGrid Columns="3" Margin="6,0,6,0">
                                             <Button Classes="PatternTile"
@@ -3643,6 +3656,71 @@
                                                 BorderThickness="1">
                                             <TextBlock FontSize="10" Opacity="0.8" TextWrapping="Wrap"
                                                        Text="{Binding Subtractive.AreaSelectStatus}"/>
+                                        </Border>
+
+                                        <Button Margin="8,4,8,6"
+                                                Content="Generate Toolpath"
+                                                Classes="PrimaryButton"
+                                                HorizontalAlignment="Stretch"
+                                                ToolTip.Tip="Mill only the painted SELECT AREA (Box / Lasso / Brush / Face). Switch to Whole model to mill the entire mesh."
+                                                Command="{Binding $parent[Window].DataContext.Viewport.GenerateMillFromSettingsCommand}"/>
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Classes="SectionExpander" Header="TOOL AXIS"
+                                          IsExpanded="True" Margin="0,4,0,0"
+                                          IsVisible="{Binding Subtractive.ShowsPlanarToolAxis}">
+                                    <StackPanel Margin="0,2,0,6" Spacing="6">
+                                        <TextBlock Classes="LabelMuted" FontSize="10" TextWrapping="Wrap" Margin="8,2,8,0"
+                                                   Text="T12 +Z (bit into the work). Raster projects from the opposite direction. Default is world -Z. Use Painted area after Box / Face, or Camera view after orbiting the wall."/>
+                                        <Grid Margin="8,0,8,0" ColumnDefinitions="*,160">
+                                            <TextBlock Text="Axis" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                            <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                                                      ItemsSource="{x:Static vm:SubtractiveSettingsViewModel.PlanarToolAxisOptions}"
+                                                      SelectedItem="{Binding Subtractive.PlanarToolAxis, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <Grid Margin="8,0,8,0" ColumnDefinitions="*,100">
+                                            <TextBlock Text="Tilt" Classes="LabelMuted" VerticalAlignment="Center"
+                                                       ToolTip.Tip="Tilt T12 +Z off the chosen axis (deg)"/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                <NumericUpDown Value="{Binding Subtractive.PlanarTiltDeg, Mode=TwoWay}"
+                                                               Minimum="-90" Maximum="90" Increment="1" FormatString="F1" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="°" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
+                                        <Grid Margin="8,0,8,0" ColumnDefinitions="*,100">
+                                            <TextBlock Text="Azimuth" Classes="LabelMuted" VerticalAlignment="Center"
+                                                       ToolTip.Tip="Which way the tilt leans around the tool axis (deg)"/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                <NumericUpDown Value="{Binding Subtractive.PlanarAzimuthDeg, Mode=TwoWay}"
+                                                               Minimum="-180" Maximum="180" Increment="5" FormatString="F1" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="°" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
+                                        <Grid Margin="8,2,8,0" ColumnDefinitions="*,56,56,56"
+                                              IsVisible="{Binding Subtractive.IsPlanarAxisCustom}">
+                                            <TextBlock Text="T12 +Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                            <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.PlanarCustomX, Mode=TwoWay}"
+                                                           Increment="0.1" FormatString="F2" FontSize="10"/>
+                                            <NumericUpDown Grid.Column="2" Value="{Binding Subtractive.PlanarCustomY, Mode=TwoWay}"
+                                                           Increment="0.1" FormatString="F2" FontSize="10" Margin="2,0,0,0"/>
+                                            <NumericUpDown Grid.Column="3" Value="{Binding Subtractive.PlanarCustomZ, Mode=TwoWay}"
+                                                           Increment="0.1" FormatString="F2" FontSize="10" Margin="2,0,0,0"/>
+                                        </Grid>
+                                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="8,2,8,0">
+                                            <Button Content="From painted area"
+                                                    Command="{Binding Subtractive.CapturePlanarFromPaintCommand}"
+                                                    ToolTip.Tip="Average the painted / boxed face and point T12 into it"/>
+                                            <Button Content="From camera"
+                                                    Command="{Binding Subtractive.CapturePlanarFromCameraCommand}"
+                                                    ToolTip.Tip="Point T12 along the current viewport look"/>
+                                        </StackPanel>
+                                        <Border Margin="8,2,8,4" Padding="8,6" CornerRadius="5"
+                                                Background="{DynamicResource Bg1}"
+                                                BorderBrush="{DynamicResource Border1}"
+                                                BorderThickness="1">
+                                            <TextBlock FontSize="10" Opacity="0.85" TextWrapping="Wrap"
+                                                       Text="{Binding Subtractive.PlanarAxisStatus}"/>
                                         </Border>
                                     </StackPanel>
                                 </Expander>
@@ -3788,6 +3866,13 @@
                                         </Grid>
                                     </StackPanel>
                                 </Expander>
+
+                                <Button Margin="10,10,10,8"
+                                        Content="Generate Toolpath"
+                                        Classes="PrimaryButton"
+                                        HorizontalAlignment="Stretch"
+                                        ToolTip.Tip="Build a mill toolpath from the current bit, operation, area selection, and toolpathing settings. Paints only the selected region when an area is painted; otherwise mills the selected model."
+                                        Command="{Binding $parent[Window].DataContext.Viewport.GenerateMillFromSettingsCommand}"/>
                             </StackPanel>
                         </Expander>
 

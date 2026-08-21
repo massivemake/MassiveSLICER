@@ -1,1 +1,20 @@
+# Normalize source to LF in the repo. Working copies stay native
+# (CRLF on Windows with core.autocrlf=true, LF on macOS/Linux).
+* text=auto
+
+# Git LFS
 *.3dm filter=lfs diff=lfs merge=lfs -text
+
+# True binaries (some .glb/.stl in this tree are ASCII and should renormalize)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.hdr binary
+*.exr binary
+*.ico binary
+*.icns binary
+*.otf binary
+*.ttf binary
+*.bin binary
+
+

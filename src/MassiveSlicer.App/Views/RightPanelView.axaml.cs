@@ -3,6 +3,9 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using MassiveSlicer.App.Behaviors;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.ViewModels;
 
@@ -10,6 +13,11 @@ namespace MassiveSlicer.App.Views;
 
 public partial class RightPanelView : UserControl
 {
+    /// <summary>False until PersistExpander has restored open/closed state.</summary>
+    public bool AllowExpandScroll { get; private set; }
+
+    static RightPanelView() => SidebarExpandScroll.Arm();
+
     public RightPanelView()
     {
         InitializeComponent();
@@ -18,14 +26,15 @@ public partial class RightPanelView : UserControl
         if (DataContext is RightPanelViewModel)
             OnDataContextChanged(this, EventArgs.Empty);
 
-        // Lets the console ("krlpost open") raise the same dialog as the KRL EXPORT gear.
-        // Bind on attach, not DataContextChanged: OnKrlPostProcessClicked needs a real
-        // TopLevel, and a detached instance registering last would silently no-op.
-        AttachedToVisualTree += (_, _) =>
-        {
-            if (DataContext is RightPanelViewModel vm)
-                vm.Additive.OnOpenKrlPostProcessRequested = () => OnKrlPostProcessClicked(this, new RoutedEventArgs());
-        };
+        AttachedToVisualTree += OnAttachedToVisualTree;
+    }
+
+    void OnAttachedToVisualTree(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        // Console "krlpost open" must bind after we have a TopLevel.
+        if (DataContext is RightPanelViewModel vm)
+            vm.Additive.OnOpenKrlPostProcessRequested = () => OnKrlPostProcessClicked(this, new RoutedEventArgs());
+        Dispatcher.UIThread.Post(() => AllowExpandScroll = true, DispatcherPriority.ContextIdle);
     }
 
     void OnDataContextChanged(object? sender, EventArgs e)
@@ -151,12 +160,20 @@ public partial class RightPanelView : UserControl
         AddMaterialPreset(vm, result);
     }
 
-    /// <summary>Saves the material library and surfaces a failure instead of swallowing it.</summary>
-    private static void SaveMaterialsReportingErrors(RightPanelViewModel vm)
+    /// <summary>Saves the material library and surfaces a failure instead of swallowing it.
+    /// When ERP is connected, also upserts each material to lab.massivemake.com.</summary>
+    private void SaveMaterialsReportingErrors(RightPanelViewModel vm)
     {
         MaterialPresetsLoader.Save(vm.Additive.MaterialPresets);
         if (MaterialPresetsLoader.LastSaveError is { } err)
             vm.Presets.StatusMessage = $"⚠ Material library NOT saved: {err}";
+
+        // Push to ERP when the dock is connected (ViewportViewModel.Erp on the same tree).
+        if (TopLevel.GetTopLevel(this) is not Window { DataContext: MainWindowViewModel main })
+            return;
+        if (!main.Viewport.Erp.IsConnected) return;
+        foreach (var mat in vm.Additive.MaterialPresets)
+            main.Viewport.Erp.PushMaterialPresetInBackground(mat);
     }
 
     private async void OnKrlPostProcessClicked(object? sender, RoutedEventArgs e)
@@ -201,7 +218,7 @@ public partial class RightPanelView : UserControl
         SaveMaterialsReportingErrors(vm);
     }
 
-    private static void AddMaterialPreset(RightPanelViewModel vm, Core.Models.MaterialPreset preset)
+    private void AddMaterialPreset(RightPanelViewModel vm, Core.Models.MaterialPreset preset)
     {
         vm.Additive.MaterialPresets.Add(preset);
         vm.Additive.SelectedPresetIndex = vm.Additive.MaterialPresets.Count - 1;

@@ -50,24 +50,18 @@ public partial class App : Application
 
     internal static string? ResolveStartupWorkspacePath(string[]? args)
     {
-        if (args is not { Length: > 0 }) return null;
-
-        foreach (var raw in args)
+        var resolved = MassiveSlicer.Core.IO.ProtocolUri.ResolveWorkspacePath(args);
+        if (string.IsNullOrEmpty(resolved)) return null;
+        try
         {
-            var path = raw.Trim().Trim('"');
-            if (path.Length == 0) continue;
-            if (!path.EndsWith(".mass", StringComparison.OrdinalIgnoreCase)) continue;
-            try
-            {
-                var full = Path.GetFullPath(path);
-                if (File.Exists(full))
-                    return full;
-            }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+            var full = Path.GetFullPath(resolved);
+            if (File.Exists(full))
+                return full;
         }
-
-        return null;
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        catch (NotSupportedException) { }
+        return File.Exists(resolved) ? resolved : resolved.Length > 0 ? resolved : null;
     }
 
     /// <summary>
