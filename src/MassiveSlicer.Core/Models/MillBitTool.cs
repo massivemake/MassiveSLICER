@@ -101,6 +101,34 @@ public sealed class MillBitTool
     public double MaxDepthMm { get; set; }
     /// <summary>When true, this bit is preferred on cold start (mounted on spindle).</summary>
     public bool IsDefaultSpindleBit { get; set; }
+
+    /// <summary>
+    /// Draw a preview cylinder on the LFAM 3 spindle, origin at the
+    /// <c>SpindleBit</c> disc centre, length along the disc-face normal.
+    /// </summary>
+    public bool ShowSpindleCylinder { get; set; } = true;
+
+    /// <summary>
+    /// Cylinder stick-out (mm) from the disc centre along the face normal. 0 = use
+    /// <see cref="TotalLengthMm"/>, then <see cref="FluteLengthMm"/>, then 50 mm.
+    /// </summary>
+    public double CylinderLengthMm { get; set; }
+
+    /// <summary>Reverse the cylinder so it grows from the opposite disc face.</summary>
+    public bool CylinderFlip { get; set; }
+
+    /// <summary>Resolved preview length in mm (never 0).</summary>
+    [JsonIgnore]
+    public double EffectiveCylinderLengthMm
+    {
+        get
+        {
+            if (CylinderLengthMm > 0.05) return CylinderLengthMm;
+            if (TotalLengthMm > 0.05) return TotalLengthMm;
+            if (FluteLengthMm > 0.05) return FluteLengthMm;
+            return 50;
+        }
+    }
     public DateTime LastModifiedUtc { get; set; } = DateTime.UtcNow;
 
     public List<MillBitHolderSegment> HolderSegments { get; set; } = [];

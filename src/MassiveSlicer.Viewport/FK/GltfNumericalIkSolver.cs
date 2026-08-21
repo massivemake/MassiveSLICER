@@ -77,8 +77,8 @@ public sealed class GltfNumericalIkSolver
         for (int i = 0; i <= Steps; i++)
         for (int j = 0; j <= Steps; j++)
         {
-            θ[1] = _jcfg[1].MinDeg + (_jcfg[1].MaxDeg - _jcfg[1].MinDeg) * i / Steps;
-            θ[2] = _jcfg[2].MinDeg + (_jcfg[2].MaxDeg - _jcfg[2].MinDeg) * j / Steps;
+            θ[1] = _jcfg[1].UsableMinDeg + (_jcfg[1].UsableMaxDeg - _jcfg[1].UsableMinDeg) * i / Steps;
+            θ[2] = _jcfg[2].UsableMinDeg + (_jcfg[2].UsableMaxDeg - _jcfg[2].UsableMinDeg) * j / Steps;
             float d = (ComputeTcpPosScene(θ) - shoulderScene).Length;
             if (d < minD) minD = d;
             if (d > maxD) maxD = d;
@@ -410,6 +410,34 @@ public sealed class GltfNumericalIkSolver
         return (cr * xF + sr * yF, zF, sr * xF - cr * yF);
     }
 
+    /// <summary>
+    /// Mill T12: cutter along tool +Z into the work (−surfaceNormal). Do not reuse
+    /// <see cref="TargetRotFromGlobalOrientation"/> (extruder X-approach).
+    /// </summary>
+    public (Vector3 r0, Vector3 r1, Vector3 r2) TargetRotFromMillNormal(
+        Vector3 surfaceNormal, float yawDeg = 0f)
+    {
+        var n = surfaceNormal.LengthSquared > 1e-12f ? surfaceNormal.Normalized() : Vector3.UnitZ;
+        var z = -n;
+        var hint = MathF.Abs(z.Z) > 0.9f ? Vector3.UnitX : Vector3.UnitZ;
+        var x = Vector3.Cross(hint, z);
+        if (x.LengthSquared < 1e-12f)
+            x = Vector3.Cross(Vector3.UnitY, z);
+        x = x.Normalized();
+        var y = Vector3.Cross(z, x);
+        if (MathF.Abs(yawDeg) > 1e-4f)
+        {
+            float cy = MathF.Cos(yawDeg * MathF.PI / 180f);
+            float sy = MathF.Sin(yawDeg * MathF.PI / 180f);
+            var x2 = x * cy + y * sy;
+            var y2 = y * cy - x * sy;
+            x = x2;
+            y = y2;
+        }
+        float cr = MathF.Cos(_toolFrameRoll), sr = MathF.Sin(_toolFrameRoll);
+        return (cr * x + sr * y, z, sr * x - cr * y);
+    }
+
     private static Vector3 Rod(Vector3 v, Vector3 axis, float sinT, float cosT)
         => v * cosT + Vector3.Cross(axis, v) * sinT + axis * Vector3.Dot(axis, v) * (1f - cosT);
 
@@ -488,7 +516,7 @@ public sealed class GltfNumericalIkSolver
                               m02, m12, m22, error);
 
             for (int j = 0; j < 6; j++)
-                θ[j] = Math.Clamp(θ[j] + Vector3.Dot(J[j], x), _jcfg[j].MinDeg, _jcfg[j].MaxDeg);
+                θ[j] = Math.Clamp(θ[j] + Vector3.Dot(J[j], x), _jcfg[j].UsableMinDeg, _jcfg[j].UsableMaxDeg);
         }
 
         return (ComputeTcpPosScene(θ) - targetScene).Length <= finalTolerance ? θ : null;
@@ -587,7 +615,7 @@ public sealed class GltfNumericalIkSolver
                 float dθ = 0f;
                 for (int r = 0; r < 6; r++)
                     dθ += cv[r] * (aug[r * 7 + 6] / aug[r * 7 + r]);
-                θ[j] = Math.Clamp(θ[j] + dθ, _jcfg[j].MinDeg, _jcfg[j].MaxDeg);
+                θ[j] = Math.Clamp(θ[j] + dθ, _jcfg[j].UsableMinDeg, _jcfg[j].UsableMaxDeg);
             }
         }
 

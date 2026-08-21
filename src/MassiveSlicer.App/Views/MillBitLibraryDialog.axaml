@@ -243,6 +243,29 @@
                                 <CheckBox Content="Default spindle bit (LFAM 3 mounted)"
                                           IsChecked="{Binding SelectedTool.IsDefaultSpindleBit, Mode=TwoWay}"
                                           FontSize="12" Margin="0,4,0,0"/>
+
+                                <TextBlock Text="SPINDLE CYLINDER" Classes="LabelMuted" FontSize="10" LetterSpacing="1.2" Margin="0,14,0,0"/>
+                                <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.65" Margin="0,0,0,4"
+                                           Text="Starts at the centre of the SpindleBit disc and grows along the disc-face normal. Diameter and length are millimetres."/>
+                                <CheckBox Content="Show cylinder on spindle"
+                                          IsChecked="{Binding SelectedTool.ShowSpindleCylinder, Mode=TwoWay}"
+                                          FontSize="12"/>
+                                <Grid ColumnDefinitions="168,*" RowDefinitions="Auto,Auto" RowSpacing="10">
+                                    <TextBlock Grid.Row="0" Text="Cylinder length" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <Grid Grid.Row="0" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <NumericUpDown Classes="BitField"
+                                                       Value="{Binding SelectedTool.CylinderLengthMm, Mode=TwoWay}"
+                                                       Minimum="0" Maximum="400" Increment="0.5" FormatString="F2"
+                                                       ToolTip.Tip="0 = use Total cutter length, then Flute length, then 50 mm"/>
+                                        <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Width="36" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <TextBlock Grid.Row="1" Text="" Classes="LabelMuted"/>
+                                    <CheckBox Grid.Row="1" Grid.Column="1"
+                                              Content="Flip direction"
+                                              IsChecked="{Binding SelectedTool.CylinderFlip, Mode=TwoWay}"
+                                              FontSize="12"
+                                              ToolTip.Tip="Grow the cylinder from the opposite SpindleBit face"/>
+                                </Grid>
                             </StackPanel>
 
                             <!-- HOLDER -->

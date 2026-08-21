@@ -16,15 +16,15 @@
       {
         "krlOffset": 0,
         "krlSign": -1,
-        "minDeg": -60,
-        "maxDeg": 60,
+        "minDeg": -70,
+        "maxDeg": 70,
         "axis": "Y"
       },
       {
         "krlOffset": 90,
         "krlSign": -1,
-        "minDeg": -120,
-        "maxDeg": 70,
+        "minDeg": -129,
+        "maxDeg": 0,
         "axis": "X"
       },
       {
@@ -121,7 +121,7 @@
   "stands": [],
   "robotRail": {
     "axis": "Y",
-    "minMm": -4650,
+    "minMm": -4641,
     "maxMm": 150,
     "e1Sign": -1
   },

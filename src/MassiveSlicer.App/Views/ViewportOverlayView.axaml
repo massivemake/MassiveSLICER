@@ -14,14 +14,25 @@
     <UserControl.Resources>
         <conv:EnumMatchConverter x:Key="EnumMatchCvt"/>
         <conv:BoolConverter x:Key="NotCvt" Invert="True"/>
+        <conv:HexToBrushConverter x:Key="HexBrushCvt"/>
     </UserControl.Resources>
 
     <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
-    <Grid Background="Transparent" Margin="320,52,320,0">
+    <Grid>
+    <Grid x:Name="OverlayRoot" Background="Transparent" Margin="320,52,320,0">
 
-        <!-- View-mode pills — top right -->
-        <Border HorizontalAlignment="Right" VerticalAlignment="Top"
-                Margin="0,8,0,0" ZIndex="15"
+        <!-- Transform tools + view pills. Wide: one row (tools left, pills right).
+             Narrow: pills drop under the tools so they never overlap. -->
+        <Grid x:Name="TopChromeHost"
+              VerticalAlignment="Top"
+              Margin="0,8,0,0"
+              ZIndex="15"
+              ColumnDefinitions="*,Auto"
+              RowDefinitions="Auto,Auto">
+
+        <Border x:Name="ViewPillsBar"
+                Grid.Row="0" Grid.Column="1"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
                 Background="#B3222222" CornerRadius="6"
                 BorderBrush="{DynamicResource Border1}" BorderThickness="1"
                 Padding="3">
@@ -48,6 +59,7 @@
                         Command="{Binding SetViewModeCommand}" CommandParameter="Preview"/>
             </StackPanel>
         </Border>
+        </Grid>
 
         <!-- 2D Slice Plane Viewer — per-layer statistics (left side of viewport,
              below the frame/focus buttons so it never covers them) -->
@@ -673,7 +685,8 @@
                                          ZIndex="26"/>
 
         <!-- Transform toolbar — top-center: icon tab above the axis-value row -->
-        <StackPanel HorizontalAlignment="Center"
+        <StackPanel x:Name="TransformToolbar"
+                    HorizontalAlignment="Center"
                     VerticalAlignment="Top"
                     Margin="0,8,0,0"
                     ZIndex="14">
@@ -717,8 +730,7 @@
 
                     <!-- Placing the part on the plate. Moved here from the top-left focus overlay:
                          these belong with the transform tools, not with the camera controls. -->
-                    <Border Width="1" Background="#3D3D3D" Margin="4,3"
-                            IsVisible="{Binding !IsToolpathSelected}"/>
+                    <Border Width="1" Background="#3D3D3D" Margin="4,3"/>
                     <Button Classes="ToolbarButton" Padding="12,4"
                             Classes.active="{Binding IsLayFlatMode}"
                             Command="{Binding LayFlatCommand}"
@@ -726,9 +738,11 @@
                             ToolTip.Tip="Lay on Face — click a face to align it flat on the build plate (Esc to cancel)">
                         <ia:Icon Value="mdi-format-vertical-align-bottom" FontSize="14"/>
                     </Button>
+                    <!-- Available for toolpaths too, unlike Lay on Face which needs a face to
+                         rest on. An imported KRL program lands wherever its BASE puts it, so
+                         dropping it onto the plate is exactly what you want. -->
                     <Button Classes="ToolbarButton" Padding="12,4"
                             Command="{Binding DropToPlateCommand}"
-                            IsVisible="{Binding !IsToolpathSelected}"
                             ToolTip.Tip="Drop to Plate — translate the object down so its lowest point sits on the build plate">
                         <ia:Icon Value="mdi-arrow-collapse-down" FontSize="14"/>
                     </Button>
@@ -1958,6 +1972,37 @@
                                    FontWeight="Bold"
                                    Foreground="#e5e7eb"/>
                     </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- TCP / flange / sensor triad names + x/y/z. Full-viewport coords (not OverlayRoot inset). -->
+    </Grid>
+
+        <ItemsControl IsVisible="{Binding HasTcpAxisTags}"
+                      ItemsSource="{Binding TcpAxisTags}"
+                      IsHitTestVisible="False"
+                      ZIndex="19">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <Canvas Background="Transparent"/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.Styles>
+                <Style Selector="ContentPresenter" x:DataType="vm:TcpAxisTag">
+                    <Setter Property="Canvas.Left" Value="{Binding ScreenX}"/>
+                    <Setter Property="Canvas.Top" Value="{Binding ScreenY}"/>
+                </Style>
+            </ItemsControl.Styles>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:TcpAxisTag">
+                    <TextBlock Text="{Binding Label}"
+                               FontFamily="Consolas,Courier New,monospace"
+                               FontSize="{Binding FontSize}"
+                               FontWeight="Bold"
+                               Foreground="{Binding ColorHex, Converter={StaticResource HexBrushCvt}}"
+                               Opacity="0.95"
+                               IsHitTestVisible="False"/>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>

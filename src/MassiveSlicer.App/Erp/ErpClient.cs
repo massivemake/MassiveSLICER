@@ -27,7 +27,30 @@ public sealed class ErpClient : IDisposable
             BaseAddress = new Uri(root),
             Timeout     = TimeSpan.FromSeconds(10),
         };
-        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Trim());
+        if (!string.IsNullOrWhiteSpace(token))
+            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Trim());
+    }
+
+    /// <summary>
+    /// Password login — no bearer yet. POST /api/slicer/v1/login.
+    /// Lab must ship this route (see docs/ERP-Login-API-Replit-Prompt.md).
+    /// </summary>
+    public static async Task<ErpResult<ErpLoginResult>> LoginAsync(
+        string baseUrl, string email, string password, CancellationToken ct)
+    {
+        using var client = new ErpClient(baseUrl, token: "");
+        var body = new Dictionary<string, object?>
+        {
+            ["email"]    = email.Trim(),
+            ["username"] = email.Trim(),
+            ["password"] = password,
+        };
+        var r = await client.PostJsonAsync("api/slicer/v1/login", body, ct);
+        if (r.Error is not null) return ErpResult<ErpLoginResult>.Fail(r.Error);
+        using var doc = r.Value!;
+        return ParseLogin(doc.RootElement) is { } parsed
+            ? ErpResult<ErpLoginResult>.Success(parsed)
+            : ErpResult<ErpLoginResult>.Fail(ErpErrorKind.BadResponse, "login response missing token");
     }
 
     /// <summary>
@@ -197,6 +220,34 @@ public sealed class ErpClient : IDisposable
             new ErpSliceReceipt(rev, GetString(doc.RootElement, "url", "link"), costing));
     }
 
+    /// <summary>
+    /// Tells MassiveLAB where a <c>.mass</c> just landed. Metadata only (no bytes).
+    /// Lab may 404 until the endpoint ships — the slicer still keeps the JSONL log.
+    /// </summary>
+    public async Task<ErpResult<bool>> NotifyWorkspaceSavedAsync(
+        MassiveSlicer.Core.IO.WorkspaceSaveRecord rec, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["at"]            = rec.At,
+            ["path"]          = rec.UnasPath ?? rec.Path,
+            ["localPath"]     = rec.Path,
+            ["bytes"]         = rec.Bytes,
+            ["file"]          = rec.File,
+            ["cell"]          = rec.Cell,
+            ["host"]          = rec.Host,
+            ["projectType"]   = rec.ProjectType,
+            ["projectId"]     = rec.ProjectId,
+            ["projectNumber"] = rec.ProjectNumber,
+            ["projectTitle"]  = rec.ProjectTitle,
+            ["elementId"]     = rec.ElementId,
+            ["elementName"]   = rec.ElementName,
+        };
+        var r = await PostJsonAsync("api/slicer/v1/workspace-saves", body, ct);
+        if (r.Error is not null) return ErpResult<bool>.Fail(r.Error);
+        return ErpResult<bool>.Success(true);
+    }
+
     /// <summary>Fetches the ERP's pricing configuration (rates, materials catalog,
     /// markup, quantity discounts). Cache by <see cref="ErpPricingConfig.Version"/> and
     /// re-fetch when a quote/costing echoes a different version.</summary>
@@ -249,12 +300,103 @@ public sealed class ErpClient : IDisposable
         }
     }
 
+    // -- Shared print / material preset library --------------------------------
+
+    /// <summary>GET /presets-bundle — both libraries in one round-trip.</summary>
+    public async Task<ErpResult<ErpPresetsBundle>> GetPresetsBundleAsync(CancellationToken ct)
+    {
+        var r = await GetJsonAsync("api/slicer/v1/presets-bundle", ct);
+        if (r.Error is not null) return ErpResult<ErpPresetsBundle>.Fail(r.Error);
+        using var doc = r.Value!;
+        try
+        {
+            return ErpResult<ErpPresetsBundle>.Success(ParsePresetsBundle(doc.RootElement));
+        }
+        catch (Exception ex)
+        {
+            return ErpResult<ErpPresetsBundle>.Fail(ErpErrorKind.BadResponse, $"unexpected response: {ex.Message}");
+        }
+    }
+
+    public Task<ErpResult<IReadOnlyList<ErpPresetEntry>>> ListPrintPresetsAsync(CancellationToken ct)
+        => ListPresetCollectionAsync("api/slicer/v1/print-presets", ct);
+
+    public Task<ErpResult<IReadOnlyList<ErpPresetEntry>>> ListMaterialPresetsAsync(CancellationToken ct)
+        => ListPresetCollectionAsync("api/slicer/v1/material-presets", ct);
+
+    public Task<ErpResult<ErpPresetEntry>> CreatePrintPresetAsync(object payload, CancellationToken ct)
+        => CreatePresetAsync("api/slicer/v1/print-presets", payload, ct);
+
+    public Task<ErpResult<ErpPresetEntry>> UpdatePrintPresetAsync(string id, object payload, CancellationToken ct)
+        => UpdatePresetAsync($"api/slicer/v1/print-presets/{Uri.EscapeDataString(id)}", payload, ct);
+
+    public Task<ErpResult<bool>> DeletePrintPresetAsync(string id, CancellationToken ct)
+        => DeleteJsonAsync($"api/slicer/v1/print-presets/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<ErpResult<ErpPresetEntry>> CreateMaterialPresetAsync(object payload, CancellationToken ct)
+        => CreatePresetAsync("api/slicer/v1/material-presets", payload, ct);
+
+    public Task<ErpResult<ErpPresetEntry>> UpdateMaterialPresetAsync(string id, object payload, CancellationToken ct)
+        => UpdatePresetAsync($"api/slicer/v1/material-presets/{Uri.EscapeDataString(id)}", payload, ct);
+
+    public Task<ErpResult<bool>> DeleteMaterialPresetAsync(string id, CancellationToken ct)
+        => DeleteJsonAsync($"api/slicer/v1/material-presets/{Uri.EscapeDataString(id)}", ct);
+
+    private async Task<ErpResult<IReadOnlyList<ErpPresetEntry>>> ListPresetCollectionAsync(
+        string relative, CancellationToken ct)
+    {
+        var r = await GetJsonAsync(relative, ct);
+        if (r.Error is not null) return ErpResult<IReadOnlyList<ErpPresetEntry>>.Fail(r.Error);
+        using var doc = r.Value!;
+        try
+        {
+            var items = new List<ErpPresetEntry>();
+            foreach (var el in EnumerateArray(doc.RootElement, "items", "printPresets", "materialPresets",
+                         "presets", "results", "data"))
+                if (ParsePresetEntry(el) is { } entry)
+                    items.Add(entry);
+            // Bare array already handled by EnumerateArray.
+            return ErpResult<IReadOnlyList<ErpPresetEntry>>.Success(items);
+        }
+        catch (Exception ex)
+        {
+            return ErpResult<IReadOnlyList<ErpPresetEntry>>.Fail(
+                ErpErrorKind.BadResponse, $"unexpected response: {ex.Message}");
+        }
+    }
+
+    private async Task<ErpResult<ErpPresetEntry>> CreatePresetAsync(
+        string relative, object payload, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?> { ["payload"] = payload };
+        var r = await PostJsonAsync(relative, body, ct);
+        if (r.Error is not null) return ErpResult<ErpPresetEntry>.Fail(r.Error);
+        using var doc = r.Value!;
+        return ParsePresetEntry(doc.RootElement) is { } entry
+            ? ErpResult<ErpPresetEntry>.Success(entry)
+            : ErpResult<ErpPresetEntry>.Fail(ErpErrorKind.BadResponse, "preset missing from create response");
+    }
+
+    private async Task<ErpResult<ErpPresetEntry>> UpdatePresetAsync(
+        string relative, object payload, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?> { ["payload"] = payload };
+        var r = await PutJsonAsync(relative, body, ct);
+        if (r.Error is not null) return ErpResult<ErpPresetEntry>.Fail(r.Error);
+        if (r.Value is null)
+            return ErpResult<ErpPresetEntry>.Fail(ErpErrorKind.BadResponse, "empty update response");
+        using var doc = r.Value;
+        return ParsePresetEntry(doc.RootElement) is { } entry
+            ? ErpResult<ErpPresetEntry>.Success(entry)
+            : ErpResult<ErpPresetEntry>.Fail(ErpErrorKind.BadResponse, "preset missing from update response");
+    }
+
     public void Dispose() => _http.Dispose();
 
     // -- Transport ---------------------------------------------------------
 
     private Task<ErpResult<JsonDocument>> GetJsonAsync(string relative, CancellationToken ct)
-        => SendJsonAsync(() => _http.GetAsync(relative, ct), ct);
+        => SendJsonAsync(() => _http.GetAsync(relative, ct), ct, allowEmpty: false);
 
     private Task<ErpResult<JsonDocument>> PostJsonAsync(string relative, object body, CancellationToken ct)
         => SendJsonAsync(() =>
@@ -263,21 +405,49 @@ public sealed class ErpClient : IDisposable
                 JsonSerializer.Serialize(body, PostOptions),
                 System.Text.Encoding.UTF8, "application/json");
             return _http.PostAsync(relative, content, ct);
-        }, ct);
+        }, ct, allowEmpty: false);
+
+    private Task<ErpResult<JsonDocument>> PutJsonAsync(string relative, object body, CancellationToken ct)
+        => SendJsonAsync(() =>
+        {
+            var content = new StringContent(
+                JsonSerializer.Serialize(body, PostOptions),
+                System.Text.Encoding.UTF8, "application/json");
+            return _http.PutAsync(relative, content, ct);
+        }, ct, allowEmpty: true);
+
+    private async Task<ErpResult<bool>> DeleteJsonAsync(string relative, CancellationToken ct)
+    {
+        var r = await SendJsonAsync(() => _http.DeleteAsync(relative, ct), ct, allowEmpty: true);
+        if (r.Error is not null) return ErpResult<bool>.Fail(r.Error);
+        r.Value?.Dispose();
+        return ErpResult<bool>.Success(true);
+    }
 
     private static readonly JsonSerializerOptions PostOptions = new()
     {
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
     };
 
+    /// <param name="allowEmpty">
+    /// When true, HTTP 204 / empty 2xx bodies succeed with a null document
+    /// (DELETE and some PUT implementations).
+    /// </param>
     private static async Task<ErpResult<JsonDocument>> SendJsonAsync(
-        Func<Task<HttpResponseMessage>> send, CancellationToken ct)
+        Func<Task<HttpResponseMessage>> send, CancellationToken ct, bool allowEmpty)
     {
         try
         {
             using var resp = await send();
             if (resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-                return ErpResult<JsonDocument>.Fail(ErpErrorKind.Unauthorized, "token invalid or revoked");
+            {
+                string body401 = "";
+                try { body401 = await resp.Content.ReadAsStringAsync(ct); } catch { /* optional */ }
+                string msg = ExtractErrorMessage(body401, (int)resp.StatusCode);
+                if (string.IsNullOrWhiteSpace(msg) || msg.StartsWith("HTTP ", StringComparison.Ordinal))
+                    msg = "token invalid or revoked";
+                return ErpResult<JsonDocument>.Fail(new ErpError(ErpErrorKind.Unauthorized, msg, (int)resp.StatusCode, body401));
+            }
             if (!resp.IsSuccessStatusCode)
             {
                 string body = "";
@@ -287,8 +457,18 @@ public sealed class ErpClient : IDisposable
                     ErpErrorKind.BadResponse, ExtractErrorMessage(body, status), status, body));
             }
 
-            var stream = await resp.Content.ReadAsStreamAsync(ct);
-            var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+            if (resp.StatusCode == HttpStatusCode.NoContent)
+                return allowEmpty
+                    ? ErpResult<JsonDocument>.Success(null!)
+                    : ErpResult<JsonDocument>.Fail(ErpErrorKind.BadResponse, "empty response");
+
+            var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+            if (bytes.Length == 0)
+                return allowEmpty
+                    ? ErpResult<JsonDocument>.Success(null!)
+                    : ErpResult<JsonDocument>.Fail(ErpErrorKind.BadResponse, "empty response");
+
+            var doc = JsonDocument.Parse(bytes);
             return ErpResult<JsonDocument>.Success(doc);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -464,6 +644,78 @@ public sealed class ErpClient : IDisposable
             QuantityDiscounts:        discounts.OrderBy(d => d.MinQuantity).ToList());
     }
 
+    internal static ErpPresetsBundle ParsePresetsBundle(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            return new ErpPresetsBundle("", [], []);
+
+        string version = GetString(root, "version", "etag", "hash", "updatedAt") ?? "";
+        var print = new List<ErpPresetEntry>();
+        var mats  = new List<ErpPresetEntry>();
+
+        if (TryGetPropertyCi(root, "printPresets", out var printArr) && printArr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in printArr.EnumerateArray())
+                if (ParsePresetEntry(item) is { } parsed) print.Add(parsed);
+        }
+        else if (TryGetPropertyCi(root, "print", out var printAlt) && printAlt.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in printAlt.EnumerateArray())
+                if (ParsePresetEntry(item) is { } parsed) print.Add(parsed);
+        }
+
+        if (TryGetPropertyCi(root, "materialPresets", out var matArr) && matArr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in matArr.EnumerateArray())
+                if (ParsePresetEntry(item) is { } parsed) mats.Add(parsed);
+        }
+        else if (TryGetPropertyCi(root, "materials", out var matAlt) && matAlt.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in matAlt.EnumerateArray())
+                if (ParsePresetEntry(item) is { } parsed) mats.Add(parsed);
+        }
+
+        return new ErpPresetsBundle(version, print, mats);
+    }
+
+    /// <summary>
+    /// Accepts <c>{ id, updatedAt, updatedBy?, payload: {...} }</c> or a bare payload object
+    /// with an optional id field (tolerant of ERP shape drift).
+    /// </summary>
+    internal static ErpPresetEntry? ParsePresetEntry(JsonElement el)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return null;
+
+        string id = GetString(el, "id", "presetId", "uuid") ?? "";
+        DateTime? updatedAt = null;
+        if (GetString(el, "updatedAt", "updated", "modifiedAt") is { Length: > 0 } u
+            && DateTime.TryParse(u, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+            updatedAt = dt.ToUniversalTime();
+
+        string? updatedBy = GetString(el, "updatedBy", "user", "author");
+
+        JsonElement payloadEl = el;
+        if (TryGetPropertyCi(el, "payload", out var wrapped) && wrapped.ValueKind == JsonValueKind.Object)
+            payloadEl = wrapped;
+
+        // Bare payloads need an id either at top level or we cannot update later.
+        if (id.Length == 0)
+            id = GetString(payloadEl, "id", "ErpId", "erpId") ?? "";
+
+        // Synthesize a stable-enough id from Name when the server returns bare rows without id
+        // (should be rare — creates still need a real server id).
+        if (id.Length == 0)
+        {
+            var name = GetString(payloadEl, "Name", "name") ?? "";
+            if (name.Length == 0) return null;
+            id = "name:" + name;
+        }
+
+        string payloadJson = payloadEl.GetRawText();
+        return new ErpPresetEntry(id, updatedAt, updatedBy, payloadJson);
+    }
+
     internal static ErpCosting ParseCosting(JsonElement el)
     {
         // Live-ERP shape: per-unit costs nest under "perUnit"; quantityDiscount and
@@ -503,6 +755,41 @@ public sealed class ErpClient : IDisposable
                        System.Globalization.CultureInfo.InvariantCulture, out double p)) return p;
         }
         return null;
+    }
+
+    internal static ErpLoginResult? ParseLogin(JsonElement root)
+    {
+        var el = root;
+        if (el.ValueKind != JsonValueKind.Object) return null;
+        if (TryGetPropertyCi(el, "token", out _) is false
+            && TryGetPropertyCi(el, "data", out var data) && data.ValueKind == JsonValueKind.Object)
+            el = data;
+        if (TryGetPropertyCi(el, "token", out _) is false
+            && TryGetPropertyCi(el, "slicer", out var slicer) && slicer.ValueKind == JsonValueKind.Object)
+            el = slicer;
+
+        string token = GetString(el, "token", "accessToken", "access_token", "apiToken", "api_token") ?? "";
+        if (token.Length == 0 && TryGetPropertyCi(root, "slicerToken", out var st) && st.ValueKind == JsonValueKind.String)
+            token = st.GetString() ?? "";
+        if (token.Length == 0) return null;
+
+        DateTime? expires = null;
+        if (GetString(el, "expiresAt", "expires_at", "expiry", "exp") is { Length: > 0 } exp
+            && DateTime.TryParse(exp, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+            expires = dt.ToUniversalTime();
+
+        string? email = GetString(el, "email", "userEmail")
+                        ?? GetString(root, "email");
+        string? name  = GetString(el, "name", "displayName", "fullName")
+                        ?? GetString(root, "name", "displayName");
+        if (name is null && TryGetPropertyCi(root, "user", out var user) && user.ValueKind == JsonValueKind.Object)
+        {
+            email ??= GetString(user, "email");
+            name  = GetString(user, "name", "displayName", "fullName");
+        }
+
+        return new ErpLoginResult(token, email, name, expires);
     }
 
     /// <summary>Case-insensitive multi-name string lookup; numbers stringify.</summary>

@@ -41,6 +41,9 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
             AreaSelectStatus = "Whole model";
         });
 
+        CapturePlanarFromCameraCommand = new RelayCommand(() => CapturePlanarFromCamera?.Invoke());
+        CapturePlanarFromPaintCommand = new RelayCommand(() => CapturePlanarFromPaint?.Invoke());
+
         ReloadBitLibrary();
     }
 
@@ -149,6 +152,7 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         ToolDiameterMm = bit.DiameterMm;
         BallEnd = bit.IsBallEnd;
         MaxDepthMm = bit.MaxDepthMm;
+        OnPropertyChanged(nameof(PreviewCylinderLengthMm));
         SpindleRpm = cut.SpindleRpm;
         SpindleDirection = cut.SpindleDirection;
         CuttingFeedMmS = cut.CuttingFeedMmS > 0 ? cut.CuttingFeedMmS : cut.CuttingFeedMmMin / 60.0;
@@ -158,6 +162,22 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         FinishAllowanceMm = cut.FinishAllowanceMm;
         RapidZMm = cut.RapidZMm;
         OnPropertyChanged(nameof(BitName));
+        OnPropertyChanged(nameof(PreviewCylinderLengthMm));
+    }
+
+    /// <summary>Live preview stick-out (mm). Changing this rebuilds the spindle cylinder.</summary>
+    public double PreviewCylinderLengthMm
+    {
+        get => SelectedBit?.EffectiveCylinderLengthMm ?? 50;
+        set
+        {
+            if (SelectedBit is null) return;
+            var next = Math.Max(0, value);
+            if (Math.Abs(SelectedBit.CylinderLengthMm - next) < 1e-4) return;
+            SelectedBit.CylinderLengthMm = next;
+            PersistBitLibrary();
+            OnPropertyChanged(nameof(PreviewCylinderLengthMm));
+        }
     }
 
     // -- Operation type (step 2 OPERATION) ------------------------------------
@@ -206,6 +226,7 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
             OnPropertyChanged(nameof(IsCutout));
             OnPropertyChanged(nameof(IsContouring));
             OnPropertyChanged(nameof(IsSwarf));
+            OnPropertyChanged(nameof(ShowsPlanarToolAxis));
         }
     }
 
@@ -228,6 +249,7 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     public bool IsCutout             => SelectedOperation == MillOperationKind.Cutout;
     public bool IsContouring         => SelectedOperation == MillOperationKind.Contouring;
     public bool IsSwarf              => SelectedOperation == MillOperationKind.Swarf;
+    public bool ShowsPlanarToolAxis  => IsPlanarFacing || IsPlanarClearing;
 
     /// <summary>Step 2 OPERATION card expansion.</summary>
     public bool StepOperationExpanded
@@ -284,6 +306,151 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
 
     /// <summary>Host clears face/region selection for the mill operation.</summary>
     public Action? ClearAreaSelection { get; set; }
+
+    /// <summary>Host captures the current camera as the planar approach (eye → work).</summary>
+    public Action? CapturePlanarFromCamera { get; set; }
+
+    /// <summary>Host averages the painted mill area into the planar axis.</summary>
+    public Action? CapturePlanarFromPaint { get; set; }
+
+    // -- Planar tool axis (facing / clearing) ---------------------------------
+
+    private MillPlanarAxisOption _planarToolAxis = MillPlanarAxisOption.Default;
+    private double _planarTiltDeg;
+    private double _planarAzimuthDeg;
+    private double _planarCustomX;
+    private double _planarCustomY;
+    private double _planarCustomZ = -1;
+    private double _planarCapturedX;
+    private double _planarCapturedY;
+    private double _planarCapturedZ = -1;
+
+    public static IReadOnlyList<MillPlanarAxisOption> PlanarToolAxisOptions => MillPlanarAxisOption.All;
+
+    /// <summary>Where T12 +Z points before tilt. Raster is along the opposite direction.</summary>
+    public MillPlanarAxisOption PlanarToolAxis
+    {
+        get => _planarToolAxis ?? MillPlanarAxisOption.Default;
+        set
+        {
+            var next = value ?? MillPlanarAxisOption.Default;
+            if (!SetField(ref _planarToolAxis, next)) return;
+            OnPropertyChanged(nameof(PlanarToolAxisIndex));
+            OnPropertyChanged(nameof(IsPlanarAxisCustom));
+            NotifyPlanarAxis();
+        }
+    }
+
+    public int PlanarToolAxisIndex
+    {
+        get => PlanarToolAxisOptions.ToList().FindIndex(o => o.Kind == PlanarToolAxis.Kind);
+        set
+        {
+            if (value < 0 || value >= PlanarToolAxisOptions.Count) return;
+            PlanarToolAxis = PlanarToolAxisOptions[value];
+        }
+    }
+
+    public bool IsPlanarAxisCustom => PlanarToolAxis.Kind == MillPlanarAxisKind.Custom;
+
+    /// <summary>Tilt of T12 +Z off the chosen axis (deg).</summary>
+    public double PlanarTiltDeg
+    {
+        get => _planarTiltDeg;
+        set
+        {
+            if (!SetField(ref _planarTiltDeg, Math.Clamp(value, -90, 90))) return;
+            NotifyPlanarAxis();
+        }
+    }
+
+    /// <summary>Which way the tilt leans, around the chosen tool axis (deg).</summary>
+    public double PlanarAzimuthDeg
+    {
+        get => _planarAzimuthDeg;
+        set
+        {
+            if (!SetField(ref _planarAzimuthDeg, value)) return;
+            NotifyPlanarAxis();
+        }
+    }
+
+    public double PlanarCustomX
+    {
+        get => _planarCustomX;
+        set { if (SetField(ref _planarCustomX, value)) NotifyPlanarAxis(); }
+    }
+
+    public double PlanarCustomY
+    {
+        get => _planarCustomY;
+        set { if (SetField(ref _planarCustomY, value)) NotifyPlanarAxis(); }
+    }
+
+    public double PlanarCustomZ
+    {
+        get => _planarCustomZ;
+        set { if (SetField(ref _planarCustomZ, value)) NotifyPlanarAxis(); }
+    }
+
+    public string PlanarAxisStatus
+    {
+        get
+        {
+            var tool = ResolvePlanarToolAxis();
+            var approach = MillPlanarOrientation.ApproachFromToolAxis(tool);
+            return $"T12 +Z = ({tool.X:0.###}, {tool.Y:0.###}, {tool.Z:0.###})  ·  project from ({approach.X:0.###}, {approach.Y:0.###}, {approach.Z:0.###})";
+        }
+    }
+
+    public RelayCommand CapturePlanarFromCameraCommand { get; }
+    public RelayCommand CapturePlanarFromPaintCommand { get; }
+
+    void NotifyPlanarAxis()
+    {
+        OnPropertyChanged(nameof(PlanarAxisStatus));
+        OnPropertyChanged(nameof(IsPlanarAxisCustom));
+    }
+
+    /// <summary>T12 +Z after preset + tilt. Used by planar Generate + mill ABC.</summary>
+    public System.Numerics.Vector3 ResolvePlanarToolAxis()
+    {
+        var kind = PlanarToolAxis.Kind;
+        var captured = kind switch
+        {
+            MillPlanarAxisKind.Custom => new System.Numerics.Vector3(
+                (float)PlanarCustomX, (float)PlanarCustomY, (float)PlanarCustomZ),
+            _ => new System.Numerics.Vector3(
+                (float)_planarCapturedX, (float)_planarCapturedY, (float)_planarCapturedZ),
+        };
+        return MillPlanarOrientation.ResolveToolAxis(
+            kind, captured, (float)PlanarTiltDeg, (float)PlanarAzimuthDeg);
+    }
+
+    /// <summary>World direction the cutter comes from (raster +Z).</summary>
+    public System.Numerics.Vector3 ResolvePlanarApproach()
+        => MillPlanarOrientation.ApproachFromToolAxis(ResolvePlanarToolAxis());
+
+    /// <summary>Store a captured T12 +Z (from paint or camera) and switch the combo.</summary>
+    public void SetCapturedToolAxis(System.Numerics.Vector3 toolZ, MillPlanarAxisKind kind)
+    {
+        if (toolZ.LengthSquared() < 1e-12f) toolZ = -System.Numerics.Vector3.UnitZ;
+        toolZ = System.Numerics.Vector3.Normalize(toolZ);
+        _planarCapturedX = toolZ.X;
+        _planarCapturedY = toolZ.Y;
+        _planarCapturedZ = toolZ.Z;
+        if (kind == MillPlanarAxisKind.Custom)
+        {
+            _planarCustomX = toolZ.X;
+            _planarCustomY = toolZ.Y;
+            _planarCustomZ = toolZ.Z;
+            OnPropertyChanged(nameof(PlanarCustomX));
+            OnPropertyChanged(nameof(PlanarCustomY));
+            OnPropertyChanged(nameof(PlanarCustomZ));
+        }
+        PlanarToolAxis = MillPlanarAxisOption.Find(kind);
+        NotifyPlanarAxis();
+    }
 
     // -- Tool geometry (from bit library; not edited in TOOLPATHING) ------------
 

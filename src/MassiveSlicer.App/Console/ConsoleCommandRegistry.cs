@@ -136,15 +136,17 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "erp",
-            Description = "ERP attachment: erp url <u> | token <t> | connect | expand | search <q> | attach <i> [elemIdx] | newelem <name> | sendslice | pricing | quote [qty] [finishing] | detach | status",
+            Description = "ERP: erp url | email | password | token | connect | expand | search | attach | newelem | sendslice | pricing | quote | presets | detach | status",
             Execute = (ctx, args) =>
             {
                 var erp = ctx.Main.Viewport.Erp;
                 var parts = args.Trim().Split(' ', 2);
                 switch (parts[0].ToLowerInvariant())
                 {
-                    case "url":     erp.BaseUrl  = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[erp] url = {erp.BaseUrl}"); break;
-                    case "token":   erp.ApiToken = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log("[erp] token set"); break;
+                    case "url":      erp.BaseUrl  = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[erp] url = {erp.BaseUrl}"); break;
+                    case "email":    erp.Email    = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log("[erp] email set"); break;
+                    case "password": erp.Password = parts.ElementAtOrDefault(1) ?? ""; ctx.Log("[erp] password set"); break;
+                    case "token":    erp.ApiToken = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log("[erp] token set"); break;
                     case "connect": erp.ConnectCommand.Execute(null); break;
                     case "expand":
                     case "toggle":
@@ -196,6 +198,13 @@ public sealed class ConsoleCommandRegistry
                         break;
                     }
                     case "sendslice": erp.SendSliceCommand.Execute(null); break;
+                    case "presets":
+                    case "syncpresets":
+                        ctx.Log(erp.PresetsSyncStatus.Length > 0
+                            ? $"[erp] last presets sync: {erp.PresetsSyncStatus}"
+                            : "[erp] no presets sync yet — pulling now…");
+                        _ = erp.SyncPresetsLibraryAsync();
+                        break;
                     case "reattach":  erp.ReattachToProjectCommand.Execute(null); break;
                     case "pricing":
                         if (erp.PricingConfig is { } cfg)
@@ -729,6 +738,7 @@ public sealed class ConsoleCommandRegistry
                     ctx.Log("[mill] status | area <whole|face|box|lasso|brush|clear>");
                     ctx.Log("[mill] brush size <mm> | brush falloff <0..1>");
                     ctx.Log("[mill] op <MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf>");
+                    ctx.Log("[mill] axis <-z|+z|+x|-x|+y|-y|paint|camera|custom> | tilt <deg> | azimuth <deg>");
                     return;
                 }
 
@@ -739,6 +749,8 @@ public sealed class ConsoleCommandRegistry
                         ctx.Log($"[mill] paint: {vp.MillPaintedVertices:N0} verts ({vp.MillPaintCoverage * 100:0.#}%)  target={vp.MillAreaTargetRoot?.Name ?? "(none)"}");
                         ctx.Log($"[mill] layers: {vp.DescribeMillPaint?.Invoke() ?? "n/a"}");
                         ctx.Log($"[mill] operation={sub.SelectedOperation}");
+                        var tool = sub.ResolvePlanarToolAxis();
+                        ctx.Log($"[mill] tool-axis={sub.PlanarToolAxis.Kind} tilt={sub.PlanarTiltDeg:0.#} az={sub.PlanarAzimuthDeg:0.#}  T12=({tool.X:0.###},{tool.Y:0.###},{tool.Z:0.###})");
                         ctx.Log($"[mill] status: {vp.MillAreaStatusText}");
                         break;
 
@@ -807,6 +819,64 @@ public sealed class ConsoleCommandRegistry
                         {
                             ctx.LogError("[mill] op: MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf");
                         }
+                        break;
+                    }
+
+                    case "axis" when parts.Length >= 2:
+                    {
+                        var t = parts[1].ToLowerInvariant();
+                        var kind = t switch
+                        {
+                            "-z" or "z-" or "negz" or "down" => Core.Models.MillPlanarAxisKind.WorldNegZ,
+                            "+z" or "z+" or "posz" or "up" => Core.Models.MillPlanarAxisKind.WorldPosZ,
+                            "+x" or "x+" or "posx" => Core.Models.MillPlanarAxisKind.WorldPosX,
+                            "-x" or "x-" or "negx" => Core.Models.MillPlanarAxisKind.WorldNegX,
+                            "+y" or "y+" or "posy" => Core.Models.MillPlanarAxisKind.WorldPosY,
+                            "-y" or "y-" or "negy" => Core.Models.MillPlanarAxisKind.WorldNegY,
+                            "paint" or "painted" or "face" => Core.Models.MillPlanarAxisKind.PaintedFace,
+                            "cam" or "camera" or "view" => Core.Models.MillPlanarAxisKind.Camera,
+                            "custom" or "xyz" => Core.Models.MillPlanarAxisKind.Custom,
+                            _ => (Core.Models.MillPlanarAxisKind?)null,
+                        };
+                        if (kind is null)
+                        {
+                            ctx.LogError("[mill] axis: -z|+z|+x|-x|+y|-y|paint|camera|custom");
+                            break;
+                        }
+                        if (kind == Core.Models.MillPlanarAxisKind.PaintedFace)
+                            sub.CapturePlanarFromPaintCommand.Execute(null);
+                        else if (kind == Core.Models.MillPlanarAxisKind.Camera)
+                            sub.CapturePlanarFromCameraCommand.Execute(null);
+                        else
+                            sub.PlanarToolAxis = MassiveSlicer.ViewModels.MillPlanarAxisOption.Find(kind.Value);
+                        var axisTool = sub.ResolvePlanarToolAxis();
+                        ctx.Log($"[mill] axis → {sub.PlanarToolAxis.Kind}  T12=({axisTool.X:0.###},{axisTool.Y:0.###},{axisTool.Z:0.###})");
+                        break;
+                    }
+
+                    case "tilt" when parts.Length >= 2:
+                    {
+                        if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var deg))
+                        {
+                            ctx.LogError("[mill] tilt <deg>");
+                            break;
+                        }
+                        sub.PlanarTiltDeg = deg;
+                        ctx.Log($"[mill] tilt → {sub.PlanarTiltDeg:0.#}°  {sub.PlanarAxisStatus}");
+                        break;
+                    }
+
+                    case "azimuth" or "az" when parts.Length >= 2:
+                    {
+                        if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var deg))
+                        {
+                            ctx.LogError("[mill] azimuth <deg>");
+                            break;
+                        }
+                        sub.PlanarAzimuthDeg = deg;
+                        ctx.Log($"[mill] azimuth → {sub.PlanarAzimuthDeg:0.#}°  {sub.PlanarAxisStatus}");
                         break;
                     }
 
