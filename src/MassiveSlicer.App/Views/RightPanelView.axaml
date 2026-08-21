@@ -1180,46 +1180,6 @@
                                        Text="The anchor (surface break) stays fixed on every layer so the neck stacks vertically. Press Update Slice to apply changes."/>
                         </StackPanel>
                     </Expander>
-                    <Expander Classes="SectionExpander" Header="MATERIAL" IsExpanded="False">
-                        <StackPanel Margin="0,0,0,6">
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <ComboBox Grid.Column="0"
-                                          HorizontalAlignment="Stretch"
-                                          Margin="0,0,4,0"
-                                          PlaceholderText="No preset selected"
-                                          ItemsSource="{Binding Additive.MaterialPresets}"
-                                          SelectedIndex="{Binding Additive.SelectedPresetIndex, Mode=TwoWay}">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding Name}"/>
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
-                                <Button Grid.Column="1"
-                                        Classes="ToolbarButton"
-                                        Padding="8,2"
-                                        Margin="0,0,2,0"
-                                        Click="OnEditMaterialClicked"
-                                        IsEnabled="{Binding Additive.HasSelectedPreset}"
-                                        ToolTip.Tip="Edit selected material preset">
-                                    <ia:Icon Value="mdi-pencil" FontSize="14"/>
-                                </Button>
-                                <Button Grid.Column="2"
-                                        Classes="ToolbarButton"
-                                        Padding="8,2"
-                                        Click="OnAddMaterialClicked"
-                                        ToolTip.Tip="Add new material preset">
-                                    <ia:Icon Value="mdi-plus" FontSize="16"/>
-                                </Button>
-                            </Grid>
-                        </StackPanel>
-                    
-                    </Expander>
                     <Expander Classes="SectionExpander" Header="GEOMETRY" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
                             <Grid Margin="8,2,8,4">
