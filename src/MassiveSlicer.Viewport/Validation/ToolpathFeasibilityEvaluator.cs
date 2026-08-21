@@ -43,6 +43,9 @@ public static class ToolpathFeasibilityEvaluator
     /// <param name="HomeE1">Rail position when a move carries no planned E1.</param>
     /// <param name="World">Collision world, or null to skip the collision sweep.</param>
     /// <param name="Robroot">Live ROBROOT world position (rail parked at home).</param>
+    /// <param name="Joints">Cell's per-axis joint limits, or null to skip envelope filtering
+    /// (a solution the raw IK solver returns can still be outside the physical joint range —
+    /// this is the check that catches that instead of treating any non-null solve as reachable).</param>
     public sealed record Input(
         GltfNumericalIkSolver Solver,
         Toolpath Toolpath,
@@ -61,7 +64,8 @@ public static class ToolpathFeasibilityEvaluator
         NMatrix WorldTransformColl,
         NVec3 OriginColl,
         float BeadWidthColl,
-        TkVector3 Robroot);
+        TkVector3 Robroot,
+        IReadOnlyList<JointConfig>? Joints = null);
 
     /// <summary>Per-move verdicts, all arrays indexed by flat move index.</summary>
     /// <param name="Reachable">False where IK failed to converge.</param>
@@ -99,6 +103,8 @@ public static class ToolpathFeasibilityEvaluator
         float homeE1 = input.HomeE1;
         var homeWorld = input.HomeWorld;
         var robroot  = input.Robroot;
+        var cellJoints = input.Joints;
+        bool millPath = ToolpathHasMillMoves(toolpath);
 
         int total = 0;
         foreach (var layer in toolpath.Layers) total += layer.Moves.Count;
@@ -159,7 +165,9 @@ public static class ToolpathFeasibilityEvaluator
         var targetRots = new (TkVector3 r0, TkVector3 r1, TkVector3 r2)[total];
         for (int i = 0; i < total; i++)
         {
-            targetRots[i] = solver.TargetRotFromGlobalOrientation(normals[i], offA, offB, offC);
+            targetRots[i] = millPath
+                ? solver.TargetRotFromMillNormal(normals[i])
+                : solver.TargetRotFromGlobalOrientation(normals[i], offA, offB, offC);
         }
 
         if (ct.IsCancellationRequested) return null;
@@ -187,9 +195,11 @@ public static class ToolpathFeasibilityEvaluator
                     {
                         if (ct.IsCancellationRequested) return;
                         var sol = solver.Solve(targets[i], chunkSeed, targetRots[i], maxIterations: 40);
-                        result[i]      = sol is not null;
-                        ikSolutions[i] = sol;
-                        if (sol is not null) chunkSeed = sol;
+                        bool inEnv = sol is not null &&
+                            (cellJoints is null || JointLimitEnvelope.JointsInside(sol, cellJoints));
+                        result[i]      = inEnv;
+                        ikSolutions[i] = inEnv ? sol : null;
+                        if (inEnv) chunkSeed = sol!;
                     }
                 });
         }
@@ -270,8 +280,10 @@ public static class ToolpathFeasibilityEvaluator
                             bool ok = true;
                             foreach (int ti in new[] { s0, (s0 + s1) / 2, s1 })
                             {
-                                var rot = solver.TargetRotFromGlobalOrientation(
-                                    normals[ti], offA, offB, offC + y);
+                                var rot = millPath
+                                    ? solver.TargetRotFromMillNormal(normals[ti], y)
+                                    : solver.TargetRotFromGlobalOrientation(
+                                        normals[ti], offA, offB, offC + y);
                                 var sol = solver.Solve(targets[ti],
                                     solutions[Math.Max(0, ti - 1)], rot, maxIterations: 60);
                                 if (sol is null || MathF.Abs(sol[4]) < MinA5) { ok = false; break; }
@@ -298,11 +310,15 @@ public static class ToolpathFeasibilityEvaluator
                         var chunkSeed = solutions[Math.Max(0, rIn - 1)];
                         for (int i = rIn; i <= rOut; i++)
                         {
-                            var rot = solver.TargetRotFromGlobalOrientation(
-                                normals[i], offA, offB, offC + yawByMove[i]);
+                            var rot = millPath
+                                ? solver.TargetRotFromMillNormal(normals[i], yawByMove[i])
+                                : solver.TargetRotFromGlobalOrientation(
+                                    normals[i], offA, offB, offC + yawByMove[i]);
                             var sol = solver.Solve(targets[i], chunkSeed, rot, maxIterations: 40);
-                            result[i] = sol is not null;
-                            if (sol is not null) { solutions[i] = sol; chunkSeed = sol; }
+                            bool inEnv = sol is not null &&
+                                (cellJoints is null || JointLimitEnvelope.JointsInside(sol, cellJoints));
+                            result[i] = inEnv;
+                            if (inEnv) { solutions[i] = sol!; chunkSeed = sol!; }
                             singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
                         }
                     }
@@ -386,6 +402,17 @@ public static class ToolpathFeasibilityEvaluator
             Collision: collision,
             CollisionStride: collStride,
             FirstCollisionHit: firstCollHit);
+    }
+
+    /// <summary>Mill T12 uses a different target-rotation convention (cutter along tool +Z into
+    /// the work) than the extruder — mirrors ViewportView.axaml.cs's own copy of this check.</summary>
+    static bool ToolpathHasMillMoves(Toolpath? tp)
+    {
+        if (tp is null) return false;
+        foreach (var layer in tp.Layers)
+            foreach (var m in layer.Moves)
+                if (m.Kind == MoveKind.Mill) return true;
+        return false;
     }
 
     /// <summary>

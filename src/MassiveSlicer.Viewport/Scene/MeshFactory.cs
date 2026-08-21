@@ -59,4 +59,63 @@ public static class MeshFactory
 
         return new MeshData(positions, normals, indices, name);
     }
+
+    /// <summary>
+    /// Unit cylinder along +Z: base disk in the XY plane at Z=0, top at Z=<paramref name="height"/>.
+    /// Units match the caller. Spindle preview passes metres (baked tool mesh + flange ×1000).
+    /// </summary>
+    public static MeshData CreateCylinder(
+        float  radius   = 5f,
+        float  height   = 20f,
+        int    segments = 24,
+        string name     = "Cylinder",
+        Vector4? baseColor = null)
+    {
+        // Floor is near-zero so a 1 mm stick-out in metre-baked tool space (0.001)
+        // is not inflated to 50 mm. Degenerate 0 still becomes a sliver.
+        radius   = Math.Max(radius, 1e-6f);
+        height   = Math.Max(height, 1e-6f);
+        segments = Math.Max(segments, 8);
+
+        // Bottom ring, top ring, bottom-cap centre, top-cap centre.
+        int ring = segments + 1;
+        var positions = new Vector3[ring * 2 + 2];
+        var normals   = new Vector3[positions.Length];
+
+        for (int s = 0; s <= segments; s++)
+        {
+            float theta = 2f * MathF.PI * s / segments;
+            float cx = MathF.Cos(theta), sy = MathF.Sin(theta);
+            var radial = new Vector3(cx, sy, 0f);
+            positions[s]        = new Vector3(cx * radius, sy * radius, 0f);
+            normals  [s]        = radial;
+            positions[ring + s] = new Vector3(cx * radius, sy * radius, height);
+            normals  [ring + s] = radial;
+        }
+
+        int iBot = ring * 2;
+        int iTop = iBot + 1;
+        positions[iBot] = Vector3.Zero;
+        normals  [iBot] = -Vector3.UnitZ;
+        positions[iTop] = new Vector3(0f, 0f, height);
+        normals  [iTop] =  Vector3.UnitZ;
+
+        var indices = new uint[segments * 12];
+        int k = 0;
+        for (int s = 0; s < segments; s++)
+        {
+            uint a = (uint)s, b = (uint)(s + 1);
+            uint c = (uint)(ring + s), d = (uint)(ring + s + 1);
+            // side (outward)
+            indices[k++] = a; indices[k++] = c; indices[k++] = b;
+            indices[k++] = b; indices[k++] = c; indices[k++] = d;
+            // bottom cap (normal -Z)
+            indices[k++] = (uint)iBot; indices[k++] = b; indices[k++] = a;
+            // top cap (normal +Z)
+            indices[k++] = (uint)iTop; indices[k++] = c; indices[k++] = d;
+        }
+
+        var color = baseColor ?? new Vector4(0.24f, 0.80f, 0.06f, 1f);
+        return new MeshData(positions, normals, indices, name, color, metallic: 0.15f, roughness: 0.45f);
+    }
 }

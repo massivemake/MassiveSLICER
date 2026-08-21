@@ -127,6 +127,16 @@ public partial class MainWindow : Window
         {
             foreach (var p in paths)
             {
+                // A KRL program is a toolpath, not a model, so it fails the mesh loader. Route it
+                // to the same importer the Import KRL menu item uses instead of reporting a
+                // failure the file never deserved.
+                if (p.EndsWith(".src", StringComparison.OrdinalIgnoreCase)
+                 || p.EndsWith(".krl", StringComparison.OrdinalIgnoreCase))
+                {
+                    vm.ImportKrlToolpath(p);
+                    continue;
+                }
+
                 if (!vm.ImportModelFromPath(p))
                     vm.Console.LogError($"[import] Failed to import '{p}'.");
             }

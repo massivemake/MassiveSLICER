@@ -1270,6 +1270,25 @@ public sealed partial class ViewportViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasSequenceWaypointTags));
     }
 
+    public ObservableCollection<TcpAxisTag> TcpAxisTags { get; } = [];
+
+    public bool HasTcpAxisTags => TcpAxisTags.Count > 0;
+
+    public void SetTcpAxisTags(IReadOnlyList<TcpAxisTag> tags)
+    {
+        TcpAxisTags.Clear();
+        foreach (var tag in tags)
+            TcpAxisTags.Add(tag);
+        OnPropertyChanged(nameof(HasTcpAxisTags));
+    }
+
+    public void ClearTcpAxisTags()
+    {
+        if (TcpAxisTags.Count == 0) return;
+        TcpAxisTags.Clear();
+        OnPropertyChanged(nameof(HasTcpAxisTags));
+    }
+
     public int ToolChangeScrubValue
     {
         get => _toolChangeScrubValue;
@@ -1356,14 +1375,20 @@ public sealed partial class ViewportViewModel : ViewModelBase
         RaiseToolChangeCommandsCanExecuteChanged();
     }
 
+    /// <summary>
+    /// When true, the next flange mount from a workflow PRINT/SCAN/MILL click
+    /// swaps the toolhead mesh but does not <c>Select</c> it (no TCP gizmo).
+    /// </summary>
+    internal bool SuppressNextToolViewportSelect { get; set; }
+
     void SelectLfam3WorkflowPhase(int phaseIndex, string toolName)
     {
         if (!ShowLfam3ToolPicker) return;
         _lfam3WorkflowPhaseIndex = phaseIndex;
-        // Phase UI / sidebar only. Do not mount or select the phase tool here —
-        // that was selecting the TCP toolhead in the viewport on every Print/Scan/Mill click.
-        // Explicit pick/deposit (or robot tool dropdown) still mounts tools when the user asks.
-        _ = toolName;
+        // Instant flange swap for the phase (Extruder / Scanner / Spindle).
+        // Do not leave the TCP selected — that used to steal the viewport gizmo.
+        SuppressNextToolViewportSelect = true;
+        SelectLfam3Tool(toolName);
         NotifyWorkflowStateChanged();
     }
 
@@ -1373,7 +1398,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
         int? phase = MountedToolName switch
         {
             "Extruder" or "HV Extruder" => PrintPhaseIndex,
-            "Spindle"     => MillPhaseIndex,
+            "Scanner" or "Scanner (Calibrated)" or "Scanner (No Calibration)" => ScanPhaseIndex,
+            "Spindle" or "Spindle (No Bit)" or "Spindle (Probe)" => MillPhaseIndex,
             _             => null,
         };
         if (phase is int p && p != _lfam3WorkflowPhaseIndex)
@@ -5198,6 +5224,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         MillCommand = new RelayCommand(() => _ = OnMillRequested?.Invoke());
         PreviewDisplacedCommand = new RelayCommand(() => _ = OnPreviewDisplacedRequested?.Invoke());
         GenerateMultiAxisCommand = new RelayCommand(() => _ = OnGenerateMultiAxisRequested?.Invoke());
+        GenerateMillFromSettingsCommand = new RelayCommand(() => _ = OnGenerateMillFromSettingsRequested?.Invoke());
 
         UpdateSliceCommand = new RelayCommand(
             execute:    () => _ = OnUpdateSliceRequested?.Invoke(),
@@ -5716,7 +5743,13 @@ public sealed partial class ViewportViewModel : ViewModelBase
     public bool SliceStatusIsError
     {
         get => _sliceStatusIsError;
-        set => SetField(ref _sliceStatusIsError, value);
+        set
+        {
+            // ShowSliceStatus gates on this too — without the notify the banner only
+            // re-evaluates when the message text also changes.
+            if (SetField(ref _sliceStatusIsError, value))
+                OnPropertyChanged(nameof(ShowSliceStatus));
+        }
     }
 
     /// <summary>True when a slice error message should be shown in-panel (progress uses footer line + console).</summary>
@@ -5996,6 +6029,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// <summary>Callback registered by the viewport code-behind to generate a multi-axis surface toolpath.</summary>
     internal Func<Task>? OnGenerateMultiAxisRequested { get; set; }
 
+    /// <summary>Planar facing/clearing from the Mill settings panel (TOOL AXIS + T12).</summary>
+    internal Func<Task>? OnGenerateMillFromSettingsRequested { get; set; }
+
     /// <summary>Re-slices the source mesh at its current transform and replaces the selected toolpath.</summary>
     internal Func<Task>? OnUpdateSliceRequested { get; set; }
 
@@ -6094,6 +6130,13 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal Action<int>? OnToolChangeScrubRequested { get; set; }
 
     /// <summary>Triggers a planar slice using the current additive settings.</summary>
+    /// <summary>
+    /// Imports a KRL .src as a toolpath. Wired by <c>MainWindowViewModel</c> to the same
+    /// <c>ImportKrlToolpath</c> the Import KRL menu item uses, so a dropped file and a picked
+    /// file take an identical path.
+    /// </summary>
+    public Action<string>? ImportKrlFile { get; set; }
+
     public RelayCommand SliceCommand { get; }
 
     /// <summary>Generates a relief-milling toolpath from the subtractive settings' heightmap.</summary>
@@ -6104,6 +6147,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Generates a multi-axis surface-following finish toolpath over the displaced surface.</summary>
     public RelayCommand GenerateMultiAxisCommand { get; }
+
+    /// <summary>Planar facing/clearing from Mill settings (TOOL AXIS, T12 TCP).</summary>
+    public RelayCommand GenerateMillFromSettingsCommand { get; }
 
     /// <summary>Re-slices the parent mesh at its current pose and replaces the selected toolpath.</summary>
     public RelayCommand UpdateSliceCommand { get; }
@@ -7214,11 +7260,40 @@ public sealed partial class ViewportViewModel : ViewModelBase
         => FindOutlinerItem(node);
 
     /// <summary>
+    /// Print vs mill for Slice / auto-slice. Mill phase of the LFAM 3 workflow
+    /// keeps a mill path beside the print path instead of replacing it.
+    /// </summary>
+    public OutlinerToolpathKind ActiveSliceToolpathKind =>
+        IsMillStepActive ? OutlinerToolpathKind.Mill : OutlinerToolpathKind.Print;
+
+    /// <summary>
+    /// Direct or nested toolpath child of <paramref name="parent"/> matching
+    /// <paramref name="kind"/> (print and mill sit as siblings).
+    /// </summary>
+    internal static OutlinerItemViewModel? FindToolpathChild(
+        OutlinerItemViewModel parent, OutlinerToolpathKind kind)
+    {
+        foreach (var child in parent.Children)
+        {
+            if (child.IsToolpath && child.ToolpathKind == kind)
+                return child;
+            var nested = FindToolpathChild(child, kind);
+            if (nested is not null)
+                return nested;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Creates a new toolpath outliner item as a child of <paramref name="parentItem"/>
     /// (or top-level if <c>null</c>), and enqueues its node for GL upload.
     /// Must be called on the UI thread.
     /// </summary>
     internal void RegisterToolpathInOutliner(SceneNode toolpathNode, OutlinerItemViewModel? parentItem)
+        => RegisterToolpathInOutliner(toolpathNode, parentItem, OutlinerToolpathKind.Print);
+
+    internal void RegisterToolpathInOutliner(
+        SceneNode toolpathNode, OutlinerItemViewModel? parentItem, OutlinerToolpathKind kind)
     {
         var item = CreateOutlinerItem(toolpathNode, child =>
         {
@@ -7228,6 +7303,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             NotifyRenderNeeded();
         }, () => OnNodeHidden?.Invoke(toolpathNode), modelFileOps: true);
         item.IsToolpath = true;
+        item.ToolpathKind = kind;
 
         if (parentItem is not null)
             parentItem.AddChild(item);

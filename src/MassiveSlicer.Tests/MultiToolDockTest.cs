@@ -30,6 +30,8 @@ public class MultiToolDockTest
         Assert.Contains("Scanner (Calibrated)", dockable);
         Assert.Contains("Spindle (No Bit)", dockable);
         Assert.Contains("Extruder", dockable);
+        Assert.Contains("Tool 12", dockable);
+        Assert.True(mt.Tools.ContainsKey("Tool 12"), "T12 must have a flange holder or TOOL #12 select crashes / no-ops");
 
         Assert.Null(mt.MountedToolName);
 

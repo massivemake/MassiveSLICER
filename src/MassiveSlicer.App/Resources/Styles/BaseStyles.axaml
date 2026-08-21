@@ -1094,7 +1094,16 @@
                 <Grid>
                     <ScrollContentPresenter Name="PART_ContentPresenter"
                                             Background="{TemplateBinding Background}"
-                                            Padding="{TemplateBinding Padding}"/>
+                                            Margin="{TemplateBinding Padding}"
+                                            Content="{TemplateBinding Content}"
+                                            Offset="{TemplateBinding Offset, Mode=TwoWay}"
+                                            CanHorizontallyScroll="False"
+                                            CanVerticallyScroll="True">
+                        <ScrollContentPresenter.GestureRecognizers>
+                            <ScrollGestureRecognizer CanHorizontallyScroll="False"
+                                                     CanVerticallyScroll="True"/>
+                        </ScrollContentPresenter.GestureRecognizers>
+                    </ScrollContentPresenter>
                     <ScrollBar Name="PART_VerticalScrollBar"
                                Orientation="Vertical"
                                HorizontalAlignment="Right"/>

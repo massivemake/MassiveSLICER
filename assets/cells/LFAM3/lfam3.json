@@ -356,6 +356,27 @@
       "toolFrameRoll": 0,
       "krlIndex": 10,
       "default": false
+    },
+    {
+      "name": "Tool 12",
+      "modelPath": "assets/cells/LFAM3/Toolheads/spindle.glb",
+      "tcpX": -78.398941,
+      "tcpY": 325.228729,
+      "tcpZ": 637.357849,
+      "tcpA": 103.677193,
+      "tcpB": -43.718727,
+      "tcpC": 40.482887,
+      "toolFrameRoll": 0,
+      "krlIndex": 12,
+      "default": false,
+      "dock": {
+        "x": -768.6094,
+        "y": -2027.8746,
+        "z": -219.42023,
+        "a": -52.249447,
+        "b": 89.66839,
+        "c": -53.10206
+      }
     }
   ],
   "krlBases": [
