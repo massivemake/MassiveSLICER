@@ -317,7 +317,7 @@
                         <!-- CONNECTIONS section -->
                         <StackPanel x:Name="SectionConnections" IsVisible="False">
                             <TextBlock Text="ERP CONNECTION" Classes="SectionHeader" Margin="0,0,0,6"/>
-                            <TextBlock Text="Connects automatically at launch when both fields are set. The token stays in local preferences and is never written into shared .mass files."
+                            <TextBlock Text="Email + password signs in at launch and fetches a slicer token. The token field is optional fallback (ERP Settings -> Slicer Access). Credentials stay in local preferences, never in shared .mass files."
                                        Classes="LabelMuted" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
                             <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
                                 <TextBlock Grid.Column="0" Text="ERP URL" Classes="LabelMuted" VerticalAlignment="Center"/>
@@ -326,10 +326,23 @@
                                            Text="{Binding Erp.BaseUrl, Mode=TwoWay}"/>
                             </Grid>
                             <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
+                                <TextBlock Grid.Column="0" Text="Email" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                           Watermark="you@massivemake.com"
+                                           Text="{Binding Erp.Email, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
+                                <TextBlock Grid.Column="0" Text="Password" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" PasswordChar="•"
+                                           Watermark="Lab password"
+                                           Text="{Binding Erp.Password, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
                                 <TextBlock Grid.Column="0" Text="API Token" Classes="LabelMuted" VerticalAlignment="Center"/>
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox" PasswordChar="•"
-                                           Watermark="msl_…"
-                                           Text="{Binding Erp.ApiToken, Mode=TwoWay}"/>
+                                           Watermark="optional - fetched on sign-in"
+                                           Text="{Binding Erp.ApiToken, Mode=TwoWay}"
+                                           ToolTip.Tip="Filled automatically after a successful email/password login. Paste a token here only if Lab has no login route yet."/>
                             </Grid>
                             <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
                                 <TextBlock Grid.Column="0" Text="Projects Root" Classes="LabelMuted" VerticalAlignment="Center"/>

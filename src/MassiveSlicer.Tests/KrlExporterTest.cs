@@ -420,6 +420,41 @@ public sealed class KrlExporterTest
     }
 
     [Fact]
+    public void Import_uses_print_bed_surface_not_kuka_base_z()
+    {
+        // LFAM 1: visual plate Z=70, KUKA BASE Z = robroot 500 + base 278 = 778.
+        var robroot = new Vector3(0, 0, 500);
+        var baseData = new Vector3(1475.5131f, -609.29846f, 278f);
+        const float bedZ = 70f;
+
+        var off = KrlExporter.ImportWorldOffset(robroot, baseData, bedZ);
+        Assert.Equal(1475.5131f, off.X, 3);
+        Assert.Equal(-609.29846f, off.Y, 3);
+        Assert.Equal(70f, off.Z, 3); // print bed, not 778
+
+        // Round-trip: a first-layer world point exports to KRL Z≈3 and re-imports to the plate.
+        var world = new Vector3(1500f, 900f, 73f);
+        var krl = KrlExporter.WorldToBase(world, robroot, baseData, bedZ);
+        Assert.InRange(krl.Z, 2.5f, 3.5f);
+        var back = KrlExporter.BaseToWorld(krl, robroot, baseData, bedZ);
+        Assert.Equal(world.X, back.X, 3);
+        Assert.Equal(world.Y, back.Y, 3);
+        Assert.Equal(world.Z, back.Z, 3);
+    }
+
+    [Fact]
+    public void Import_lfam3_bed_matches_robroot_plus_base()
+    {
+        var robroot = new Vector3(0, 0, 1000);
+        var baseData = new Vector3(2135.45f, -52.54f, -83.69f);
+        const float bedZ = 916.31f;
+        var off = KrlExporter.ImportWorldOffset(robroot, baseData, bedZ);
+        Assert.Equal(2135.45f, off.X, 2);
+        Assert.Equal(-52.54f, off.Y, 2);
+        Assert.Equal(916.31f, off.Z, 2);
+    }
+
+    [Fact]
     public void Export_lfam1_home_ptp_includes_e1_rail_position()
     {
         var tp = new Toolpath();
@@ -732,4 +767,61 @@ public sealed class KrlExporterTest
         Assert.DoesNotContain("RPM = 22", krlBase);
     }
 
+    [Fact]
+    public void Export_header_includes_version_preset_and_slice_settings()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { Height = 3f, PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+        });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName        = "meta_print",
+            SlicerVersion      = "1234b5  ·  2026-08-15  ·  abc1234",
+            MaterialPresetName = "ABS Black",
+            MaterialType       = "ABS",
+            MaterialColor      = "Black",
+            CellName           = "LFAM 3",
+            ExtruderIsHf       = false,
+            LayerHeightMm      = 3.25f,
+            BeadWidthMm        = 6.5f,
+            FlowRate           = 0.463f,
+            PrintSpeedMps      = 0.1f,
+            TravelSpeedMps     = 0.5f,
+            WipeSpeedMps       = 0.12f,
+            Temperature1       = 230f,
+            Temperature2       = 225f,
+            Temperature3       = 220f,
+            ExtrusionRpmPercent = 50f,
+            ToolDataIndex      = 1,
+            BaseDataIndex      = 2,
+        });
+
+        int def = krl.IndexOf("DEF meta_print", StringComparison.Ordinal);
+        int fold = krl.IndexOf(";FOLD MassiveSLICER export", StringComparison.Ordinal);
+        Assert.True(def >= 0 && fold > def, "comment block must sit after DEF");
+        Assert.Contains("; MassiveSLICER 1234b5  ·  2026-08-15  ·  abc1234", krl);
+        Assert.Contains("; Material preset ABS Black", krl);
+        Assert.Contains("; Material ABS Black", krl);
+        Assert.Contains("; Layer height 3.25 mm", krl);
+        Assert.Contains("; Bead width 6.50 mm", krl);
+        Assert.Contains("; Extrusion flow 0.4630 rev/cm3", krl);
+        Assert.Contains("; Print speed 100.0 mm/s", krl);
+        Assert.Contains("; Extrusion RPM 50.0 %", krl);
+        Assert.Contains("; T1 230 C  T2 225 C  T3 220 C", krl);
+        Assert.Contains("; TOOL 1  BASE 2", krl);
+        Assert.Contains(";ENDFOLD (MassiveSLICER export)", krl);
+    }
+
+    [Fact]
+    public void Export_header_preset_none_when_unset()
+    {
+        var block = KrlExporter.BuildExportCommentBlock(new KrlExportSettings { ProgramName = "x" });
+        Assert.Contains("; Material preset (none)", block);
+        Assert.Contains("; MassiveSLICER (unknown)", block);
+    }
 }

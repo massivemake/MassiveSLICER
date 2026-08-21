@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using MassiveSlicer.App.Enums;
 using MassiveSlicer.Commands;
 using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels.Base;
@@ -93,6 +94,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 
     /// <summary>True for toolpath entries (set by RegisterToolpathInOutliner).</summary>
     public bool IsToolpath { get; set; }
+
+    /// <summary>Print vs mill sibling under the same model (ignored unless <see cref="IsToolpath"/>).</summary>
+    public OutlinerToolpathKind ToolpathKind { get; set; }
 
     /// <summary>True for live-effector handles — excluded from slicing/model resolution.</summary>
     public bool IsEffector { get; set; }

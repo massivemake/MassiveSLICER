@@ -586,9 +586,16 @@ public sealed class AppPreferences
     /// or without the /api/slicer/v1 suffix.</summary>
     public string ErpBaseUrl { get; set; } = "https://lab.massivemake.com/api/slicer/v1";
 
-    /// <summary>Bearer token for the ERP slicer API. Kept in local prefs only —
-    /// scrubbed from workspace (.mass) settings snapshots.</summary>
+    /// <summary>Bearer token from ERP Settings → Slicer Access, or from
+    /// <c>POST /api/slicer/v1/login</c>. Local prefs only — never in .mass files.</summary>
     public string? ErpApiToken { get; set; }
+
+    /// <summary>Lab login email. Used with <see cref="ErpPassword"/> to fetch
+    /// <see cref="ErpApiToken"/> automatically. Local prefs only.</summary>
+    public string? ErpEmail { get; set; }
+
+    /// <summary>Lab login password. Local prefs only — scrubbed from .mass files.</summary>
+    public string? ErpPassword { get; set; }
 
     /// <summary>Per-cell SMB credentials for direct Export-to-Robot uploads.
     /// Passwords are scrubbed from workspace (.mass) settings snapshots.</summary>

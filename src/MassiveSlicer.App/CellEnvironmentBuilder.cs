@@ -262,13 +262,146 @@ internal static class CellEnvironmentBuilder
             && cached.Mtime == mtime && cached.Size == size)
             return SceneNodeClone.DeepClone(cached.Template);
 
-        var root  = GltfLoader.Load(resolvedPath);
+        // Native Y-up metres (no GltfToScene on root). Bake node TRS into mesh verts so
+        // Blender exports (mm positions + scale 0.001 + extra rotation) match CONNECT tools.
+        // WrapGlbTool strips root transform and parents under the flange (GLTF Y-up metres).
+        var root = GltfLoader.LoadNativeMeters(resolvedPath);
+        BakeToolMeshesToRootLocal(root);
+        NormalizeMetresIfLooksLikeMillimetres(root);
         var stats = StandMeshPreparer.OptimizeSubtree(root, StandMeshPreparer.DefaultSceneGlbOptions);
         System.Console.WriteLine(
             $"[cell] {label}: mesh cleanup {stats.BeforeTriangles:N0} → {stats.AfterTriangles:N0} tris ({stats.Meshes} meshes)");
 
         _preparedSceneGlbCache[resolvedPath] = (mtime, size, SceneNodeClone.DeepClone(root));
         return SceneNodeClone.DeepClone(root);
+    }
+
+    /// <summary>
+    /// Bakes each mesh's world transform (relative to <paramref name="root"/>) into
+    /// vertex positions/normals, then re-parents meshes under <paramref name="root"/> with
+    /// identity locals. Prevents "jumbled" tools when Blender leaves scale/rotation on nodes
+    /// and <see cref="WrapGlbTool"/> discards the loader's root conversion.
+    /// </summary>
+    private static void BakeToolMeshesToRootLocal(SceneNode root)
+    {
+        // Collect (meshNode, mesh) before mutating hierarchy.
+        var meshes = new List<(SceneNode Node, MeshData Mesh)>();
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (n.PendingMesh is { } mesh)
+                meshes.Add((n, mesh));
+        }
+
+        if (meshes.Count == 0) return;
+
+        Matrix4.Invert(root.WorldTransform, out var rootInv);
+
+        foreach (var (node, mesh) in meshes)
+        {
+            // root-local = world * inv(rootWorld) with row-vector convention (v' = v * M)
+            var toRoot = node.WorldTransform * rootInv;
+            var baked  = TransformMeshData(mesh, toRoot);
+            node.PendingMesh   = baked;
+            node.LocalTransform = Matrix4.Identity;
+        }
+
+        // Flatten: put every mesh node directly under root (identity locals already set).
+        foreach (var (node, _) in meshes)
+        {
+            if (ReferenceEquals(node, root)) continue;
+            if (node.Parent is { } p)
+                p.RemoveChild(node);
+            // Skip empty transform parents; keep mesh nodes under root.
+            if (node.PendingMesh is not null)
+                root.AddChild(node);
+        }
+
+        // Drop empty intermediate nodes under root (no mesh, no children with mesh).
+        PruneEmptyTransformNodes(root);
+    }
+
+    private static void PruneEmptyTransformNodes(SceneNode root)
+    {
+        // Bottom-up: remove children that have no mesh and no descendants with mesh.
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach (var child in root.Children.ToList())
+            {
+                if (child.PendingMesh is not null) continue;
+                if (child.SelfAndDescendants().Any(n => n.PendingMesh is not null)) continue;
+                root.RemoveChild(child);
+                changed = true;
+            }
+        } while (changed);
+    }
+
+    /// <summary>
+    /// If baked mesh AABB diagonal is still huge (typical raw mm CAD without node scale),
+    /// scale positions by 0.001 so the tool matches flange Y-up metres.
+    /// </summary>
+    private static void NormalizeMetresIfLooksLikeMillimetres(SceneNode root)
+    {
+        float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue;
+        float maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
+        bool any = false;
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (n.PendingMesh is not { } mesh) continue;
+            any = true;
+            var (bMin, bMax) = mesh.LocalBounds;
+            minX = MathF.Min(minX, bMin.X); minY = MathF.Min(minY, bMin.Y); minZ = MathF.Min(minZ, bMin.Z);
+            maxX = MathF.Max(maxX, bMax.X); maxY = MathF.Max(maxY, bMax.Y); maxZ = MathF.Max(maxZ, bMax.Z);
+        }
+        if (!any) return;
+
+        var diag = MathF.Sqrt(
+            (maxX - minX) * (maxX - minX) +
+            (maxY - minY) * (maxY - minY) +
+            (maxZ - minZ) * (maxZ - minZ));
+        // CONNECT tools are ~0.2–2 m; raw mm CAD is hundreds of units.
+        if (diag < 10f) return;
+
+        var scaleM = Matrix4.CreateScale(0.001f);
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (n.PendingMesh is { } mesh)
+                n.PendingMesh = TransformMeshData(mesh, scaleM);
+        }
+        System.Console.WriteLine(
+            $"[cell] tool mesh diag={diag:F1} looked like mm — scaled ×0.001 to metres");
+    }
+
+    private static MeshData TransformMeshData(MeshData mesh, Matrix4 m)
+    {
+        var pos = new Vector3[mesh.Positions.Length];
+        var nrm = new Vector3[mesh.Normals.Length];
+        for (int i = 0; i < mesh.Positions.Length; i++)
+        {
+            var p = mesh.Positions[i];
+            pos[i] = new Vector3(
+                p.X * m.M11 + p.Y * m.M21 + p.Z * m.M31 + m.M41,
+                p.X * m.M12 + p.Y * m.M22 + p.Z * m.M32 + m.M42,
+                p.X * m.M13 + p.Y * m.M23 + p.Z * m.M33 + m.M43);
+        }
+
+        // Direction transform (ignore translation); renormalize.
+        for (int i = 0; i < mesh.Normals.Length; i++)
+        {
+            var n = mesh.Normals[i];
+            var d = new Vector3(
+                n.X * m.M11 + n.Y * m.M21 + n.Z * m.M31,
+                n.X * m.M12 + n.Y * m.M22 + n.Z * m.M32,
+                n.X * m.M13 + n.Y * m.M23 + n.Z * m.M33);
+            if (d.LengthSquared > 1e-20f) d.Normalize();
+            nrm[i] = d;
+        }
+
+        return new MeshData(
+            pos, nrm, mesh.Indices, mesh.Name,
+            mesh.BaseColor, mesh.Metallic, mesh.Roughness,
+            mesh.Uvs, mesh.Tangents, mesh.Material);
     }
 
     private static void TryAddStand(List<SceneNode> envNodes, StandCellConfig stand)

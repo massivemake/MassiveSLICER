@@ -27,6 +27,13 @@ public sealed class PrintPresetRecord
     public DateTime? LastPrintedUtc { get; set; }
     public bool IsFavorite { get; set; }
 
+    /// <summary>
+    /// Stable id on lab.massivemake.com when this row has been synced via the ERP
+    /// <c>/api/slicer/v1/print-presets</c> API. Null until first successful push/pull.
+    /// Stripped from the wire payload on upload (server owns id).
+    /// </summary>
+    public string? ErpId { get; set; }
+
     /// <summary>Always captured/applied — not gated by a field-group checkbox (see PresetsCardViewModel).</summary>
     public string Material { get; set; } = "";
 
@@ -188,11 +195,10 @@ public sealed class PrintPresetRecord
 
 /// <summary>
 /// Persists the user's saved/imported print presets as JSON in the user's AppData folder.
-/// Path: <c>%AppData%\MassiveSlicer\presets.json</c>. Local-only for now (matches
-/// <see cref="PreferencesLoader"/>'s convention) — a shared/synced library is a later,
-/// separate step (see project notes on one-file-per-preset + git for that).
-/// Seeded/sample presets are never written here — only presets the user actually saved or
-/// imported.
+/// Path: <c>%AppData%\MassiveSlicer\presets.json</c>. Also the local cache for the shared
+/// ERP library (<c>/api/slicer/v1/print-presets</c> on lab.massivemake.com) — see
+/// <c>ErpPresetSync</c>. Seeded/sample presets are never written here — only presets the
+/// user actually saved, imported, or pulled from the ERP.
 /// </summary>
 public static class PrintPresetsLoader
 {

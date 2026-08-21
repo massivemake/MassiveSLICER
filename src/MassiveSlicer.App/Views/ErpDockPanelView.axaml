@@ -22,7 +22,7 @@
         <!-- Not connected: credentials live in Preferences → Connections -->
         <StackPanel Spacing="6" IsVisible="{Binding ShowSettings}">
             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.7"
-                       Text="The ERP URL and API token are set in Preferences → Connections and connect automatically at launch. Generate a token in ERP Settings → Slicer Access."/>
+                       Text="Set email + password (or a token) in Preferences → Connections. Sign-in fetches a slicer token automatically at launch."/>
             <Button Content="Open Preferences…" HorizontalAlignment="Stretch"
                     Command="{Binding OpenPreferencesCommand}"/>
             <Button Content="Retry Connect" HorizontalAlignment="Stretch"

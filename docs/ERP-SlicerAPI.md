@@ -4,10 +4,33 @@ What the slicer client (MassiveSLICER, `src/MassiveSlicer.App/Erp/`) calls, what
 sends, and what it still needs the ERP to ship. Verified against
 `https://lab.massivemake.com/api/slicer/v1` on 2026-07-07.
 
-Auth: `Authorization: Bearer msl_…` on every request (tokens from ERP Settings →
-Slicer Access). The slicer maps 401/403 to "token invalid or revoked" and any other
-non-2xx to a user-visible failure. It stores the token in local prefs only — never
-in shared `.mass` files.
+Auth: `Authorization: Bearer ***` on every request. Tokens come from
+`POST /api/slicer/v1/login` (email + password; slicer shipped, Lab pending) or
+ERP Settings → Slicer Access. The slicer maps 401/403 to a human-readable
+failure. Token, email, and password stay in local prefs only — never in shared
+`.mass` files.
+
+## Needed next / recently added
+
+### POST /login  (slicer ships this; Lab must add the route)
+
+Password sign-in so shop PCs do not paste a Slicer Access token.
+
+```http
+POST /api/slicer/v1/login
+Content-Type: application/json
+
+{ "email": "thom@massivemake.com", "username": "thom@massivemake.com", "password": "…" }
+```
+
+200:
+
+```json
+{ "token": "msl_…", "email": "thom@massivemake.com", "name": "Thom", "expiresAt": null }
+```
+
+401 wrong password. 404 until Lab ships it (slicer then falls back to a pasted token).
+Same token family as Settings → Slicer Access. Full Replit prompt: `docs/ERP-Login-API-Replit-Prompt.md`.
 
 ## Working today (live on production)
 
@@ -26,7 +49,32 @@ in shared `.mass` files.
   `elementNumber|element|number|no`, rev count from
   `revCount|revisionCount|revisions|currentRevCount|sliceCount`.
 
-## Needed next (slicer UI already ships these calls; production returns 404)
+## Needed next / recently added
+
+### POST /workspace-saves  (slicer ships this; Lab may 404 until it lands)
+
+Every successful `.mass` save posts metadata only (no file bytes):
+
+```json
+{
+  "at": "2026-08-15T20:00:00.000Z",
+  "path": "Projects/26-173 - …/06-Production Documents/job.mass",
+  "localPath": "Z:\\\\Projects\\\\26-173 - …\\\\06-Production Documents\\\\job.mass",
+  "bytes": 313560625,
+  "file": "job.mass",
+  "cell": "LFAM 3",
+  "host": "SHOP-PC",
+  "projectNumber": "26-173",
+  "elementId": "41"
+}
+```
+
+A 404 is expected until Lab adds the route. The slicer also appends the same record to:
+
+- `%AppData%/MassiveSlicer/workspace-saves.jsonl`
+- `{UnasProjectsRoot}/_slicer/workspace-saves.jsonl` (usually `Projects/_slicer/workspace-saves.jsonl`)
+
+This is **not** a slice revision — use `POST /elements/{id}/slices` / Send Slice for that.
 
 ### 1. POST /projects/{id}/elements — and — POST /leads/{id}/elements
 Create an element from the slicer (the dock offers this when a project/lead has no
@@ -155,6 +203,31 @@ prints the authoritative breakdown. Slice registration also now sends numeric
 quantity 1, no finishing) — the permanent cost record for that rev. The slicer
 shows the client price in the dock status and console after `sendslice`, and
 uses the echoed `pricingVersion` to detect stale configs.
+
+## Shared print + material presets (slicer shipped; ERP API pending)
+
+Desktop now pulls and pushes the team library over the same bearer token.
+Until the ERP routes exist the client treats HTTP 404 as “not available yet”
+and keeps using `%AppData%/MassiveSlicer/presets.json` and `materials.json`.
+
+### GET /presets-bundle
+
+Returns `{ "version", "printPresets": [...], "materialPresets": [...] }`.
+Each entry: `{ "id", "updatedAt?", "updatedBy?", "payload": { …desktop record… } }`.
+
+### GET/POST/PUT/DELETE /print-presets[/{id}]
+### GET/POST/PUT/DELETE /material-presets[/{id}]
+
+POST/PUT body: `{ "payload": { … } }`. Response is the same entry shape as list items.
+
+Slicer behavior:
+- On connect: `GET /presets-bundle` (falls back to the two list endpoints) → merge
+  into local AppData (match by `id` then by `Name`) → POST any local-only rows.
+- On Save preset / save material: POST if no `ErpId`, else PUT.
+- Console: `erp presets` re-runs the pull.
+- `payload` is opaque JSON matching `PrintPresetRecord` / `MaterialPreset`.
+
+See `docs/ERP-Presets-API-Replit-Prompt.md` for the full Replit build brief.
 
 ## Slicer-side state (already shipped)
 

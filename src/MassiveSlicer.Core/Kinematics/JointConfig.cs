@@ -14,8 +14,8 @@ public sealed record JointConfig
 {
     public float        KrlOffset { get; init; } = 0f;
     public float        KrlSign   { get; init; } = 1f;
-    public float        MinDeg    { get; init; } = -360f;
-    public float        MaxDeg    { get; init; } = 360f;
+    public float        MinDeg    { get; set; } = -360f;
+    public float        MaxDeg    { get; set; } = 360f;
     public RotationAxis Axis      { get; init; } = RotationAxis.Y;
 
     public float KrlToMathRad(float krlDeg) =>
@@ -24,5 +24,9 @@ public sealed record JointConfig
     public float MathRadToKrl(float mathRad) =>
         KrlSign * mathRad * 180f / MathF.PI - KrlOffset;
 
-    public float Clamp(float krlDeg) => Math.Clamp(krlDeg, MinDeg, MaxDeg);
+    /// <summary>Software-limit range after the 5% stay-away envelope.</summary>
+    public float UsableMinDeg => JointLimitEnvelope.UsableMin(MinDeg, MaxDeg);
+    public float UsableMaxDeg => JointLimitEnvelope.UsableMax(MinDeg, MaxDeg);
+
+    public float Clamp(float krlDeg) => JointLimitEnvelope.Clamp(krlDeg, MinDeg, MaxDeg);
 }
