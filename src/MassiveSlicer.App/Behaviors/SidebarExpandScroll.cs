@@ -17,6 +17,9 @@ public static class SidebarExpandScroll
 {
     const string PadName = "__SidebarScrollPad";
     const int MaxAttempts = 30;
+    // Retries driven from LayoutUpdated re-enter the layout pass they were raised from,
+    // so they are capped far below MaxAttempts. Avalonia aborts the pass long before 30.
+    const int MaxLayoutPasses = 4;
 
     static bool _armed;
 
@@ -77,9 +80,18 @@ public static class SidebarExpandScroll
         Dispatcher.UIThread.Post(Tick, DispatcherPriority.Background);
         if (sv is not null)
         {
+            // TryPinToTop writes sv.Offset and resizes the pad, so every call from here
+            // dirties layout and re-raises LayoutUpdated inside the SAME render callback.
+            // This handler must therefore count its own passes: `attempts` is only advanced
+            // by Tick, so a card that can never satisfy TryPinToTop (its content grew and it
+            // no longer reaches the top) kept this subscribed forever and Avalonia killed the
+            // app with "Infinite layout loop detected". Keep the cap small — these retries
+            // nest inside one layout pass, unlike Tick's, which each get their own dispatcher
+            // turn. Tick still does the real work across MaxAttempts.
+            int layoutPasses = 0;
             void OnLayout(object? _, EventArgs __)
             {
-                if (!card.IsExpanded || TryPinToTop(card) || attempts >= MaxAttempts)
+                if (!card.IsExpanded || ++layoutPasses > MaxLayoutPasses || TryPinToTop(card))
                     sv.LayoutUpdated -= OnLayout;
             }
             sv.LayoutUpdated += OnLayout;

@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-16** (macOS SMB NETSDK1177 skip apphost codesign)
+Last updated: **2026-08-21** (sidebar expand layout-loop crash fix; main buildable again)
 
 ---
 
@@ -483,6 +483,61 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-21 — Sidebar StepCard expand crashed the app ("Infinite layout loop detected")
+
+- **Symptom:** clicking **Pattern/Effects** or **Toolpath** in the right panel aborted the
+  process (SIGABRT). The macOS crash report showed only native Avalonia/Skia frames; the
+  managed exception was `InvalidOperationException: Infinite layout loop detected` thrown from
+  `MediaContext.FireInvokeOnRenderCallbacks`.
+- **Cause:** `SidebarExpandScroll.Schedule` subscribed `sv.LayoutUpdated` to a handler calling
+  `TryPinToTop`, which writes `sv.Offset` and resizes the scroll pad — so *every* call dirtied
+  layout and re-raised `LayoutUpdated` inside the **same** render callback. The retry counter
+  `attempts` was only advanced by `Tick` (dispatcher-driven), never by the layout handler, and
+  the handler's only exit was `TryPinToTop` returning true (`|origin.Y| < 3`) — unreachable for
+  a card whose content grew such that it can no longer reach the top. Unbounded re-entry inside
+  one layout pass, so Avalonia aborted the process.
+- **Fix:** the layout handler now counts its own passes and unsubscribes after
+  `MaxLayoutPasses = 4`. Deliberately far below `MaxAttempts = 30`: these retries nest inside a
+  single layout pass, unlike `Tick`'s, which each get their own dispatcher turn. `Tick` still
+  does the real work across `MaxAttempts`.
+- **Diagnostics (the reason this took two wrong guesses):** Avalonia's `LogToTrace()` writes to
+  `System.Diagnostics.Trace`, which has **no listener by default**, so the one warning naming
+  the offending control — `"Layout cycle detected. Item {Item} was enqueued {Count} times."` —
+  was silently discarded. `Program.cs` now adds Trace listeners mirroring into the existing
+  crash log and stderr. Do not remove; without it these crashes are unattributable.
+- **Surfaced as a side effect, NOT yet investigated:** with Trace live, startup logs `[Binding]`
+  failures for File-menu commands (`NewWorkspaceCommand`, `OpenWorkspaceCommand`,
+  `SaveWorkspaceCommand`, `OpenModelCommand`, `ImportKrlCommand`, `UndoCommand`, `RedoCommand`)
+  — "could not find a matching property accessor" on `MainWindowViewModel`. These may be dead
+  menu items. They were invisible before, so their appearing now is not evidence they are new.
+- **Files:** `src/MassiveSlicer.App/Behaviors/SidebarExpandScroll.cs`,
+  `src/MassiveSlicer.App/Program.cs`.
+- **Verification:** builds clean on build 599; app launches, GL 4.1 Metal, LFAM 2 cell loads.
+  ⚠️ **Pushed before a human click-test of Pattern/Effects was confirmed.**
+
+### 2026-08-21 — `main` was unbuildable Aug 17–21; fixed upstream. Joint-limit envelope still open
+
+- `2181741` (Aug 17) committed the new `ViewportView.axaml.cs` referencing `OutlinerToolpathKind`
+  et al. without the files defining them — a clean clone failed at `ViewportView.axaml.cs(13922)`
+  with CS0246. Nick and Jeff fell back to build 573 as a baseline for four days.
+- Fixed upstream by `336e69d` (Aug 21, MassiveMAKE), which restored **8 files / 233 lines** —
+  more than the compiler could report, since the first error was in a *method signature* and
+  stopped the parse. LF normalization landed alongside in `2cd16a6`, so the CRLF whole-file
+  merge conflicts are gone and `.gitattributes` now covers source.
+- **Root-cause pattern to avoid:** `git commit -a` stages tracked-file edits but silently skips
+  untracked files. Use `git add -A`, and build a clean worktree before pushing:
+  `git worktree add ../verify HEAD --detach && cd ../verify && dotnet build MassiveSlicer.slnx -c Release`.
+- **STILL OPEN — robot motion.** `JointLimitEnvelope.MarginFraction = 0.05f` (from `711489e`,
+  build 577) insets **5% of each axis's total travel off both ends** and gates IK solution
+  acceptance (`ViewportView.axaml.cs` ~14328/14451), rail planning (`RailE1Planner`), and the
+  jog clamps. Measured cost: LFAM 1 **E1 rail loses 479 mm** (everything past −89.6 mm becomes
+  unreachable), LFAM 3 **A1 loses 37°**, A4/A6 lose 70° each, LFAM 1 A4/A6 lose 70°/25°.
+  `Clamp` does this **silently, with no warning**. This is the leading explanation for the
+  "weird robot behaviors" reported after build 573. Proposed fix (NOT applied, needs a branch
+  and a print test): `MarginFraction = 0f` to restore 573 motion, then reintroduce small
+  **absolute** per-axis margins that warn instead of silently clamping.
+
 
 ### 2026-08-16 — macOS Release build: NETSDK1177 on SMB apphost
 
