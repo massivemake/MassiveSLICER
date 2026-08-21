@@ -447,9 +447,12 @@ public class ProximityFlowTest
         Assert.All(extrudes, m => Assert.True(m.WidthScale >= 0.75f - 1e-4f,
             $"a move landed at {m.WidthScale:0.####}, past the 0.75 target"));
 
-        Assert.True(extrudes[0].WidthScale > 0.99f,
-            $"the first crowded move is already at {extrudes[0].WidthScale:0.####} — the correction "
-          + "is still arriving in one step, which is what broke the Caracol");
+        // ⚠️ The first crowded move DOES step immediately - a fresh departure is licensed, because
+        // full flow was in force for the whole preceding stretch. What must never happen is the
+        // whole correction arriving at once. So: one legal step (5 % at the 2 %/s default), not 25 %.
+        // An earlier version of this assertion demanded > 0.99 and was simply wrong: it encoded
+        // "wait a hold period before starting", which is lost correction for no benefit.
+        Assert.InRange(extrudes[0].WidthScale, 0.93f, 0.97f);
 
         Assert.True(ProximityFlowPostProcessor.LastSlew.Steps > 0);
         Assert.True(ProximityFlowPostProcessor.LastSlew.Effectiveness < 1f,

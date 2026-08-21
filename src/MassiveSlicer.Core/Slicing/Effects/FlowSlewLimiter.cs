@@ -158,7 +158,16 @@ public static class FlowSlewLimiter
         // The drive is one physical thing and never forgets, so the commanded value carries across
         // travels and across layer boundaries rather than resetting.
         float commanded = 1f;
-        int   flat      = 0;
+
+        // Travel accumulated at the current commanded value since the last step. Carries across
+        // moves — that is the whole point; see the loop below.
+        float heldMm = 0f;
+
+        // A fresh departure from target steps AT ONCE. The value being left has been in force for
+        // the whole preceding stretch, so the step is already earned — waiting a further hold period
+        // before the first one is pure lost correction, and on a 608 mm arm it cost a whole step.
+        bool stepDue = true;
+        int  flat    = 0;
 
         foreach (var layer in toolpath.Layers)
         {
@@ -239,44 +248,87 @@ public static class FlowSlewLimiter
                     rebuilt.Add(move with { WidthScale = commanded });
                     expansion[mi] = 1;
                     Account(target, commanded, length);
+                    heldMm  = 0f;
+                    stepDue = true;
                     continue;
                 }
 
-                int   emitted   = 0;
-                float travelled = 0f;
+                // ⚠⚠ THE STEP ALLOWANCE ACCUMULATES ACROSS MOVES, and it has to.
+                //
+                // An earlier version let every move take its own step. The rate was correct, but on
+                // a real part the median move is 3.48 mm, so it wrote RPM 95,057 times where the
+                // known-good reference file writes 1312 — micro-steps of ~0.07 % between consecutive
+                // LINs. And on the URM / Digital Start-Stop path there is NO whole-percent rounding
+                // to collapse them: KrlExporter formats the value as "0.#####", five decimals, so
+                // nearly every one becomes a distinct command. That is precisely the
+                // "$ADVANCE continuous path / robot stutter on dense clusters" failure KrlExporter
+                // warns about in its own change-detection comment.
+                //
+                // Holding the value until a step is DUE makes the ramp write roughly once per
+                // RampStepSeconds of travel whatever the move granularity — ~5 % every ~230 mm at
+                // 92 mm/s, which is what the reference file actually does (4.77 % every 219.9 mm).
+                // One step is worth rate x RampStepSeconds, and the SPEED CANCELS: the step size is
+                // constant (5 % at the 2 %/s default) while the distance it is held over scales with
+                // speed. That is exactly the reference file's shape — constant ~4.8 % steps, spacing
+                // set by how fast the robot happens to be moving.
+                float stepFraction = ratePerSec * RampStepSeconds;
 
-                while (travelled < length - 1e-4f && MathF.Abs(target - commanded) > 1e-5f)
+                int   emitted = 0;
+                float pos     = 0f;
+
+                while (pos < length - 1e-4f)
                 {
-                    float segLen  = MathF.Min(stepLen, length - travelled);
-                    float allowed = ratePerSec * (segLen / speed);      // relative, over this segment
+                    // Arrived on target: the remainder is ONE segment however long, and the next
+                    // departure is licensed to step immediately.
+                    if (MathF.Abs(target - commanded) <= 1e-5f)
+                    {
+                        rebuilt.Add(SliceSegment(move, length, pos, length)
+                                    with { WidthScale = commanded });
+                        emitted++;
+                        Account(target, commanded, length - pos);
+                        pos     = length;
+                        heldMm  = 0f;
+                        stepDue = true;
+                        break;
+                    }
 
-                    float next = target > commanded
-                        ? MathF.Min(target, commanded * (1f + allowed))
-                        : MathF.Max(target, commanded * (1f - allowed));
-                    next = Math.Clamp(next, BeadProximity.MinScale, 1f);
+                    // Step first, then hold. Stepping at the END of a hold would waste the first
+                    // period at a value already known to be wrong.
+                    if (stepDue || heldMm >= stepLen - 1e-4f)
+                    {
+                        float next = target > commanded
+                            ? MathF.Min(target, commanded * (1f + stepFraction))
+                            : MathF.Max(target, commanded * (1f - stepFraction));
+                        next = Math.Clamp(next, BeadProximity.MinScale, 1f);
 
-                    float stepFrac = MathF.Abs(next - commanded) / MathF.Max(commanded, 1e-6f);
-                    if (stepFrac > worstStep) worstStep = stepFrac;
-                    steps++;
+                        float stepFrac = MathF.Abs(next - commanded) / MathF.Max(commanded, 1e-6f);
+                        if (stepFrac > 1e-9f)
+                        {
+                            if (stepFrac > worstStep) worstStep = stepFrac;
+                            steps++;
+                        }
 
-                    rebuilt.Add(SliceSegment(move, length, travelled, travelled + segLen)
-                                with { WidthScale = next });
-                    emitted++;
-                    Account(target, next, segLen);
+                        commanded = next;
+                        heldMm    = 0f;
+                        stepDue   = false;
+                        continue;          // re-check: that step may have arrived on target
+                    }
 
-                    commanded  = next;
-                    travelled += segLen;
-                }
-
-                // Whatever is left runs at the value the ramp arrived at — one segment, however
-                // long. Only the ramp itself gets subdivided.
-                if (travelled < length - 1e-4f)
-                {
-                    float segLen = length - travelled;
-                    rebuilt.Add(SliceSegment(move, length, travelled, length)
+                    float take = MathF.Min(stepLen - heldMm, length - pos);
+                    rebuilt.Add(SliceSegment(move, length, pos, pos + take)
                                 with { WidthScale = commanded });
                     emitted++;
-                    Account(target, commanded, segLen);
+                    Account(target, commanded, take);
+                    pos    += take;
+                    heldMm += take;
+                }
+
+                if (pos < length - 1e-4f)
+                {
+                    rebuilt.Add(SliceSegment(move, length, pos, length)
+                                with { WidthScale = commanded });
+                    emitted++;
+                    Account(target, commanded, length - pos);
                 }
 
                 expansion[mi]  = emitted;

@@ -2111,8 +2111,18 @@ public sealed class ConsoleCommandRegistry
                                + "— nothing to measure.");
                     return;
                 }
-                ctx.Log($"[flow-slew]   nominal RPM {nomPct:0.##} % → one whole percent is "
-                      + $"{100f / nomPct:0.##} % relative, the finest step the motor can take");
+                // ⚠️ THE TWO EXPORT PATHS QUANTISE DIFFERENTLY, and getting this wrong understates
+                // the write count enormously:
+                //   URM / Digital Start-Stop : "RPM = 76.51392"  — FormatCaracolRpm, "0.#####",
+                //                              five decimals, NO whole-percent rounding.
+                //   normal ANOUT             : "$ANOUT[4] = 0.77" — RoundAnout4UpToPercent, CEILED
+                //                              to a whole motor percent.
+                // Assuming ANOUT while URM is on reported 17,933 writes where the real figure was
+                // near the 95,057 raw changes.
+                bool urm = add.DigitalStartStopEnabled;
+                ctx.Log($"[flow-slew]   nominal RPM {nomPct:0.##} % · export path "
+                      + (urm ? "URM/Digital Start-Stop — RPM = n written with five decimals, NO percent rounding"
+                             : $"ANOUT — ceiled to whole percent, so the finest step is {100f / nomPct:0.##} % relative"));
 
                 // Deliberately re-derived from the moves rather than read back from the limiter's own
                 // bookkeeping: if anything downstream reintroduced a step, this is what shows it.
@@ -2128,7 +2138,9 @@ public sealed class ConsoleCommandRegistry
                         if (m.Kind != MoveKind.Extrude || m.IsBrim || m.IsWipe) continue;
 
                         float raw = MassiveSlicer.Core.IO.ToolpathRpm.MoveScale(m);
-                        float pct = MassiveSlicer.Core.IO.ToolpathRpm.SteppedPercent(nomPct * raw);
+                        float pct = urm
+                            ? MathF.Round(nomPct * raw, 5)
+                            : MassiveSlicer.Core.IO.ToolpathRpm.SteppedPercent(nomPct * raw);
 
                         if (prevPct < 0f) { prevRaw = raw; prevPct = pct; continue; }
 
@@ -2160,6 +2172,10 @@ public sealed class ConsoleCommandRegistry
                       + $"{steps.Max(x => x.Rel) * 100f:0.##} % relative");
                 ctx.Log($"[flow-slew]   ({rawChanges} raw scale changes upstream — the exporter "
                       + $"collapses {rawChanges - steps.Count} of them as the same command)");
+                ctx.Log($"[flow-slew]   reference file writes 1312 in 506.7 m → one per "
+                      + $"{506700.0 / 1312:0.#} mm. Ours: one per "
+                      + $"{(spacing.Count > 0 ? spacing.Sum() / spacing.Count : 0f):0.#} mm. "
+                      + "⚠ Writing between consecutive LINs is what kills $ADVANCE.");
                 // ⚠️ Judge by the RATE and by the 10 % line, NOT by a 5 % step count. The known-good
                 // reference export (2026_0820 - Glider_Capital_01_TEST.src) exceeds 5 % relative on
                 // 622 of its 1312 steps — 47 % — and the machine ran it smoothly. What that file

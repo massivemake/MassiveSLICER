@@ -16,8 +16,49 @@ namespace MassiveSlicer.Tests;
 /// subdivide would be a silent no-op on exactly the geometry it exists for — it would pass a
 /// "flow never steps more than 2 %" assertion by never changing flow at all.</para>
 /// </summary>
+/// <summary>
+/// Joins the "AdaptiveLayerHeights" collection for the reason that collection exists: xUnit runs test
+/// CLASSES in parallel, and the slicer publishes diagnostics through statics. Left outside it, this
+/// class's parallel load was enough to make LayerLadderAgreementTest fail in the full suite while
+/// passing in isolation - a flaky test, not a bug.
+/// </summary>
+[Collection("AdaptiveLayerHeights")]
 public class FlowSlewLimiterTest
 {
+    /// <summary>
+    /// ⭐ <b>The real invariant.</b> A written value may differ from the previous one by at most
+    /// <c>rate x (the time the PREVIOUS value was HELD)</c>.
+    ///
+    /// <para>⚠️ Not "by the duration of the segment it enters" — that is a different and wrong rule,
+    /// and it is what an earlier version of these tests asserted. It happened to pass while every
+    /// move took its own micro-step, and it started failing the moment the ramp began holding a
+    /// value across moves, which is the correct behaviour. The first step is unconstrained on
+    /// purpose: full flow was in force for the whole preceding stretch.</para>
+    /// </summary>
+    private static void AssertRateRespected(ToolpathLayer l, float ratePctPerSec, float speedMmS)
+    {
+        float prev = 1f;
+        float held = float.PositiveInfinity;
+
+        foreach (var m in l.Moves)
+        {
+            if (m.Kind != MoveKind.Extrude) continue;
+            float len = Len(m);
+
+            if (MathF.Abs(m.WidthScale - prev) > 1e-6f)
+            {
+                float allowed = (ratePctPerSec / 100f) * (held / speedMmS);
+                float step    = MathF.Abs(m.WidthScale - prev) / MathF.Max(prev, 1e-6f);
+                Assert.True(step <= allowed + 1e-3f,
+                    $"stepped {step * 100f:0.##} % after holding only {held:0.#} mm "
+                  + $"({held / speedMmS:0.###} s), which licenses {allowed * 100f:0.##} %");
+                prev = m.WidthScale;
+                held = len;
+            }
+            else held += len;
+        }
+    }
+
     private static SliceSettings S(float ratePctPerSec = 2f, float speedMmS = 100f) => new()
     {
         BeadWidth                     = 8f,
@@ -100,6 +141,49 @@ public class FlowSlewLimiterTest
         Assert.Equal(1000f, total, 2);
     }
 
+    /// <summary>
+    /// ⭐⭐ <b>The write-cadence test, and the most load-bearing one here.</b> A long ramp built from
+    /// MANY SHORT MOVES must step about once per <see cref="FlowSlewLimiter.RampStepSeconds"/> of
+    /// travel — not once per move.
+    ///
+    /// <para>Letting each move take its own step keeps the RATE correct while writing RPM on every
+    /// bead: on a real part the median move is 3.48 mm, and it produced 95,057 writes against the
+    /// known-good reference file's 1312. On the URM path there is no whole-percent rounding to
+    /// collapse them (<c>"0.#####"</c>), so nearly all of them reach the machine as distinct
+    /// commands between consecutive LINs — the <c>$ADVANCE</c> stutter KrlExporter warns about.</para>
+    /// </summary>
+    [Fact]
+    public void The_ramp_steps_once_per_hold_time_not_once_per_move()
+    {
+        // 3000 mm of ramp delivered as 1000 moves of 3 mm — the real crumb structure.
+        var l = Layer();
+        for (int i = 0; i < 1000; i++)
+            l.Moves.Add(new ToolpathMove(new Vector3(i * 3f, 0f, l.Z),
+                                         new Vector3((i + 1) * 3f, 0f, l.Z), MoveKind.Extrude));
+        var targets = new float[1000];
+        Array.Fill(targets, 0.75f);
+
+        var stats = FlowSlewLimiter.Apply(One(l), targets, S(2f, 100f));
+
+        // Steps are a constant 5 % (2 %/s x 2.5 s), so 1.0 -> 0.75 takes 0.95^n <= 0.75, n = 6.
+        // Six steps across 1000 moves - not one per move, and not one per 2.5 s forever either,
+        // because it ARRIVES and then holds.
+        Assert.InRange(stats.Steps, 4, 10);
+
+        int distinct = l.Moves.Select(m => MathF.Round(m.WidthScale, 5)).Distinct().Count();
+        Assert.InRange(distinct, 4, 12);
+
+        // CONTROL: without accumulation every move would carry its own value. If this ever holds,
+        // the cadence has regressed even though the RATE assertions all still pass.
+        Assert.True(distinct < 100,
+            $"{distinct} distinct flow values across 1000 short moves — the ramp is stepping per "
+          + "move again, which writes RPM between every LIN");
+
+        // 3000 mm at 100 mm/s is 30 s - ample - so it reaches target exactly and holds there.
+        Assert.Equal(0.75f, l.Moves[^1].WidthScale, 4);
+        AssertRateRespected(l, 2f, 100f);
+    }
+
     // -- The cap itself ----------------------------------------------------------------------
 
     /// <summary>
@@ -113,16 +197,7 @@ public class FlowSlewLimiterTest
         Move(l, 3000f);
         FlowSlewLimiter.Apply(One(l), [0.75f], S(ratePctPerSec: 2f, speedMmS: 100f));
 
-        float prev = 1f;
-        foreach (var m in l.Moves)
-        {
-            float dt      = Len(m) / 100f;
-            float allowed = 0.02f * dt;
-            float step    = MathF.Abs(m.WidthScale - prev) / prev;
-            Assert.True(step <= allowed + 1e-4f,
-                $"step {step * 100f:0.###} % over {dt:0.###} s exceeds the {allowed * 100f:0.###} % allowed");
-            prev = m.WidthScale;
-        }
+        AssertRateRespected(l, 2f, 100f);
 
         // CONTROL: the same assertion must FAIL on an uncapped run, or it is proving nothing.
         var l2 = Layer();
@@ -168,9 +243,10 @@ public class FlowSlewLimiterTest
         Assert.True(landed > 0.75f + 1e-3f,
             $"the arm reached {landed:0.####}, so a compliant ramp DID reach target in 6.6 s — "
           + "either the rate or the arithmetic changed, and the accepted shortfall is now wrong");
-        // An explicit range, not Assert.Equal(.., 2) — that ROUNDS, so 0.8735 vs 0.875 failed on a
-        // decimal boundary rather than on a real change. Exact value at 2.5 s steps: 0.8735.
-        Assert.InRange(landed, 0.86f, 0.89f);
+        // An explicit range, not Assert.Equal(.., 2) — that ROUNDS, and 0.8735 vs 0.875 once failed
+        // on a decimal boundary rather than on a real change. 608 mm at 92 mm/s is 2.6 hold periods
+        // of 230 mm, and the first step is immediate, so three 5 % steps land: 0.95^3 = 0.857.
+        Assert.InRange(landed, 0.84f, 0.88f);
         Assert.InRange(stats.Effectiveness, 0.20f, 0.45f);
     }
 
@@ -186,17 +262,12 @@ public class FlowSlewLimiterTest
         Move(l, 600f, y: 6f);      // free again
         FlowSlewLimiter.Apply(One(l), [0.75f, 1f], S());
 
-        // Nothing anywhere jumps straight back to full flow. Asserted against the RATE, because the
-        // permitted step depends on how long the segment is held — a fixed step ceiling is the wrong
-        // rule, as the reference export shows by exceeding 5 % on 47 % of its steps.
+        AssertRateRespected(l, 2f, 100f);
+
         float prev = 1f;
         bool sawRampUp = false;
         foreach (var m in l.Moves)
         {
-            float allowed = 0.02f * (Len(m) / 100f);
-            float step    = MathF.Abs(m.WidthScale - prev) / prev;
-            Assert.True(step <= allowed + 1e-4f,
-                $"a {step * 100f:0.##} % step over {Len(m) / 100f:0.###} s slipped through");
             if (m.WidthScale > prev + 1e-6f) sawRampUp = true;
             prev = m.WidthScale;
         }
@@ -223,15 +294,7 @@ public class FlowSlewLimiterTest
 
         FlowSlewLimiter.Apply(One(l), [0.75f, 1f, 1f], S());
 
-        float prev = 1f;
-        foreach (var m in l.Moves)
-        {
-            float allowed = 0.02f * (Len(m) / 100f);
-            float step    = MathF.Abs(m.WidthScale - prev) / prev;
-            Assert.True(step <= allowed + 1e-4f,
-                $"a {step * 100f:0.##} % step at the stitch — the cliff is back");
-            prev = m.WidthScale;
-        }
+        AssertRateRespected(l, 2f, 100f);
 
         // And it was genuinely ramped, not merely left alone: a skipped stitch would still be 1.0.
         var stitches = l.Moves.Where(m => m.IsLayerStitch).ToList();
@@ -265,6 +328,61 @@ public class FlowSlewLimiterTest
         // It must match its neighbours, not merely be under 1.0: no time passes, so no change is legal.
         int i = l.Moves.IndexOf(degenerate);
         Assert.Equal(l.Moves[i - 1].WidthScale, degenerate.WidthScale, 5);
+    }
+
+    /// <summary>
+    /// ⭐⭐ <b>The end-to-end check: what the EXPORTED PROGRAM actually contains.</b> Everything else
+    /// here measures the toolpath; this measures the <c>.src</c>.
+    ///
+    /// <para>It has to be done on the <b>URM / Digital Start-Stop</b> path, because that is the one
+    /// the Caracol uses and the one with no safety net: <c>FormatCaracolRpm</c> writes
+    /// <c>"0.#####"</c> — five decimals, NO rounding to whole motor percent — so unlike the ANOUT
+    /// path nothing downstream collapses near-identical values. A ramp that micro-steps per move
+    /// therefore lands an <c>RPM =</c> line between consecutive LINs, which is exactly the
+    /// "$ADVANCE continuous path / robot stutter on dense clusters" failure KrlExporter warns about.
+    /// The known-good reference export writes 1312 RPM changes over 506.7 m — one per ~386 mm.</para>
+    /// </summary>
+    [Fact]
+    public void The_exported_program_does_not_write_RPM_between_every_move()
+    {
+        // 3000 mm of crowded bead delivered as 1000 moves of 3 mm - the real crumb structure.
+        var l = Layer();
+        for (int i = 0; i < 1000; i++)
+            l.Moves.Add(new ToolpathMove(new Vector3(i * 3f, 0f, l.Z),
+                                         new Vector3((i + 1) * 3f, 0f, l.Z), MoveKind.Extrude));
+        var targets = new float[1000];
+        Array.Fill(targets, 0.75f);
+
+        var tp = One(l);
+        FlowSlewLimiter.Apply(tp, targets, S(2f, 92f));
+
+        string src = MassiveSlicer.Core.IO.KrlExporter.Export(tp, new MassiveSlicer.Core.IO.KrlExportSettings
+        {
+            ProgramName             = "FlowSlewCadence",
+            DigitalStartStopEnabled = true,      // URM: "RPM = n", five decimals, no percent rounding
+            BeadWidthMm             = 8f,
+            LayerHeightMm           = 4f,
+            PrintSpeedMps           = 0.092f,
+            FlowRate                = 0.463f,
+        });
+
+        var lines    = src.Split((char)10);
+        int rpmLines = lines.Count(x => x.TrimStart().StartsWith("RPM =", StringComparison.Ordinal));
+        int linLines = lines.Count(x => x.Contains("LIN ", StringComparison.Ordinal));
+
+        Assert.True(linLines > 500, $"only {linLines} LIN lines — the fixture did not export properly");
+
+        // The ramp is 1.0 -> 0.75 in 5 % steps = 6 steps, plus start/stop bookkeeping. Nowhere near
+        // one per move. Generous ceiling so this fails on a REGRESSION, not on a formatting tweak.
+        Assert.True(rpmLines < 40,
+            $"{rpmLines} RPM writes across {linLines} LIN moves — the ramp is writing RPM between "
+          + "consecutive LINs, which kills $ADVANCE. Before the allowance accumulated across moves "
+          + "this was ~1 per move.");
+
+        // And state it as the ratio, which is the thing that actually matters to the controller.
+        double perLin = (double)rpmLines / linLines;
+        Assert.True(perLin < 0.05,
+            $"one RPM write per {1.0 / perLin:0.#} LIN moves — far denser than the reference export");
     }
 
     // -- What must not be touched ------------------------------------------------------------
