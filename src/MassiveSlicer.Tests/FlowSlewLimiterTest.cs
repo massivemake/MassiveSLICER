@@ -168,8 +168,10 @@ public class FlowSlewLimiterTest
         Assert.True(landed > 0.75f + 1e-3f,
             $"the arm reached {landed:0.####}, so a compliant ramp DID reach target in 6.6 s — "
           + "either the rate or the arithmetic changed, and the accepted shortfall is now wrong");
-        Assert.Equal(0.875f, landed, 2);
-        Assert.InRange(stats.Effectiveness, 0.20f, 0.40f);
+        // An explicit range, not Assert.Equal(.., 2) — that ROUNDS, so 0.8735 vs 0.875 failed on a
+        // decimal boundary rather than on a real change. Exact value at 2.5 s steps: 0.8735.
+        Assert.InRange(landed, 0.86f, 0.89f);
+        Assert.InRange(stats.Effectiveness, 0.20f, 0.45f);
     }
 
     /// <summary>
@@ -184,13 +186,17 @@ public class FlowSlewLimiterTest
         Move(l, 600f, y: 6f);      // free again
         FlowSlewLimiter.Apply(One(l), [0.75f, 1f], S());
 
-        // Nothing anywhere jumps straight back to full flow.
+        // Nothing anywhere jumps straight back to full flow. Asserted against the RATE, because the
+        // permitted step depends on how long the segment is held — a fixed step ceiling is the wrong
+        // rule, as the reference export shows by exceeding 5 % on 47 % of its steps.
         float prev = 1f;
         bool sawRampUp = false;
         foreach (var m in l.Moves)
         {
-            float step = MathF.Abs(m.WidthScale - prev) / prev;
-            Assert.True(step <= 0.02f + 1e-4f, $"a {step * 100f:0.##} % step slipped through");
+            float allowed = 0.02f * (Len(m) / 100f);
+            float step    = MathF.Abs(m.WidthScale - prev) / prev;
+            Assert.True(step <= allowed + 1e-4f,
+                $"a {step * 100f:0.##} % step over {Len(m) / 100f:0.###} s slipped through");
             if (m.WidthScale > prev + 1e-6f) sawRampUp = true;
             prev = m.WidthScale;
         }
@@ -200,14 +206,77 @@ public class FlowSlewLimiterTest
           + "up-ramp was not rate-limited");
     }
 
+    /// <summary>
+    /// ⚠️ A layer stitch is an ordinary extruding move that still writes an RPM value, so leaving it
+    /// out of the ramp makes it a cliff in BOTH directions — up into it and back down out of it.
+    /// Excluding stitches and resume ramps cost 806 steps over the cap on a real 392-layer column:
+    /// 391 across boundaries and 415 within layers, almost exactly two per layer.
+    /// </summary>
+    [Fact]
+    public void A_layer_stitch_is_rate_limited_like_any_other_extruding_move()
+    {
+        var l = Layer();
+        Move(l, 600f, y: 0f);                       // crowded — ramps down
+        l.Moves.Add(new ToolpathMove(new Vector3(600, 0, 4), new Vector3(0, 6, 4), MoveKind.Extrude)
+                    { IsLayerStitch = true });      // used to sit at 1.0 and cliff both ways
+        Move(l, 600f, y: 6f);
+
+        FlowSlewLimiter.Apply(One(l), [0.75f, 1f, 1f], S());
+
+        float prev = 1f;
+        foreach (var m in l.Moves)
+        {
+            float allowed = 0.02f * (Len(m) / 100f);
+            float step    = MathF.Abs(m.WidthScale - prev) / prev;
+            Assert.True(step <= allowed + 1e-4f,
+                $"a {step * 100f:0.##} % step at the stitch — the cliff is back");
+            prev = m.WidthScale;
+        }
+
+        // And it was genuinely ramped, not merely left alone: a skipped stitch would still be 1.0.
+        var stitches = l.Moves.Where(m => m.IsLayerStitch).ToList();
+        Assert.NotEmpty(stitches);
+        Assert.All(stitches, m => Assert.True(m.WidthScale < 1f,
+            "a stitch segment came back at full flow — it was skipped, not rate-limited"));
+    }
+
+    /// <summary>
+    /// ⚠️ A zero-length extrude move still writes an RPM value, so leaving it at full flow makes it a
+    /// cliff in BOTH directions. These are real — degenerate segments survive in the path — and they
+    /// were every one of the 11 remaining over-10 % steps on a real 392-layer column: a 14 % jump to
+    /// exactly 1.000 sitting between neighbours at 0.882 and 0.885.
+    /// </summary>
+    [Fact]
+    public void A_zero_length_move_holds_the_current_flow_instead_of_resetting_to_full()
+    {
+        var l = Layer();
+        Move(l, 600f, y: 0f);      // ramps down toward 0.75
+        var p = new Vector3(600f, 0f, l.Z);
+        l.Moves.Add(new ToolpathMove(p, p, MoveKind.Extrude));   // degenerate, mid-path
+        Move(l, 600f, y: 0f);
+
+        FlowSlewLimiter.Apply(One(l), [0.75f, 0.75f, 0.75f], S());
+
+        var degenerate = l.Moves.Single(m => Vector3.Distance(m.From, m.To) <= 1e-4f);
+        Assert.True(degenerate.WidthScale < 0.99f,
+            $"the zero-length move came back at {degenerate.WidthScale:0.###} — it reset to full flow "
+          + "and is a cliff at the machine");
+
+        // It must match its neighbours, not merely be under 1.0: no time passes, so no change is legal.
+        int i = l.Moves.IndexOf(degenerate);
+        Assert.Equal(l.Moves[i - 1].WidthScale, degenerate.WidthScale, 5);
+    }
+
     // -- What must not be touched ------------------------------------------------------------
 
     /// <summary>
-    /// Travel deposits nothing, the brim carries an absolute RpmPercentOverride that bypasses every
-    /// scale, and wipes and resume ramps are deliberate ramps of their own.
+    /// Only the moves WidthScale cannot reach are exempt: travel deposits nothing, the brim's
+    /// absolute RpmPercentOverride bypasses every scale, and ToolpathRpm.MoveScale returns
+    /// WipeRpmScale outright for a wipe. Note these three therefore remain unmanaged RPM steps —
+    /// pre-existing, and not something this limiter can fix.
     /// </summary>
     [Fact]
-    public void Travel_brim_wipe_and_resume_ramps_pass_straight_through()
+    public void Travel_brim_and_wipe_pass_straight_through()
     {
         var l = Layer();
         l.Moves.Add(new ToolpathMove(new Vector3(0, 0, 4), new Vector3(500, 0, 4), MoveKind.Travel));
@@ -215,13 +284,29 @@ public class FlowSlewLimiterTest
                     { IsBrim = true, RpmPercentOverride = 60f });
         l.Moves.Add(new ToolpathMove(new Vector3(0, 2, 4), new Vector3(500, 2, 4), MoveKind.Extrude)
                     { IsWipe = true });
-        l.Moves.Add(new ToolpathMove(new Vector3(0, 3, 4), new Vector3(500, 3, 4), MoveKind.Extrude)
+
+        FlowSlewLimiter.Apply(One(l), [0.75f, 0.75f, 0.75f], S());
+
+        Assert.Equal(3, l.Moves.Count);
+        Assert.All(l.Moves, m => Assert.Equal(1f, m.WidthScale, 5));
+    }
+
+    /// <summary>
+    /// A resume ramp, by contrast, IS rate-limited now. It is a real extruding move that writes RPM,
+    /// and its own ResumeRpmScale multiplies alongside WidthScale rather than replacing it.
+    /// </summary>
+    [Fact]
+    public void A_resume_ramp_is_rate_limited_too()
+    {
+        var l = Layer();
+        l.Moves.Add(new ToolpathMove(new Vector3(0, 0, 4), new Vector3(600, 0, 4), MoveKind.Extrude)
                     { IsResumeRamp = true });
 
-        FlowSlewLimiter.Apply(One(l), [0.75f, 0.75f, 0.75f, 0.75f], S());
+        FlowSlewLimiter.Apply(One(l), [0.75f], S());
 
-        Assert.Equal(4, l.Moves.Count);
-        Assert.All(l.Moves, m => Assert.Equal(1f, m.WidthScale, 5));
+        Assert.True(l.Moves.Count > 1, "the resume ramp was skipped rather than rate-limited");
+        Assert.True(l.Moves[0].WidthScale > 0.9f, "it should walk down, not slam");
+        Assert.All(l.Moves, m => Assert.True(m.IsResumeRamp, "the flag must survive subdivision"));
     }
 
     /// <summary>
@@ -282,6 +367,38 @@ public class FlowSlewLimiterTest
 
         Assert.Equal(0f, FlowSlewLimiter.Stats.Empty.WantedReductionMm, 5);
         Assert.Equal(1f, FlowSlewLimiter.Stats.Empty.Effectiveness, 5);
+    }
+
+    /// <summary>
+    /// ⚠️ <b>The metric bug that must never come back.</b> Reduction the ramp spills onto bead that was
+    /// never crowded is under-extruded WALL — a cost — not delivered correction. Counting it as
+    /// delivery reported <b>97.4 %</b> on a real 392-layer column where the toolpath said
+    /// <b>49.6 %</b>: only 0.3 % of bead reached the 0.75 target while 885 m of uncrowded wall ran
+    /// reduced purely because the ramp had not finished climbing.
+    /// </summary>
+    [Fact]
+    public void Reduction_spilled_onto_uncrowded_bead_is_collateral_not_delivery()
+    {
+        var l = Layer();
+        Move(l, 600f, y: 0f);      // crowded: wants 0.75
+        Move(l, 600f, y: 6f);      // NOT crowded: wants 1.0, but the ramp is still climbing
+        var s = FlowSlewLimiter.Apply(One(l), [0.75f, 1f], S());
+
+        Assert.True(s.CollateralOnFreeMm > 1f,
+            "the second move is uncrowded and cannot be at full flow yet, so there must be "
+          + "collateral — if there is none, the split is not being made at all");
+
+        // Effectiveness must ignore the collateral entirely.
+        Assert.Equal(s.DeliveredOnCrowdedMm / s.WantedReductionMm, s.Effectiveness, 4);
+        Assert.True(s.Effectiveness < 1f);
+
+        // And the old, wrong metric — everything summed together — would have overstated it.
+        float inflated = (s.DeliveredOnCrowdedMm + s.CollateralOnFreeMm) / s.WantedReductionMm;
+        Assert.True(inflated > s.Effectiveness,
+            "if lumping collateral in does not inflate the figure, this test proves nothing");
+
+        // Delivery can never exceed what was asked for: the ramp lags the target, never overshoots.
+        Assert.True(s.DeliveredOnCrowdedMm <= s.WantedReductionMm + 1e-3f);
     }
 
     [Fact]

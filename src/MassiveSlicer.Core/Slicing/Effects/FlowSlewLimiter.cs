@@ -41,35 +41,97 @@ namespace MassiveSlicer.Core.Slicing.Effects;
 /// <para><b>Owed, and it changes everything:</b> nobody has found where the drive ACTUALLY stops
 /// tracking. 2 %/s is one person's self-imposed guess that happened to work. If the real limit is
 /// nearer 10 %/s the shortfall above disappears.</para>
+///
+/// <para><b>⚠️ Relative %, or RPM points? The reference file cannot tell us.</b> Measured over its
+/// 1311 printing-range changes, the coefficient of variation is <b>2.04 for points/s and 2.00 for
+/// relative %/s</b> — indistinguishable, and both enormous. That file is not a controlled rate
+/// limiter; it is merely gentle on average. So relative is a CHOICE, not a finding. The reason to
+/// prefer it: its RPM runs 43.74-82.62, and a fixed points/s cap would be proportionally harshest at
+/// the bottom of that range, which is exactly where flow is nearest its calibration floor and least
+/// trustworthy. Relative eases off there instead. If a real machine measurement ever shows the drive
+/// cares about points, this is the assumption to revisit first.</para>
+///
+/// <para><b>⚠️ Three caveats before comparing anything to that file.</b>
+/// <list type="number">
+/// <item>Its RPM values carry a <b>manual +10 offset</b> — a hand-added boost, to be replaced
+/// properly by dialling in the HV. Backing it out moves its median rate from 1.70 to
+/// <b>1.98 %/s</b>, which is what the 2 %/s default is actually matched against. Reading the rate
+/// off the file as written would have set this cap ~15 % too slack.</item>
+/// <item>It <b>misses an entire arm.</b> Its 1312 changes are the cost of an INCOMPLETE correction,
+/// so its change count is not a ceiling — correcting all four arms legitimately needs more writes
+/// than correcting three.</item>
+/// <item>It was <b>hand post-processed after export</b>, which is exactly what we are NOT doing:
+/// this limiter runs in the slicer, so the program comes out correct by construction.</item>
+/// </list>
+/// Compare RATE and SHAPE against it. Never absolute RPM, never coverage, never write count.</para>
 /// </summary>
 public static class FlowSlewLimiter
 {
     /// <summary>
-    /// How long one ramp step is held, in seconds. With the default 2 %/s rate this gives 2 % per
-    /// step at ~92 mm spacing — a little finer than the working reference file's 5 % per 213 mm, and
-    /// finer is always safe. Not a tuning knob: the rate is the physical constraint, this is only
-    /// how finely the ramp is discretised.
+    /// How long one ramp step is held, in seconds. With the default 2 %/s rate this is 5 % per step
+    /// at ~230 mm spacing (at 92 mm/s), which reproduces the known-good reference export almost
+    /// exactly.
+    ///
+    /// <para><b>Measured on that file</b> (<c>2026_0820 - Glider_Capital_01_TEST.src</c> — an export
+    /// that was hand post-processed AFTER leaving the slicer, and which the machine then ran
+    /// smoothly): 1312 RPM changes over 506.7 m, median step <b>3.22 points = 4.77 % relative</b>,
+    /// median spacing <b>219.9 mm</b>. Only 3 steps (0.23 %) exceed 10 % relative, and the 2 over
+    /// 20 % are the <c>1.00 -> 82.62</c> start/stop transitions. It is a reference for what our own
+    /// EXPORT should look like — not something to imitate by post-processing our <c>.src</c>; this
+    /// limiter runs in the slicer, so the program comes out right by construction.</para>
+    ///
+    /// <para>⚠️ <b>So "never step more than 5 %" is NOT the rule</b> — 622 of its 1312 steps, 47 %,
+    /// are over 5 % relative. What actually holds is the RATE: ~4.8 % per ~220 mm at 92 mm/s, i.e.
+    /// ~2.1 %/s. Judge a program by its rate and by the 10 % line, not by a 5 % step count.</para>
+    ///
+    /// <para>Finer would be smoother, and an earlier version used 1.0 s. It was changed to match the
+    /// reference because finer is NOT free: at a nominal ~76 % RPM one whole motor percent is 1.3 %
+    /// relative, so 2 % steps are distinct commands and get written. 1.0 s spacing writes RPM 2.4x
+    /// more often than the proven file, and <c>KrlExporter</c> warns in its own comment that
+    /// re-writing ANOUT between every LIN "kills $ADVANCE continuous path and makes the robot stutter
+    /// on dense clusters". Reproducing what is known to work beats out-smoothing it on a guess.</para>
+    ///
+    /// <para>Not a tuning knob: the rate is the physical constraint; this is only how finely the ramp
+    /// is discretised on a long move. On short moves the move's own length is the step.</para>
     /// </summary>
-    public const float RampStepSeconds = 1.0f;
+    public const float RampStepSeconds = 2.5f;
 
     /// <summary>What the last <see cref="Apply"/> did. Diagnostics; nothing reads it to decide.</summary>
+    /// <param name="WantedReductionMm">
+    /// What the correction asked for: sum of (1 - target) x length over crowded bead.
+    /// </param>
+    /// <param name="DeliveredOnCrowdedMm">
+    /// What actually arrived ON the crowded bead that wanted it. Always &lt;= wanted, because the
+    /// ramp can only lag the target, never overshoot it.
+    /// </param>
+    /// <param name="CollateralOnFreeMm">
+    /// ⚠️ Flow reduction that landed on bead which was NOT crowded, because the ramp was still
+    /// walking back up when the crowded run ended. This is a COST — under-extruded outer wall — not
+    /// part of the correction, and it must never be added to the delivered figure.
+    /// </param>
     public sealed record Stats(
         int   MovesRamped,
         int   SegmentsAdded,
         int   Steps,
         float WorstStepFraction,
         float WantedReductionMm,
-        float DeliveredReductionMm)
+        float DeliveredOnCrowdedMm,
+        float CollateralOnFreeMm)
     {
         /// <summary>
-        /// Fraction of the intended flow reduction that a compliant ramp actually delivers. 1.0
-        /// would mean the correction lands in full; the ~0.25 measured on a real column is the
-        /// honest cost of respecting the drive.
+        /// Fraction of the intended reduction that actually reached the bead that wanted it.
+        ///
+        /// <para>⚠️ This deliberately does NOT credit <see cref="CollateralOnFreeMm"/>. An earlier
+        /// version summed every reduction the limiter commanded anywhere and reported <b>97.4 %</b> on
+        /// a real 392-layer column. Measured against the toolpath, the truth was <b>49.6 %</b>: only
+        /// 0.3 % of bead ever reached the 0.75 target, and 885 m of UNCROWDED wall was running
+        /// reduced simply because the ramp had not finished climbing. The old figure was counting
+        /// that under-extrusion as success.</para>
         /// </summary>
         public float Effectiveness =>
-            WantedReductionMm <= 1e-4f ? 1f : DeliveredReductionMm / WantedReductionMm;
+            WantedReductionMm <= 1e-4f ? 1f : DeliveredOnCrowdedMm / WantedReductionMm;
 
-        public static readonly Stats Empty = new(0, 0, 0, 0f, 0f, 0f);
+        public static readonly Stats Empty = new(0, 0, 0, 0f, 0f, 0f, 0f);
     }
 
     /// <summary>
@@ -91,7 +153,7 @@ public static class FlowSlewLimiter
 
         int   movesRamped = 0, segmentsAdded = 0, steps = 0;
         float worstStep   = 0f;
-        double wanted = 0.0, delivered = 0.0;
+        double wanted = 0.0, onCrowded = 0.0, collateral = 0.0;
 
         // The drive is one physical thing and never forgets, so the commanded value carries across
         // travels and across layer boundaries rather than resetting.
@@ -111,20 +173,47 @@ public static class FlowSlewLimiter
                 var   move   = layer.Moves[mi];
                 float target = flat < targetScale.Length ? targetScale[flat] : 1f;
 
-                // Brim carries an absolute RpmPercentOverride that bypasses every scale, wipes and
-                // resume ramps are deliberate ramps of their own, and travel deposits nothing.
+                // ⚠️ Only moves whose commanded flow this cannot reach are exempt. Excluding a move
+                // from a CORRECTION is reasonable; excluding it from a MACHINE CONSTRAINT is not,
+                // because the exporter still writes an RPM value for it and the drive still has to
+                // follow that step.
+                //
+                // Layer stitches and resume ramps were excluded here at first and it cost 806 steps
+                // over the cap on a real 392-layer column — 391 across layer boundaries and 415
+                // within layers, almost exactly two per layer. PlanarSlicer inserts one stitch at
+                // index 0 of every layer; left unramped it held WidthScale 1.0 and became a cliff
+                // BOTH ways, up into it and back down out of it, while the ramp walked on behind it.
+                // Both are ordinary extruding moves, so both are rate-limited now.
+                //
+                // Still exempt, because WidthScale genuinely cannot reach them: travel deposits
+                // nothing, the brim's absolute RpmPercentOverride bypasses every scale, and
+                // ToolpathRpm.MoveScale returns WipeRpmScale outright for a wipe. The wipe and brim
+                // transitions are therefore still unmanaged steps — pre-existing, and not this
+                // limiter's to fix.
                 bool rampable = move.Kind == MoveKind.Extrude
                                 && !move.IsBrim && !move.IsWipe
-                                && !move.IsResumeRamp && !move.IsLayerStitch
                                 && move.RpmPercentOverride is null;
 
                 float length = Vector3.Distance(move.From, move.To);
 
                 if (rampable) wanted += (1f - target) * length;
 
-                if (!rampable || length <= 1e-4f)
+                if (!rampable)
                 {
                     rebuilt.Add(move);
+                    expansion[mi] = 1;
+                    continue;
+                }
+
+                // ⚠️ A zero-length extrude move still WRITES AN RPM VALUE. No time passes, so it
+                // cannot ramp — but it must HOLD the value in force, not reset to full flow. Passing
+                // these through untouched left them at WidthScale 1.0 and produced a 14 % cliff in
+                // both directions, sandwiched between neighbours at 0.882 and 0.885. That was every
+                // one of the 11 remaining over-10 % steps on a real 392-layer column, and the
+                // signature is unmistakable in a dump: len = 0.00 mm, w = exactly 1.000.
+                if (length <= 1e-4f)
+                {
+                    rebuilt.Add(move with { WidthScale = commanded });
                     expansion[mi] = 1;
                     continue;
                 }
@@ -136,7 +225,7 @@ public static class FlowSlewLimiter
                     if (MathF.Abs(target - commanded) > 1e-5f) { steps++; commanded = target; }
                     rebuilt.Add(move with { WidthScale = target });
                     expansion[mi] = 1;
-                    delivered += (1f - target) * length;
+                    Account(target, target, length);
                     continue;
                 }
 
@@ -149,7 +238,7 @@ public static class FlowSlewLimiter
                 {
                     rebuilt.Add(move with { WidthScale = commanded });
                     expansion[mi] = 1;
-                    delivered += (1f - commanded) * length;
+                    Account(target, commanded, length);
                     continue;
                 }
 
@@ -173,7 +262,7 @@ public static class FlowSlewLimiter
                     rebuilt.Add(SliceSegment(move, length, travelled, travelled + segLen)
                                 with { WidthScale = next });
                     emitted++;
-                    delivered += (1f - next) * segLen;
+                    Account(target, next, segLen);
 
                     commanded  = next;
                     travelled += segLen;
@@ -187,7 +276,7 @@ public static class FlowSlewLimiter
                     rebuilt.Add(SliceSegment(move, length, travelled, length)
                                 with { WidthScale = commanded });
                     emitted++;
-                    delivered += (1f - commanded) * segLen;
+                    Account(target, commanded, segLen);
                 }
 
                 expansion[mi]  = emitted;
@@ -208,7 +297,18 @@ public static class FlowSlewLimiter
         }
 
         return new Stats(movesRamped, segmentsAdded, steps, worstStep,
-                         (float)wanted, (float)delivered);
+                         (float)wanted, (float)onCrowded, (float)collateral);
+
+        // Reduction on bead the correction asked to reduce is DELIVERY; the identical reduction on
+        // bead it never asked about is COLLATERAL — under-extruded wall. Conflating the two is what
+        // turned a 49.6 % result into a reported 97.4 %.
+        void Account(float target, float commandedNow, float lengthMm)
+        {
+            double cut = (1f - commandedNow) * (double)lengthMm;
+            if (cut <= 0.0) return;
+            if (target < 1f - 1e-5f) onCrowded  += cut;
+            else                     collateral += cut;
+        }
     }
 
     /// <summary>
@@ -262,8 +362,9 @@ public static class FlowSlewLimiter
 
         return $"Flow capped at {settings.MaxFlowChangePercentPerSecond:0.##} %/s: {s.Steps} steps, "
              + $"worst {s.WorstStepFraction * 100f:0.##} % relative. {s.MovesRamped} moves subdivided "
-             + $"(+{s.SegmentsAdded} segments). Delivers {s.DeliveredReductionMm / 1000.0:0.###} m of "
-             + $"the {s.WantedReductionMm / 1000.0:0.###} m reduction the correction wanted "
-             + $"= {s.Effectiveness * 100f:0.#} %.";
+             + $"(+{s.SegmentsAdded} segments). Delivers {s.DeliveredOnCrowdedMm / 1000.0:0.###} m of "
+             + $"the {s.WantedReductionMm / 1000.0:0.###} m the correction wanted "
+             + $"= {s.Effectiveness * 100f:0.#} %, and spills {s.CollateralOnFreeMm / 1000.0:0.###} m "
+             + "of reduction onto bead that was not crowded (under-extruded wall).";
     }
 }

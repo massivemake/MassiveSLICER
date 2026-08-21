@@ -2096,55 +2096,114 @@ public sealed class ConsoleCommandRegistry
                     ctx.Log("[flow-slew]   ⚠ OFF means the whole correction lands on one move. That is "
                           + "what saturated the drive — addset MaxFlowChangePercentPerSecond 2");
 
-                // Walk the real commanded scale, in path order, exactly as the exporter would write
-                // it. Deliberately re-derived from the moves instead of trusting the limiter's own
-                // bookkeeping: if something downstream reintroduced a step, this is what shows it.
+                // ⚠️ Count what the MACHINE receives, not raw floats. The motor takes whole-percent
+                // steps, and KrlExporter only re-writes RPM when the emitted command TEXT changes
+                // ("if ANOUT/VEL round to the same digits, re-writing them between every LIN kills
+                // $ADVANCE continuous path and makes the robot stutter on dense clusters"). So a
+                // ramp walking 75.5202 -> 75.5214 is ONE command, not two. Counting raw floats
+                // overstated this by 15x on a real column and made a correct ramp look like noise.
+                float nomPct = MassiveSlicer.Core.IO.KrlAnout.ComputeRpmPercent(
+                    (float)add.BeadWidth, (float)add.LayerHeight,
+                    speedMmS / 1000f, (float)add.ActiveFlowRate);
+                if (nomPct <= 0f)
+                {
+                    ctx.LogError("[flow-slew] bead / layer height / speed / flow cannot produce an RPM "
+                               + "— nothing to measure.");
+                    return;
+                }
+                ctx.Log($"[flow-slew]   nominal RPM {nomPct:0.##} % → one whole percent is "
+                      + $"{100f / nomPct:0.##} % relative, the finest step the motor can take");
+
+                // Deliberately re-derived from the moves rather than read back from the limiter's own
+                // bookkeeping: if anything downstream reintroduced a step, this is what shows it.
                 var steps = new List<(float Rel, float Sec, int Layer, float Z, float From, float To)>();
-                float prev = 1f;
-                bool  seen = false;
+                int   rawChanges = 0;
+                float prevRaw = -1f, prevPct = -1f;
+                float mmSinceWrite = 0f;
+                var   spacing = new List<float>();
 
                 foreach (var lyr in tp.Layers)
                     foreach (var m in lyr.Moves)
                     {
                         if (m.Kind != MoveKind.Extrude || m.IsBrim || m.IsWipe) continue;
 
-                        float cur = MassiveSlicer.Core.IO.ToolpathRpm.MoveScale(m);
-                        if (!seen) { prev = cur; seen = true; continue; }
+                        float raw = MassiveSlicer.Core.IO.ToolpathRpm.MoveScale(m);
+                        float pct = MassiveSlicer.Core.IO.ToolpathRpm.SteppedPercent(nomPct * raw);
 
-                        if (Math.Abs(cur - prev) > 1e-5f)
+                        if (prevPct < 0f) { prevRaw = raw; prevPct = pct; continue; }
+
+                        if (Math.Abs(raw - prevRaw) > 1e-5f) rawChanges++;
+
+                        mmSinceWrite += System.Numerics.Vector3.Distance(m.From, m.To);
+
+                        if (Math.Abs(pct - prevPct) > 1e-4f)
                         {
-                            float len = System.Numerics.Vector3.Distance(m.From, m.To);
-                            float sec = speedMmS > 1e-3f ? len / speedMmS : 0f;
-                            steps.Add((Math.Abs(cur - prev) / Math.Max(prev, 1e-6f), sec,
-                                       lyr.Index, lyr.Z, prev, cur));
+                            float sec = speedMmS > 1e-3f ? mmSinceWrite / speedMmS : 0f;
+                            steps.Add((Math.Abs(pct - prevPct) / Math.Max(prevPct, 1e-6f), sec,
+                                       lyr.Index, lyr.Z, prevPct, pct));
+                            spacing.Add(mmSinceWrite);
+                            mmSinceWrite = 0f;
+                            prevPct = pct;
                         }
-                        prev = cur;
+                        prevRaw = raw;
                     }
 
                 if (steps.Count == 0)
                 {
-                    ctx.Log("[flow-slew]   commanded flow never changes within a layer — nothing to cap.");
+                    ctx.Log("[flow-slew]   commanded RPM never changes — nothing to cap. "
+                          + $"({rawChanges} sub-percent wobbles, all collapsed by the exporter.)");
                     return;
                 }
 
                 var s = MassiveSlicer.Core.Slicing.Effects.ProximityFlowPostProcessor.LastSlew;
-                ctx.Log($"[flow-slew]   {steps.Count} flow changes; worst "
+                ctx.Log($"[flow-slew]   {steps.Count} RPM writes the machine actually sees; worst "
                       + $"{steps.Max(x => x.Rel) * 100f:0.##} % relative");
+                ctx.Log($"[flow-slew]   ({rawChanges} raw scale changes upstream — the exporter "
+                      + $"collapses {rawChanges - steps.Count} of them as the same command)");
+                // ⚠️ Judge by the RATE and by the 10 % line, NOT by a 5 % step count. The known-good
+                // reference export (2026_0820 - Glider_Capital_01_TEST.src) exceeds 5 % relative on
+                // 622 of its 1312 steps — 47 % — and the machine ran it smoothly. What that file
+                // actually holds to is ~4.8 % per ~220 mm and almost nothing over 10 %.
+                //
+                // ⚠️ Three caveats on that reference: its RPM carries a hand-added +10 offset (to be
+                // replaced properly by dialling in the HV), it MISSES AN ENTIRE ARM, and it was hand
+                // post-processed after export. So compare SHAPE and RATE against it — never absolute
+                // RPM, and never treat its change COUNT as a ceiling: correcting all four arms
+                // legitimately needs more writes than correcting three.
                 foreach (float pct in new[] { 5f, 10f, 20f })
-                    ctx.Log($"[flow-slew]   steps over {pct,2:0} %: {steps.Count(x => x.Rel * 100f > pct)}");
+                    ctx.Log($"[flow-slew]   steps over {pct,2:0} %: {steps.Count(x => x.Rel * 100f > pct),6}"
+                          + $"   (reference file: {(pct == 5f ? "622 of 1312 — 47 %!" : pct == 10f ? "3 — 0.23 %" : "2, both start/stop")})");
+
+                var ordered  = spacing.OrderBy(v => v).ToList();
+                float medGap = ordered.Count > 0 ? ordered[ordered.Count / 2] : 0f;
+                var relOrd   = steps.OrderBy(x => x.Rel).ToList();
+                float medRel = relOrd[relOrd.Count / 2].Rel * 100f;
+                ctx.Log($"[flow-slew]   median step {medRel:0.##} % every {medGap:0.#} mm "
+                      + $"= {(medGap > 1e-3f ? medRel / (medGap / Math.Max(speedMmS, 1e-3f)) : 0f):0.##} %/s"
+                      + "   (reference file: 4.77 % every 219.9 mm; 1.98 %/s once its manual +10 "
+                      + "RPM offset is backed out — 1.70 %/s as written)");
 
                 // The honest headline: a compliant ramp cannot fully correct an arm at these speeds,
                 // so say how much of the intended reduction actually reached the machine.
                 if (s.WantedReductionMm > 1e-3f)
-                    ctx.Log($"[flow-slew]   correction delivered: {s.DeliveredReductionMm / 1000.0:0.###} m "
+                {
+                    ctx.Log($"[flow-slew]   correction delivered: {s.DeliveredOnCrowdedMm / 1000.0:0.###} m "
                           + $"of the {s.WantedReductionMm / 1000.0:0.###} m wanted = "
                           + $"{s.Effectiveness * 100f:0.#} %  ({s.MovesRamped} moves subdivided, "
                           + $"+{s.SegmentsAdded} segments)");
+                    // The cost side, and it is not small: reduction the ramp spilled onto bead that
+                    // was never crowded, i.e. under-extruded wall. Reporting only the delivered
+                    // figure once turned a 49.6 % result into a claimed 97.4 %.
+                    ctx.Log($"[flow-slew]   ⚠ collateral: {s.CollateralOnFreeMm / 1000.0:0.###} m of "
+                          + "reduction landed on bead that was NOT crowded — under-extruded wall, "
+                          + "the ramp still climbing after a crowded run ended. This is the parked "
+                          + "exit-ramp problem, measured.");
+                }
 
                 ctx.Log("[flow-slew]   biggest steps first:");
                 foreach (var x in steps.OrderByDescending(x => x.Rel).Take(show))
                     ctx.Log($"[flow-slew]     L{x.Layer,-5} Z {x.Z,8:0.0}  "
-                          + $"x{x.From:0.###} -> x{x.To:0.###}  {x.Rel * 100f,6:0.##} % "
+                          + $"RPM {x.From,5:0} -> {x.To,5:0} %  {x.Rel * 100f,6:0.##} % "
                           + $"over {x.Sec,6:0.###} s");
 
                 if (steps.Count > show)
