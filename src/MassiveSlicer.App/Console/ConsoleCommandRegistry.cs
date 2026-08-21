@@ -2112,6 +2112,12 @@ public sealed class ConsoleCommandRegistry
                 ctx.Log($"[proximity] bead {bead:0.##} mm · correcting runs over "
                       + $"{add.ProximityMinRunLengthMm:0.#} mm · "
                       + $"{(add.ProximityCorrectionEnabled ? "ON" : "OFF")}");
+                ctx.Log($"[proximity]   hold through structure: "
+                      + $"{(add.ProximityHoldThroughStructure ? "ON" : "OFF")}"
+                      + (add.ProximityHoldThroughStructure
+                          ? $" — {MassiveSlicer.Core.Slicing.Effects.ProximityFlowPostProcessor.LastHold / 1000.0:0.###} m "
+                            + "of uncrowded bead inside a structure held at the reduced flow"
+                          : " — flow climbs back up between arms and down again into the next"));
                 ctx.Log($"[proximity]   {runs.Count} crowded run(s); {corrected} long enough to correct");
                 ctx.Log($"[proximity]   {corrLen / 1000.0:0.###} m corrected, "
                       + $"{skipLen / 1000.0:0.###} m left alone as too short to act on");
@@ -2280,10 +2286,22 @@ public sealed class ConsoleCommandRegistry
                     // The cost side, and it is not small: reduction the ramp spilled onto bead that
                     // was never crowded, i.e. under-extruded wall. Reporting only the delivered
                     // figure once turned a 49.6 % result into a claimed 97.4 %.
+                    // ⚠️ Two very different things both look like "reduction on uncrowded bead", and
+                    // lumping them would repeat the mistake that once turned 49.6 % into 97.4 %:
+                    //   HELD    - deliberate, inside a structure, so the flow does not oscillate
+                    //             between arms. Wanted. Costs nothing: the sleeve is not crowded but
+                    //             is not over-deposited by holding either.
+                    //   RAMP LAG- accidental, the ramp still climbing after the structure ENDED.
+                    //             Genuinely under-extruded wall.
+                    float hold = MassiveSlicer.Core.Slicing.Effects
+                                     .ProximityFlowPostProcessor.LastHold;
+                    ctx.Log($"[flow-slew]   held through structure: {hold / 1000.0:0.###} m of "
+                          + "uncrowded bead deliberately kept at the reduced flow "
+                          + $"({(add.ProximityHoldThroughStructure ? "ON" : "OFF")}) — intended, not a cost");
                     ctx.Log($"[flow-slew]   ⚠ collateral: {s.CollateralOnFreeMm / 1000.0:0.###} m of "
-                          + "reduction landed on bead that was NOT crowded — under-extruded wall, "
-                          + "the ramp still climbing after a crowded run ended. This is the parked "
-                          + "exit-ramp problem, measured.");
+                          + "reduction landed on bead that was NOT crowded and NOT held — the ramp "
+                          + "still climbing after the structure ended. Under-extruded wall; this is "
+                          + "the parked exit-ramp problem, measured.");
                 }
 
                 ctx.Log("[flow-slew]   biggest steps first:");

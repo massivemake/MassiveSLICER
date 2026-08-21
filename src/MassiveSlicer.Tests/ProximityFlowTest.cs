@@ -174,8 +174,16 @@ public class ProximityFlowTest
 
         Assert.Equal(0.75f, l.Moves[0].WidthScale, 3);
         Assert.Equal(0.75f, l.Moves[2].WidthScale, 3);
-        // The tip connector runs across the gap, not alongside it — the direction test excludes it.
-        Assert.Equal(1f, l.Moves[1].WidthScale, 3);
+
+        // ⚠️ The tip connector is NOT measured as crowded — it runs across the gap rather than
+        // alongside it, so the direction test excludes it, and MeasureGaps still reports it free.
+        // But it sits INSIDE the structure, between two walls 6 mm apart, so the structure hold
+        // carries the arm's flow through it rather than climbing back to full and diving again.
+        // Before ProximityHoldThroughStructure existed this asserted 1.0.
+        Assert.Equal(0.75f, l.Moves[1].WidthScale, 3);
+        Assert.True(BeadProximity.MeasureGaps(tp, Bead)[1] is float g && (float.IsNaN(g) || g >= Bead),
+            "the tip must still MEASURE as uncrowded — if the direction test starts counting it, "
+          + "this test stops proving that the hold is what covers it");
     }
 
     /// <summary>
@@ -211,8 +219,11 @@ public class ProximityFlowTest
 
         ProximityFlowPostProcessor.Apply(tp, Settings());
 
+        // 8 measured walls + the 4 tip connectors the structure hold carries through.
         int corrected = l.Moves.Count(m => m.WidthScale < 0.9f);
-        Assert.Equal(8, corrected);      // two walls per arm, four arms
+        Assert.Equal(12, corrected);
+        // Runs are the MEASUREMENT, and it still finds exactly the eight walls — the extra four are
+        // held, not detected. Keeping these two numbers apart is the point.
         Assert.Equal(8, ProximityFlowPostProcessor.LastRuns.Count(r => r.Corrected));
     }
 
@@ -487,6 +498,128 @@ public class ProximityFlowTest
             Assert.Equal(once[i].To,         l.Moves[i].To);
             Assert.Equal(once[i].WidthScale, l.Moves[i].WidthScale, 5);
         }
+    }
+
+    // -- Holding the reduced flow across a whole structure -----------------------------------
+
+    /// <summary>Two parallel runs 6 mm apart, joined by an UNCROWDED connector - the sleeve angle
+    /// between two arms. All one continuous chain, as the real part is.</summary>
+    private static ToolpathLayer TwoArmsWithConnector()
+    {
+        var l = Layer(0, 4f);
+        Run(l, 0f, 0f, 400f);                        // arm 1 wall A
+        Run(l, 6f, 0f, 400f);                        // arm 1 wall B (6 mm away -> crowded)
+        // Connector out to the sleeve and back: nothing else near it, so not crowded.
+        for (float y = 6f; y < 200f; y += 10f)
+            Seg(l, 400f, y, 400f, MathF.Min(y + 10f, 200f));
+        Run(l, 200f, 400f, 800f);                    // arm 2 wall A
+        Run(l, 206f, 400f, 800f);                    // arm 2 wall B
+        return l;
+    }
+
+    /// <summary>
+    /// ⭐ Jeff, 2026-08-21: <i>"once it enters the arm structure it ramps down once, and then back up
+    /// once... while we are on the structure it should just remain at the new rpms."</i>
+    ///
+    /// <para>The connector between two arms is NOT crowded, so it asked for full flow, which made the
+    /// flow climb back out of every arm and dive into the next - an oscillation that never settles.
+    /// Holding costs nothing: the connector is not over-deposited by running at the arm's flow.</para>
+    /// </summary>
+    [Fact]
+    public void Uncrowded_bead_inside_a_structure_is_held_at_the_reduced_flow()
+    {
+        var tp = new Toolpath();
+        var l  = TwoArmsWithConnector();
+        tp.Layers.Add(l);
+
+        ProximityFlowPostProcessor.Apply(tp, Settings());   // cap off: read the TARGET, not the ramp
+
+        // The connector runs along x = 400 - find it by geometry, not by index.
+        var connector = l.Moves
+            .Where(m => m.Kind == MoveKind.Extrude
+                        && MathF.Abs(m.From.X - 400f) < 1e-3f
+                        && MathF.Abs(m.To.X - 400f) < 1e-3f)
+            .ToList();
+        Assert.NotEmpty(connector);
+
+        Assert.All(connector, m => Assert.Equal(0.75f, m.WidthScale, 3));
+        Assert.True(ProximityFlowPostProcessor.LastHold > 100f,
+            $"only {ProximityFlowPostProcessor.LastHold:0.#} mm reported as held");
+    }
+
+    /// <summary>CONTROL: with the hold off, the same connector goes back to full flow. Without this
+    /// the test above could pass on a connector the measurement wrongly called crowded.</summary>
+    [Fact]
+    public void With_the_hold_off_the_connector_returns_to_full_flow()
+    {
+        var tp = new Toolpath();
+        var l  = TwoArmsWithConnector();
+        tp.Layers.Add(l);
+
+        var s = Settings();
+        s = new SliceSettings
+        {
+            BeadWidth = Bead, LayerHeight = 4f, FirstLayerHeight = 4f, PrintSpeedMps = 0.1f,
+            ProximityCorrectionEnabled = true, ProximityMinRunLengthMm = 100f,
+            MaxFlowChangePercentPerSecond = 0f,
+            ProximityHoldThroughStructure = false,
+        };
+        ProximityFlowPostProcessor.Apply(tp, s);
+
+        var connector = l.Moves
+            .Where(m => m.Kind == MoveKind.Extrude
+                        && MathF.Abs(m.From.X - 400f) < 1e-3f
+                        && MathF.Abs(m.To.X - 400f) < 1e-3f)
+            .ToList();
+        Assert.All(connector, m => Assert.Equal(1f, m.WidthScale, 3));
+        Assert.Equal(0f, ProximityFlowPostProcessor.LastHold, 3);
+    }
+
+    /// <summary>
+    /// ⚠️ The structure boundary is the contiguous extrusion CHAIN. A travel means the tool lifted and
+    /// went somewhere else, so two structures separated by a travel must NOT be bridged - otherwise
+    /// flow is held down across a gap that belongs to neither of them.
+    /// </summary>
+    [Fact]
+    public void The_hold_does_not_bridge_two_structures_separated_by_a_travel()
+    {
+        var tp = new Toolpath();
+        var l  = Layer(0, 4f);
+        Run(l, 0f, 0f, 400f);
+        Run(l, 6f, 0f, 400f);                       // structure 1
+        Travel(l, 400f, 6f, 0f, 500f);              // tool lifts and goes elsewhere
+        Run(l, 500f, 0f, 400f);
+        Run(l, 506f, 0f, 400f);                     // structure 2
+        tp.Layers.Add(l);
+
+        ProximityFlowPostProcessor.Apply(tp, Settings());
+
+        // Nothing was held: each structure's crowded span is contiguous already, and the travel
+        // stops the span from reaching across.
+        Assert.Equal(0f, ProximityFlowPostProcessor.LastHold, 3);
+        Assert.Contains(l.Moves, m => m.WidthScale < 0.9f);      // the arms were still corrected
+    }
+
+    /// <summary>The hold stops at the LAST crowded feature - flow is restored on leaving, not carried
+    /// off the end of the structure forever.</summary>
+    [Fact]
+    public void Flow_is_restored_after_the_last_crowded_feature()
+    {
+        var tp = new Toolpath();
+        var l  = TwoArmsWithConnector();
+        Run(l, 206f, 800f, 1200f);          // continues past the last arm, alone, uncrowded
+        tp.Layers.Add(l);
+
+        ProximityFlowPostProcessor.Apply(tp, Settings());
+
+        // ⚠️ From x = 820 on, not x = 800: the first 10 mm of this run sits 7.81 mm from where the
+        // previous wall ENDED (sqrt(5^2 + 6^2)), which is inside an 8 mm bead, so it is genuinely
+        // measured as mildly crowded at 0.976. That is the measurement being right, not the hold
+        // leaking — an earlier version of this test blamed the code for its own fixture.
+        var trailing = l.Moves.Where(m => m.From.X >= 820f - 1e-3f).ToList();
+        Assert.NotEmpty(trailing);
+        Assert.All(trailing, m => Assert.Equal(1f, m.WidthScale, 3));
+        Assert.Equal(1f, l.Moves[^1].WidthScale, 3);
     }
 
     [Fact]

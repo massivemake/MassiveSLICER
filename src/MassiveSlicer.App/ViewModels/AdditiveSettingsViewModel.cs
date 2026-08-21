@@ -245,6 +245,18 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _maxFlowChangePercentPerSecond, Math.Clamp(value, 0.0, 100.0));
     }
 
+    private bool _proximityHoldThroughStructure = true;
+
+    /// <summary>
+    /// Hold the reduced flow across a whole structure instead of ramping back up between its crowded
+    /// features. On by default; not in the panel, reachable via <c>addset</c> for A/B against a print.
+    /// </summary>
+    public bool ProximityHoldThroughStructure
+    {
+        get => _proximityHoldThroughStructure;
+        set => SetField(ref _proximityHoldThroughStructure, value);
+    }
+
     private double _maxLayerHeightChangeMm;
 
     /// <summary>

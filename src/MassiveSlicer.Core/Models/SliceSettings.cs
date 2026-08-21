@@ -320,6 +320,26 @@ public sealed class SliceSettings
     /// </summary>
     public float MaxFlowChangePercentPerSecond { get; init; } = 2f;
 
+    /// <summary>
+    /// Hold the reduced flow across a whole structure instead of climbing back out of it between
+    /// crowded features. <b>On by default.</b>
+    ///
+    /// <para>The arms are the crowded part, but the path runs onto the angled sleeve between them,
+    /// which is not crowded and so asked for full flow. That produced a ramp down into every arm and
+    /// back up out of every arm — an oscillation that never settles, when the right answer is to stay
+    /// put. Holding does not over-deposit the sleeve, so it costs nothing and removes every
+    /// intermediate transition. Jeff's framing: <i>"while we are on the structure it should just
+    /// remain at the new rpms."</i></para>
+    ///
+    /// <para><b>Deliberately not a length filter.</b> A "keep it down for N mm after a crowded run"
+    /// rule would fire in places with nothing to do with a structure. The boundary is the contiguous
+    /// extrusion chain instead — see
+    /// <see cref="Slicing.Effects.ProximityFlowPostProcessor.HoldThroughStructures"/>.</para>
+    ///
+    /// <para>Not in the panel; reachable via <c>addset</c> so it can be A/B'd against a print.</para>
+    /// </summary>
+    public bool ProximityHoldThroughStructure { get; init; } = true;
+
     // -- Support-driven layer height (3b) ------------------------------------------
 
     /// <summary>

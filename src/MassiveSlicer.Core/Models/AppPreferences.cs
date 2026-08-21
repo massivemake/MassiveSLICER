@@ -202,6 +202,9 @@ public sealed class AppPreferences
     /// <summary>Fastest commanded flow change within a layer (% of current per second). 0 = off.</summary>
     public double MaxFlowChangePercentPerSecond { get; set; } = 2.0;
 
+    /// <summary>Hold reduced flow across a whole structure rather than ramping between its features.</summary>
+    public bool ProximityHoldThroughStructure { get; set; } = true;
+
     /// <summary>Smallest triangle (mm2) allowed to dictate a layer thickness. 0 = bead footprint, negative = off.</summary>
     public double AdaptiveMinFaceAreaMm2 { get; set; }
 

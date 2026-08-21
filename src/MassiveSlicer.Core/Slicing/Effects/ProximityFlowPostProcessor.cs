@@ -89,8 +89,110 @@ public static class ProximityFlowPostProcessor
             if (scale < 1f) targets[i] = scale;
         }
 
+        // Hold the reduced flow across the whole structure rather than climbing back out of it
+        // between arms. Done HERE, on the target, not in the limiter: the limiter only ramps when
+        // target != commanded, so a connector whose target already says 0.75 simply holds. The
+        // machine-constraint layer needs no knowledge of structures at all.
+        LastHold = settings.ProximityHoldThroughStructure
+            ? HoldThroughStructures(toolpath, targets)
+            : 0f;
+
         s_last   = [.. runs.Select(r => r.ToPublic())];
         LastSlew = FlowSlewLimiter.Apply(toolpath, targets, settings);
+    }
+
+    /// <summary>Bead length (mm) whose target was HELD rather than measured — uncrowded bead inside a
+    /// structure that is deliberately kept at the reduced flow. Diagnostics.</summary>
+    public static float LastHold { get; private set; }
+
+    /// <summary>
+    /// Extends each crowded target forward across the uncrowded bead that sits INSIDE the same
+    /// structure, so flow is reduced once on entering and restored once on leaving.
+    ///
+    /// <para><b>Why.</b> The arms are the crowded part, but between them the path runs out onto the
+    /// angled sleeve, which is not crowded and so asked for full flow. The result was a ramp down
+    /// into every arm and back up out of every arm — an oscillation that never settles, when the
+    /// right answer is to stay put. The sleeve is not over-deposited by holding, so holding costs
+    /// nothing and removes every intermediate transition.</para>
+    ///
+    /// <para><b>How the structure is bounded, without a length filter.</b> A length or time-based
+    /// "keep it down for N mm after an arm" rule would fire in places that have nothing to do with a
+    /// structure. Instead the boundary is the <b>contiguous extrusion chain</b>: a travel means the
+    /// tool lifted and went somewhere else, and a spatial discontinuity or a layer boundary means the
+    /// same. Within one chain, the structure spans from the FIRST qualifying crowded move to the
+    /// LAST, and every uncrowded move between them inherits the last crowded target seen. Entering is
+    /// therefore exactly Jeff's formulation: the first time crowding shows up on a long run, we are
+    /// in the structure.</para>
+    ///
+    /// <para>⚠️ <b>Measured caveat.</b> On the validation part there are <b>zero travel moves in all
+    /// 392 layers</b> — each layer is one continuous chain — so there the chain IS the layer and the
+    /// span ends at the fourth arm, which is the intended behaviour. The travel boundary is what
+    /// generalises to several structures on one bed. But two genuinely separate structures printed as
+    /// ONE continuous chain with no travel between them would be bridged, holding reduced flow across
+    /// the gap between them. Nothing in this geometry does that; if a part ever shows it, the chain
+    /// rule is the thing to sharpen.</para>
+    ///
+    /// <para>Brim is never held — it is a bed-adhesion feature and deliberately adjacent.</para>
+    /// </summary>
+    /// <returns>Bead length (mm) whose target was held rather than measured.</returns>
+    internal static float HoldThroughStructures(Toolpath toolpath, float[] targets)
+    {
+        double held = 0.0;
+        int    layerBase = 0;
+
+        foreach (var layer in toolpath.Layers)
+        {
+            var moves = layer.Moves;
+            int chainStart = 0;                 // LAYER-LOCAL index; chains never cross layers
+            Vector3? prevEnd = null;
+
+            // Hold the last crowded target across the uncrowded bead inside this chain's span.
+            void CloseChain(int endExclusive)
+            {
+                int first = -1, last = -1;
+                for (int i = chainStart; i < endExclusive; i++)
+                    if (targets[layerBase + i] < 1f - 1e-5f) { if (first < 0) first = i; last = i; }
+
+                if (first < 0 || last <= first) return;
+
+                float carry = targets[layerBase + first];
+                for (int i = first; i <= last; i++)
+                {
+                    if (targets[layerBase + i] < 1f - 1e-5f) { carry = targets[layerBase + i]; continue; }
+
+                    var m = moves[i];
+                    if (m.IsBrim || m.Kind != MoveKind.Extrude) continue;
+
+                    targets[layerBase + i] = carry;
+                    held += Vector3.Distance(m.From, m.To);
+                }
+            }
+
+            for (int mi = 0; mi < moves.Count; mi++)
+            {
+                var move = moves[mi];
+
+                bool breaksChain = move.Kind == MoveKind.Travel
+                                   || (prevEnd is { } pe && Vector3.Distance(pe, move.From) > 1e-3f);
+
+                if (breaksChain)
+                {
+                    CloseChain(mi);
+                    // A travel is not part of either chain; a spatial jump starts a chain AT this move.
+                    chainStart = move.Kind == MoveKind.Travel ? mi + 1 : mi;
+                    prevEnd    = move.Kind == MoveKind.Travel ? null : move.To;
+                    continue;
+                }
+
+                prevEnd = move.To;
+            }
+
+            CloseChain(moves.Count);            // a layer boundary ends the chain
+            layerBase += moves.Count;
+        }
+
+        LastHold = (float)held;
+        return (float)held;
     }
 
     /// <summary>A run under construction — carries the contiguous move count so Apply can reach
