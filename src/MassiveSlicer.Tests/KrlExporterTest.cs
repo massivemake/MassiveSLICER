@@ -261,21 +261,18 @@ public sealed class KrlExporterTest
         // Header: URM (OUT[8]) init FALSE; robot-mode gate (OUT[9]) latched TRUE in MAT.
         Assert.Contains("$OUT[8] = FALSE", krl);
         Assert.Contains("$OUT[9] = TRUE", krl);
-        // Code Editor inject (PointLoader-safe default): no TRIGGER in the CAD body.
+        // Travel Moves: RPM off at travel, RPM on just before ;travel end. No RCE inject.
         Assert.Contains(";travel start", krl);
         Assert.Contains(";travel end", krl);
-        Assert.Contains("; !Modified by RCE!", krl);
+        Assert.DoesNotContain("; !Modified by RCE!", krl);
         Assert.DoesNotContain("TRIGGER WHEN DISTANCE", krl);
-        Assert.Contains("$OUT[7] = TRUE; !Modified by RCE!", krl);
-        Assert.Contains("$OUT[7] = FALSE; !Modified by RCE!", krl);
-        Assert.Contains("WAIT SEC 0.5; !Modified by RCE!", krl);
+        Assert.DoesNotContain("$OUT[7] = TRUE; !Modified by RCE!", krl);
 
-        int travelEnd = krl.IndexOf(";travel end", StringComparison.Ordinal);
-        int out7On    = krl.IndexOf("$OUT[7] = TRUE; !Modified by RCE!", travelEnd, StringComparison.Ordinal);
-        int travel    = krl.IndexOf(";travel start", StringComparison.Ordinal);
-        int out7Off   = krl.IndexOf("$OUT[7] = FALSE; !Modified by RCE!", StringComparison.Ordinal);
-        Assert.True(travelEnd >= 0 && out7On > travelEnd && travel > out7On);
-        Assert.True(out7Off > 0 && out7Off < travel);
+        int travel = krl.IndexOf(";travel start", StringComparison.Ordinal);
+        int rpmOff = krl.IndexOf("RPM = 0.00", travel, StringComparison.Ordinal);
+        int rpmOn  = krl.IndexOf("RPM = 50", travel, StringComparison.Ordinal);
+        int travelEnd = krl.IndexOf(";travel end", travel, StringComparison.Ordinal);
+        Assert.True(travel >= 0 && rpmOff > travel && rpmOn > rpmOff && travelEnd > rpmOn);
     }
 
     [Fact]
@@ -368,7 +365,9 @@ public sealed class KrlExporterTest
 
         Assert.Contains(";travel start", krl);
         Assert.Contains(";travel end", krl);
-        Assert.Contains("; !Modified by RCE!", krl);
+        Assert.Contains("RPM = 0.00", krl);
+        Assert.Contains("RPM = 50", krl);
+        Assert.DoesNotContain("; !Modified by RCE!", krl);
         Assert.DoesNotContain(";FOLD CaracolSafety", krl);
         Assert.Contains("$ANOUT[1]", krl);
     }
@@ -660,13 +659,15 @@ public sealed class KrlExporterTest
             FooterTemplate          = KrlExporter.DefaultFooterTemplate,
         });
 
-        // Travel Moves now uses Code Editor inject after ;travel end (not PostTravel prime).
-        Assert.Contains("; !Modified by RCE!", krl);
+        // Travel Moves writes RPM = 0 / RPM = print. No RCE inject.
+        Assert.DoesNotContain("; !Modified by RCE!", krl);
         int travelStart = krl.IndexOf(";travel start", StringComparison.Ordinal);
         int endTr   = krl.IndexOf(";travel end", travelStart, StringComparison.Ordinal);
-        int out7On  = krl.IndexOf("$OUT[7] = TRUE; !Modified by RCE!", StringComparison.Ordinal);
+        int rpmOff  = krl.IndexOf("RPM = 0.00", travelStart, StringComparison.Ordinal);
+        int rpmOn   = krl.IndexOf("RPM = 50", travelStart, StringComparison.Ordinal);
         Assert.True(travelStart >= 0 && endTr > travelStart);
-        Assert.True(out7On >= 0 && out7On < travelStart);
+        Assert.True(rpmOff > travelStart && rpmOff < endTr);
+        Assert.True(rpmOn > rpmOff && rpmOn < endTr);
     }
 
     static Toolpath TwoMoveTp()

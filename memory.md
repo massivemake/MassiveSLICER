@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-21** (code-editor-inject merged onto main)
+Last updated: **2026-08-22** (SRC/export uses Lab-synced KRL post-process recipe)
 
 ---
 
@@ -516,6 +516,37 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-22 — SRC / Send to Robot uses Lab-synced KRL post-process recipe
+
+- Every print `.src` write (`Export KRL`, `3D Print Files`, Send to Robot) goes through
+  `WriteKrlAsync` → Lab pull if connected → `KrlPostProcessRecipe.Apply`.
+- Workspace / prefs restore no longer rewrites Robot Mode / Travel Moves / header from
+  `.mass`. Factory / Lab recipe wins.
+- Mill SRC still uses mill header/footer. Drive package is path-only (no KRL recipe).
+- Not print-verified.
+
+### 2026-08-22 — Remove Code Editor / RCE inject; Travel Moves is RPM only
+
+- Removed `CodeEditorSrcInjector`, `CodeEditorInjectSettings`, and the Rules-tab inject UI
+  (`$OUT[7]`, `$OUT[8]`, TRIGGER, interpolated LIN, `; !Modified by RCE!`).
+- Travel Moves now writes `RPM = 0.00` at `;travel start` and print `RPM =` just before
+  `;travel end`. Robot Mode is unchanged (T1/T2/T3/RPM MAT).
+- Not print-verified.
+
+### 2026-08-22 — Viewport click / marquee / 2D pick dead
+
+- Symptom: click and drag-marquee selected nothing (Mesh, Slice, 2D lines/points). Camera still worked.
+- Cause (three sinks, not Picker.cs): overlay empty space was `Background="Transparent"` (Avalonia eats hits); orbit/pan release `return`ed even on a no-drag click; Preview+Edit Select `Handled` every LMB including misses so Mesh/Slice never ran.
+- Fix: `ViewportOverlayView` / `OverlayRoot` `{x:Null}`; `ViewportPointerPolicy` consumes orbit/pan release only when dragged; paint miss falls through to scene pick; both picks use `GetGlPickViewport`; 2D/marquee accept Mill + Extrude (`IsCutSegment`).
+- Files: `ViewportView.axaml.cs`, `ViewportOverlayView.axaml`, `ViewportPointerPolicy.cs`. Not print-verified.
+
+### 2026-08-21 — KRL Post-Processing: import/export + Lab team default
+
+- Dialog footer: **Import… / Export…** (JSON envelope) and **Pull from Lab / Publish to Lab**.
+- Lab is source of truth when the route exists: connect GETs `/api/slicer/v1/krl-postprocess` (fallback `presets-bundle.krlPostProcess`) and applies Rules + Header + Footer. 404 stays local. Publish is explicit — never auto-overwrite Lab on connect.
+- Console: `krlpost export|import <path>`, `krlpost pull`, `krlpost publish`.
+- Lab prompt: `docs/ERP-KrlPostProcess-API-Replit-Prompt.md`. Branch: `feature/krl-postprocess-erp`.
 
 ### 2026-08-21 — Auto shop wipe when a slice has travel moves
 

@@ -9,7 +9,7 @@
              x:Class="MassiveSlicer.App.Views.ViewportOverlayView"
              x:DataType="vm:ViewportViewModel"
              x:CompileBindings="True"
-             Background="Transparent">
+             Background="{x:Null}">
 
     <UserControl.Resources>
         <conv:EnumMatchConverter x:Key="EnumMatchCvt"/>
@@ -19,7 +19,7 @@
 
     <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
     <Grid>
-    <Grid x:Name="OverlayRoot" Background="Transparent" Margin="320,52,320,0">
+    <Grid x:Name="OverlayRoot" Background="{x:Null}" Margin="320,52,320,0">
 
         <!-- Transform tools + view pills. Wide: one row (tools left, pills right).
              Narrow: pills drop under the tools so they never overlap. -->
@@ -1906,10 +1906,11 @@
         <!-- Tool-change sequence waypoint labels (projected from 3D scene) -->
         <ItemsControl IsVisible="{Binding HasSequenceWaypointTags}"
                       ItemsSource="{Binding SequenceWaypointTags}"
+                      IsHitTestVisible="False"
                       ZIndex="18">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
-                    <Canvas Background="Transparent"/>
+                    <Canvas/>
                 </ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
             <ItemsControl.Styles>

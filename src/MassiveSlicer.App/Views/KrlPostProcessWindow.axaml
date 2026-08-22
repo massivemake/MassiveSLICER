@@ -60,7 +60,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="40"/>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="44"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <Border Grid.Row="0" x:Name="TitleBar"
@@ -140,9 +140,9 @@
                                               Padding="10,8"
                                               FontSize="12"
                                               CornerRadius="5"
-                                              ToolTip.Tip="Travel start/stop around travels, wipes, and z-hops. Independent of Robot Mode."/>
+                                              ToolTip.Tip="RPM = 0 at each travel. RPM = print value just before ;travel end. Independent of Robot Mode."/>
                             </Grid>
-                            <TextBlock Text="Robot Mode writes temps + RPM (T1/T2/T3/RPM). Travel Moves handles start/stop on travels. Each button stays available — they do not disable each other."
+                            <TextBlock Text="Robot Mode writes temps + RPM (T1/T2/T3/RPM). Travel Moves writes RPM = 0 on travel and RPM = print value just before print resumes. Each button stays available — they do not disable each other."
                                        Classes="LabelMuted"
                                        FontSize="11"
                                        TextWrapping="Wrap"/>
@@ -159,99 +159,14 @@
                                     BorderBrush="{DynamicResource Border1}"
                                     BorderThickness="1">
                                 <StackPanel Spacing="8">
-                                    <TextBlock Text="CODE EDITOR INJECT"
+                                    <TextBlock Text="TRAVEL RPM"
                                                Classes="LabelMuted"
                                                FontSize="9"
                                                LetterSpacing="1"/>
-                                    <TextBlock Text="{Binding CodeEditorPrintSpeedHint}"
+                                    <TextBlock Text="At each travel: RPM = 0.00. Right before print resumes (;travel end): RPM = the job print value. No Code Editor / RCE inject."
                                                Classes="LabelMuted"
                                                FontSize="11"
                                                TextWrapping="Wrap"/>
-
-                                    <TextBlock Text="Short travel (mm)" FontSize="11" Classes="LabelMuted"/>
-                                    <TextBox Classes="PanelTextBox"
-                                             Text="{Binding CodeEditorShortTravelMm, Mode=TwoWay}"/>
-
-                                    <TextBlock Text="Start extruding (after ;travel end)" FontSize="11" Classes="LabelMuted"/>
-                                    <TextBox Classes="PanelTextBox"
-                                             AcceptsReturn="True"
-                                             TextWrapping="Wrap"
-                                             MinHeight="44"
-                                             FontFamily="Consolas,Courier New,monospace"
-                                             FontSize="11"
-                                             Text="{Binding CodeEditorStartExtrudingCommand, Mode=TwoWay}"/>
-
-                                    <TextBlock Text="Stop extruding" FontSize="11" Classes="LabelMuted"
-                                               ToolTip.Tip="$VEL.CP is rewritten to half of print speed on export. Before = walk back along the bead to ;travel start. After = into the travel hop."/>
-                                    <TextBox Classes="PanelTextBox"
-                                             AcceptsReturn="True"
-                                             TextWrapping="Wrap"
-                                             MinHeight="44"
-                                             FontFamily="Consolas,Courier New,monospace"
-                                             FontSize="11"
-                                             Text="{Binding CodeEditorStopExtrudingCommand, Mode=TwoWay}"/>
-                                    <Grid ColumnDefinitions="*,8,120,8,100">
-                                        <TextBox Grid.Column="0" Classes="PanelTextBox"
-                                                 Text="{Binding CodeEditorStopDistance, Mode=TwoWay}"/>
-                                        <ComboBox Grid.Column="2"
-                                                  ItemsSource="{Binding CodeEditorUnitOptions}"
-                                                  SelectedItem="{Binding CodeEditorStopUnits, Mode=TwoWay}"
-                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
-                                        <ComboBox Grid.Column="4"
-                                                  ItemsSource="{Binding CodeEditorDirectionOptions}"
-                                                  SelectedItem="{Binding CodeEditorStopDirection, Mode=TwoWay}"
-                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
-                                    </Grid>
-
-                                    <TextBlock Text="Enter URM" FontSize="11" Classes="LabelMuted"/>
-                                    <TextBox Classes="PanelTextBox"
-                                             AcceptsReturn="True"
-                                             TextWrapping="Wrap"
-                                             MinHeight="36"
-                                             FontFamily="Consolas,Courier New,monospace"
-                                             FontSize="11"
-                                             Text="{Binding CodeEditorEnterUrmCommand, Mode=TwoWay}"/>
-                                    <Grid ColumnDefinitions="*,8,120,8,100">
-                                        <TextBox Grid.Column="0" Classes="PanelTextBox"
-                                                 Text="{Binding CodeEditorEnterUrmDistance, Mode=TwoWay}"/>
-                                        <ComboBox Grid.Column="2"
-                                                  ItemsSource="{Binding CodeEditorUnitOptions}"
-                                                  SelectedItem="{Binding CodeEditorEnterUrmUnits, Mode=TwoWay}"
-                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
-                                        <ComboBox Grid.Column="4"
-                                                  ItemsSource="{Binding CodeEditorDirectionOptions}"
-                                                  SelectedItem="{Binding CodeEditorEnterUrmDirection, Mode=TwoWay}"
-                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
-                                    </Grid>
-
-                                    <TextBlock Text="Exit URM" FontSize="11" Classes="LabelMuted"/>
-                                    <TextBox Classes="PanelTextBox"
-                                             AcceptsReturn="True"
-                                             TextWrapping="Wrap"
-                                             MinHeight="36"
-                                             FontFamily="Consolas,Courier New,monospace"
-                                             FontSize="11"
-                                             Text="{Binding CodeEditorExitUrmCommand, Mode=TwoWay}"/>
-                                    <Grid ColumnDefinitions="*,8,120,8,100">
-                                        <TextBox Grid.Column="0" Classes="PanelTextBox"
-                                                 Text="{Binding CodeEditorExitUrmDistance, Mode=TwoWay}"/>
-                                        <ComboBox Grid.Column="2"
-                                                  ItemsSource="{Binding CodeEditorUnitOptions}"
-                                                  SelectedItem="{Binding CodeEditorExitUrmUnits, Mode=TwoWay}"
-                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
-                                        <ComboBox Grid.Column="4"
-                                                  ItemsSource="{Binding CodeEditorDirectionOptions}"
-                                                  SelectedItem="{Binding CodeEditorExitUrmDirection, Mode=TwoWay}"
-                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
-                                    </Grid>
-
-                                    <CheckBox Content="Always insert (even if the bead is shorter than the offset)"
-                                              IsChecked="{Binding CodeEditorAlwaysInsert, Mode=TwoWay}"
-                                              FontSize="11"/>
-                                    <CheckBox Content="PointLoader-safe I/O (no TRIGGER in the CAD body)"
-                                              IsChecked="{Binding CodeEditorPointLoaderSafeIo, Mode=TwoWay}"
-                                              FontSize="11"
-                                              ToolTip.Tip="Rewrites TRIGGER WHEN DISTANCE=0 DO $OUT[...] to a plain $OUT line. Leave on for LFAM 1/2 PointLoader."/>
 
                                     <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4"/>
 
@@ -474,14 +389,52 @@
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,1,0,0"
                     CornerRadius="0,0,10,10"
-                    Padding="12,0">
-                <Button Content="Done"
-                        Classes="PrimaryButton"
-                        HorizontalAlignment="Right"
-                        VerticalAlignment="Center"
-                        Padding="16,6"
-                        Click="OnClose"
-                        ToolTip.Tip="Writes assets/krl_postprocess.json in the repo (the GitHub factory). Rebuilds copy that file — they no longer reset to in-code defaults."/>
+                    Padding="12,8">
+                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                    <StackPanel Grid.Row="0" Grid.Column="0"
+                                Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center">
+                        <Button Content="Import…"
+                                Classes="ToolbarButton"
+                                Padding="8,4"
+                                FontSize="11"
+                                Click="OnImport"
+                                ToolTip.Tip="Load a .json recipe (Rules + Header + Footer). Same file Export writes."/>
+                        <Button Content="Export…"
+                                Classes="ToolbarButton"
+                                Padding="8,4"
+                                FontSize="11"
+                                Click="OnExport"
+                                ToolTip.Tip="Save the current recipe as JSON you can share or re-import."/>
+                        <Button Content="Pull from Lab"
+                                Classes="ToolbarButton"
+                                Padding="8,4"
+                                FontSize="11"
+                                Click="OnPullLab"
+                                ToolTip.Tip="Replace local with the MassiveLAB team default. Lab is source of truth."/>
+                        <Button Content="Publish to Lab"
+                                Classes="ToolbarButton"
+                                Padding="8,4"
+                                FontSize="11"
+                                Click="OnPublishLab"
+                                ToolTip.Tip="Set the current recipe as the MassiveLAB team default for every slicer."/>
+                    </StackPanel>
+                    <Button Grid.Row="0" Grid.Column="1"
+                            Content="Done"
+                            Classes="PrimaryButton"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Padding="16,6"
+                            Click="OnClose"
+                            ToolTip.Tip="Writes assets/krl_postprocess.json in the repo (the GitHub factory)."/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                               Text="{Binding SyncStatus}"
+                               Classes="LabelMuted"
+                               FontSize="10"
+                               Margin="0,6,0,0"
+                               TextWrapping="Wrap"
+                               IsVisible="{Binding SyncStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                </Grid>
             </Border>
         </Grid>
     </Border>

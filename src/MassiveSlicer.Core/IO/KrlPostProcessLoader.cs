@@ -36,8 +36,7 @@ public static class KrlPostProcessLoader
                 continue;
             try
             {
-                var s = JsonSerializer.Deserialize<KrlPostProcessSettings>(File.ReadAllText(path), Options);
-                if (s is not null)
+                if (KrlPostProcessDocument.TryParse(File.ReadAllText(path), out var s, out _))
                     return s;
             }
             catch { /* try the next candidate */ }
@@ -47,6 +46,8 @@ public static class KrlPostProcessLoader
 
     public static void Save(KrlPostProcessSettings settings)
     {
+        settings.SchemaVersion = KrlPostProcessDocument.SchemaVersion;
+        settings.UpdatedAtUtc ??= DateTime.UtcNow;
         string json = JsonSerializer.Serialize(settings, Options);
         var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in WriteCandidates())

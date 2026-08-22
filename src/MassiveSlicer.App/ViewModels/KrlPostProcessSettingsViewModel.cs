@@ -142,136 +142,6 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
         OnPropertyChanged(nameof(TravelStartStopEnabled));
     }
 
-    public void NotifyCodeEditorInjectChanged()
-    {
-        OnPropertyChanged(nameof(CodeEditorShortTravelMm));
-        OnPropertyChanged(nameof(CodeEditorPrintSpeedHint));
-        OnPropertyChanged(nameof(CodeEditorStartExtrudingCommand));
-        OnPropertyChanged(nameof(CodeEditorStopExtrudingCommand));
-        OnPropertyChanged(nameof(CodeEditorStopDistance));
-        OnPropertyChanged(nameof(CodeEditorStopUnits));
-        OnPropertyChanged(nameof(CodeEditorStopDirection));
-        OnPropertyChanged(nameof(CodeEditorEnterUrmCommand));
-        OnPropertyChanged(nameof(CodeEditorExitUrmCommand));
-        OnPropertyChanged(nameof(CodeEditorEnterUrmDistance));
-        OnPropertyChanged(nameof(CodeEditorEnterUrmUnits));
-        OnPropertyChanged(nameof(CodeEditorEnterUrmDirection));
-        OnPropertyChanged(nameof(CodeEditorExitUrmDistance));
-        OnPropertyChanged(nameof(CodeEditorExitUrmUnits));
-        OnPropertyChanged(nameof(CodeEditorExitUrmDirection));
-        OnPropertyChanged(nameof(CodeEditorAlwaysInsert));
-        OnPropertyChanged(nameof(CodeEditorPointLoaderSafeIo));
-    }
-
-    public string[] CodeEditorUnitOptions => Owner?.CodeEditorUnitOptions ?? CodeEditorInjectSettings.UnitOptions;
-    public string[] CodeEditorDirectionOptions => Owner?.CodeEditorDirectionOptions ?? CodeEditorInjectSettings.DirectionOptions;
-
-    public string CodeEditorPrintSpeedHint
-        => Owner?.CodeEditorPrintSpeedHint
-           ?? "Time offsets use print speed. Stop $VEL.CP is half of that.";
-
-    public double CodeEditorSpeedMmS
-    {
-        get => Owner?.CodeEditorSpeedMmS ?? 0;
-        set { if (Owner is null) return; Owner.CodeEditorSpeedMmS = value; OnPropertyChanged(); }
-    }
-
-    public double CodeEditorShortTravelMm
-    {
-        get => Owner?.CodeEditorShortTravelMm ?? 1;
-        set { if (Owner is null) return; Owner.CodeEditorShortTravelMm = value; OnPropertyChanged(); }
-    }
-
-    public string CodeEditorStartExtrudingCommand
-    {
-        get => Owner?.CodeEditorStartExtrudingCommand ?? "";
-        set { if (Owner is null) return; Owner.CodeEditorStartExtrudingCommand = value; OnPropertyChanged(); }
-    }
-
-    public string CodeEditorStopExtrudingCommand
-    {
-        get => Owner?.CodeEditorStopExtrudingCommand ?? "";
-        set { if (Owner is null) return; Owner.CodeEditorStopExtrudingCommand = value; OnPropertyChanged(); }
-    }
-
-    public double CodeEditorStopDistance
-    {
-        get => Owner?.CodeEditorStopDistance ?? 350;
-        set { if (Owner is null) return; Owner.CodeEditorStopDistance = value; OnPropertyChanged(); }
-    }
-
-    public string CodeEditorStopUnits
-    {
-        get => Owner?.CodeEditorStopUnits ?? "Milliseconds";
-        set { if (Owner is null) return; Owner.CodeEditorStopUnits = value; OnPropertyChanged(); }
-    }
-
-    public string CodeEditorStopDirection
-    {
-        get => Owner?.CodeEditorStopDirection ?? "Before";
-        set { if (Owner is null) return; Owner.CodeEditorStopDirection = value; OnPropertyChanged(); }
-    }
-
-    public string CodeEditorEnterUrmCommand
-    {
-        get => Owner?.CodeEditorEnterUrmCommand ?? "";
-        set { if (Owner is null) return; Owner.CodeEditorEnterUrmCommand = value; OnPropertyChanged(); }
-    }
-
-    public string CodeEditorExitUrmCommand
-    {
-        get => Owner?.CodeEditorExitUrmCommand ?? "";
-        set { if (Owner is null) return; Owner.CodeEditorExitUrmCommand = value; OnPropertyChanged(); }
-    }
-
-    public double CodeEditorEnterUrmDistance
-    {
-        get => Owner?.CodeEditorEnterUrmDistance ?? 3500;
-        set { if (Owner is null) return; Owner.CodeEditorEnterUrmDistance = value; OnPropertyChanged(); }
-    }
-
-    public string CodeEditorEnterUrmUnits
-    {
-        get => Owner?.CodeEditorEnterUrmUnits ?? "Milliseconds";
-        set { if (Owner is null) return; Owner.CodeEditorEnterUrmUnits = value; OnPropertyChanged(); }
-    }
-
-    public string CodeEditorEnterUrmDirection
-    {
-        get => Owner?.CodeEditorEnterUrmDirection ?? "Before";
-        set { if (Owner is null) return; Owner.CodeEditorEnterUrmDirection = value; OnPropertyChanged(); }
-    }
-
-    public double CodeEditorExitUrmDistance
-    {
-        get => Owner?.CodeEditorExitUrmDistance ?? 3500;
-        set { if (Owner is null) return; Owner.CodeEditorExitUrmDistance = value; OnPropertyChanged(); }
-    }
-
-    public string CodeEditorExitUrmUnits
-    {
-        get => Owner?.CodeEditorExitUrmUnits ?? "Milliseconds";
-        set { if (Owner is null) return; Owner.CodeEditorExitUrmUnits = value; OnPropertyChanged(); }
-    }
-
-    public string CodeEditorExitUrmDirection
-    {
-        get => Owner?.CodeEditorExitUrmDirection ?? "After";
-        set { if (Owner is null) return; Owner.CodeEditorExitUrmDirection = value; OnPropertyChanged(); }
-    }
-
-    public bool CodeEditorAlwaysInsert
-    {
-        get => Owner?.CodeEditorAlwaysInsert ?? true;
-        set { if (Owner is null) return; Owner.CodeEditorAlwaysInsert = value; OnPropertyChanged(); }
-    }
-
-    public bool CodeEditorPointLoaderSafeIo
-    {
-        get => Owner?.CodeEditorPointLoaderSafeIo ?? true;
-        set { if (Owner is null) return; Owner.CodeEditorPointLoaderSafeIo = value; OnPropertyChanged(); }
-    }
-
     public void NotifyRobotModeChanged() => OnPropertyChanged(nameof(RobotModeEnabled));
 
     public void NotifyOrientationSmoothingChanged()
@@ -369,6 +239,13 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
     public bool IsHeaderTab => _selectedTab == KrlPostProcessTab.Header;
     public bool IsFooterTab => _selectedTab == KrlPostProcessTab.Footer;
 
+    private string _syncStatus = "";
+    public string SyncStatus
+    {
+        get => _syncStatus;
+        set => SetField(ref _syncStatus, value);
+    }
+
     public RelayCommand ShowRulesTabCommand  { get; }
     public RelayCommand ShowHeaderTabCommand { get; }
     public RelayCommand ShowFooterTabCommand { get; }
@@ -455,7 +332,7 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
     /// <summary>Overlay factory Rules onto the owning Additive VM (null fields stay as-is).</summary>
     public void ApplyRulesToOwner(KrlPostProcessSettings s)
     {
-        if (Owner is null || (!s.RulesSaved && s.CodeEditorInject is null))
+        if (Owner is null || !s.RulesSaved)
             return;
 
         if (s.RobotModeEnabled is { } robot)
@@ -466,9 +343,6 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
             Owner.ExtruderAirEnabled = air;
         if (s.ApoCvel is { } cvel)
             Owner.ApoCvel = cvel;
-        if (s.CodeEditorInject is { } inject)
-            Owner.CodeEditorInject = inject.Clone();
-
         if (s.SmoothRotation is { } smooth)
             Owner.SmoothRotation = smooth;
         if (s.SmoothRotationRadius is { } radius)
@@ -506,7 +380,6 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
         NotifyApoCvelChanged();
         NotifyOrientationSmoothingChanged();
         NotifyStartStopTimingChanged();
-        NotifyCodeEditorInjectChanged();
     }
 
     public KrlPostProcessSettings ToSettings()
@@ -523,7 +396,6 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
             TravelStartStopEnabled = add?.TravelStartStopEnabled,
             ExtruderAirEnabled = add?.ExtruderAirEnabled,
             ApoCvel           = add?.ApoCvel,
-            CodeEditorInject  = add?.CodeEditorInject.Clone(),
             SmoothRotation    = add?.SmoothRotation,
             SmoothRotationRadius = add?.SmoothRotationRadius,
             SmoothRotationMaxRateDegPerMm = add?.SmoothRotationMaxRateDegPerMm,

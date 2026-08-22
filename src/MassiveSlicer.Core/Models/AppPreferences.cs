@@ -448,9 +448,6 @@ public sealed class AppPreferences
     /// </summary>
     public bool? RobotModeEnabled { get; set; }
 
-    /// <summary>Code Editor inject recipe under Travel Moves. Null = defaults.</summary>
-    public CodeEditorInjectSettings? CodeEditorInject { get; set; }
-
     /// <summary>Extruder cooling air: $OUT[5] on in header, off in footer.</summary>
     public bool ExtruderAirEnabled { get; set; }
 

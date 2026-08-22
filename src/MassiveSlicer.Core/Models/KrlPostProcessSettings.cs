@@ -7,6 +7,12 @@ namespace MassiveSlicer.Core.Models;
 /// </summary>
 public sealed class KrlPostProcessSettings
 {
+    /// <summary>File / Lab payload version. 1 = Rules + Header + Footer.</summary>
+    public int SchemaVersion { get; set; } = 1;
+
+    /// <summary>When this recipe was last published (UTC). Lab is source of truth when set.</summary>
+    public DateTime? UpdatedAtUtc { get; set; }
+
     public string HeaderText { get; set; } = "";
     public string FooterText { get; set; } = "";
     public string DefaultHeaderText { get; set; } = "";
@@ -19,8 +25,6 @@ public sealed class KrlPostProcessSettings
     public bool? TravelStartStopEnabled { get; set; }
     public bool? ExtruderAirEnabled { get; set; }
     public double? ApoCvel { get; set; }
-
-    public CodeEditorInjectSettings? CodeEditorInject { get; set; }
 
     public bool? SmoothRotation { get; set; }
     public int? SmoothRotationRadius { get; set; }

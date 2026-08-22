@@ -3758,29 +3758,36 @@ public partial class ViewportView : UserControl
 
                 if (pbVm.PaintLineToolActive || !pbVm.PaintBrushActive)
                 {
-                    // Line tool active → mark/unmark; edit open with no tool → select
-                    // only. Shift accumulates: earlier picks stay highlighted.
-                    // Single click = short local section (full path is double-click in 2D slice).
-                    TryPaintLineAt(pbVm, pos, erase: mods.HasFlag(KeyModifiers.Alt),
-                        applyMarks: pbVm.PaintLineToolActive,
-                        additive: mods.HasFlag(KeyModifiers.Shift),
-                        fullConnectedPath: false);
-                    if (_paintStrokeChanged)
+                    // Line tool / default Select: mark or highlight the path under the
+                    // cursor. A miss must fall through so click-to-select still hits
+                    // Mesh / Slice (3D and 2D). Eating every click made both feel dead.
+                    if (PickSpanUnderCursor(pos) is not null)
                     {
-                        _paintStrokeChanged = false;
-                        pbVm.AdditiveSettings?.BumpPaintStamp();   // pending while paused
+                        TryPaintLineAt(pbVm, pos, erase: mods.HasFlag(KeyModifiers.Alt),
+                            applyMarks: pbVm.PaintLineToolActive,
+                            additive: mods.HasFlag(KeyModifiers.Shift),
+                            fullConnectedPath: false);
+                        if (_paintStrokeChanged)
+                        {
+                            _paintStrokeChanged = false;
+                            pbVm.AdditiveSettings?.BumpPaintStamp();
+                        }
+                        GlCanvas.RequestNextFrameRendering();
+                        e.Handled = true;
+                        return;
                     }
-                    GlCanvas.RequestNextFrameRendering();          // show highlight / marks
+                    // Miss: do not start a brush stroke — leave the click for scene pick.
+                }
+                else
+                {
+                    _paintStroking = true;
+                    _lastPaintPx = new Avalonia.Point(double.MinValue, double.MinValue);
+                    TryPaintAt(pbVm, pos, erase: mods.HasFlag(KeyModifiers.Alt));
+                    e.Pointer.Capture(this);
+                    _capturedPointer = e.Pointer;
                     e.Handled = true;
                     return;
                 }
-                _paintStroking = true;
-                _lastPaintPx = new Avalonia.Point(double.MinValue, double.MinValue);
-                TryPaintAt(pbVm, pos, erase: mods.HasFlag(KeyModifiers.Alt));
-                e.Pointer.Capture(this);
-                _capturedPointer = e.Pointer;
-                e.Handled = true;
-                return;
             }
         }
 
@@ -4170,11 +4177,9 @@ public partial class ViewportView : UserControl
         }
 
         // Stop an active orbit/pan FIRST, for ANY button. The left-button release is
-        // otherwise consumed (and returned) by the selection/gizmo branch below, so a
-        // left-bound orbit/pan (e.g. Mol3D, Maya+Alt) would never stop: the camera keeps
-        // spinning, the pointer stays captured, and the reduced interaction render scale
-        // leaves a small, torn viewport. Selection only happens when not dragging, so a
-        // genuine click (no orbit/pan in progress) still falls through unchanged.
+        // otherwise consumed by the selection/gizmo branch below, so a left-bound
+        // orbit/pan (Mol3D, Maya+Alt) would never stop. A genuine click on that same
+        // button must still select — only a drag consumes the release.
         if (btn is not null && (btn == _orbitButton || btn == _panButton))
         {
             if (btn == _orbitButton) { _isOrbiting = false; _orbitButton = null; }
@@ -4183,9 +4188,13 @@ public partial class ViewportView : UserControl
                 GlCanvas.InteractionRenderScale = 1f;
             _capturedPointer?.Capture(null);
             _capturedPointer = null;
-            _leftDragged = false;
+            if (ViewportPointerPolicy.ConsumeOrbitPanRelease(isOrbitOrPanButton: true, _leftDragged))
+            {
+                _leftDragged = false;
+                GlCanvas.RequestNextFrameRendering();
+                return;
+            }
             GlCanvas.RequestNextFrameRendering();
-            return;
         }
 
         if (kind == PointerUpdateKind.LeftButtonReleased && _kbTransformActive)
@@ -4319,7 +4328,7 @@ public partial class ViewportView : UserControl
                 GlCanvas.RequestNextFrameRendering();
                 RevalidateSelectedToolpath();
             }
-            else if (!_leftDragged && sawLeftPress)
+            else if (ViewportPointerPolicy.IsClickSelectRelease(sawLeftPress, _leftDragged))
             {
                 // _leftPressSeen guards click-to-select against a press that overlay chrome
                 // swallowed. Selection runs on RELEASE using the position recorded at PRESS, so a
@@ -4328,8 +4337,9 @@ public partial class ViewportView : UserControl
                 // clicked. Applies to every overlay control, not just the transform rows.
                 float vpW = (float)GlCanvas.Bounds.Width;
                 float vpH = (float)GlCanvas.Bounds.Height;
-                var ray   = _renderer.Camera.GetPickRay(
-                    (float)_leftDownPos.X, (float)_leftDownPos.Y, vpW, vpH);
+                var (mx, my, pickW, pickH) = GetGlPickViewport(_leftDownPos);
+                if (pickW > 1f && pickH > 1f) { vpW = pickW; vpH = pickH; }
+                var ray   = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
 
                 if (DataContext is ViewportViewModel bndVm && bndVm.IsBoundaryEditorActive
                     && _boundaryEditorMesh is not null
@@ -4402,16 +4412,12 @@ public partial class ViewportView : UserControl
                 }
                 else if (DataContext is ViewportViewModel pickVm)
                 {
-                    float vpW2 = (float)GlCanvas.Bounds.Width;
-                    float vpH2 = (float)GlCanvas.Bounds.Height;
-                    // Effector handles get pick priority: they float inside the toolpath
-                    // cloud, and the toolpath's screen-distance pick would otherwise
-                    // claim every click near a handle (made them unclickable).
+                    var (mx2, my2, vpW2, vpH2) = GetGlPickViewport(_leftDownPos);
                     var effectorHit = Picker.PickWhere(
                         ray, _renderer.SceneRoot, n => pickVm.IsEffectorNode(n), out _);
                     var picked = effectorHit is not null
                         ? Picker.FindSelectableRoot(effectorHit, _renderer.SceneRoot)
-                        : (_renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2)
+                        : (_renderer.PickToolpath(mx2, my2, vpW2, vpH2)
                            ?? PickForSceneSelection(pickVm, ray));
                     var shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
                     if (shiftHeld && picked is not null
@@ -4422,9 +4428,8 @@ public partial class ViewportView : UserControl
                 }
                 else
                 {
-                    float vpW2 = (float)GlCanvas.Bounds.Width;
-                    float vpH2 = (float)GlCanvas.Bounds.Height;
-                    var toolpathHit = _renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2);
+                    var (mx3, my3, vpW2, vpH2) = GetGlPickViewport(_leftDownPos);
+                    var toolpathHit = _renderer.PickToolpath(mx3, my3, vpW2, vpH2);
                     var picked = toolpathHit ?? _renderer.Pick(ray);
                     _renderer.Select(picked);
                     UpdateFocusOverlay();
@@ -10004,7 +10009,7 @@ public partial class ViewportView : UserControl
                 for (int i = i0; i < i1; i++)
                 {
                     var mv = moves[i];
-                    if (mv.Kind != MoveKind.Extrude) continue;
+                    if (!ToolpathMoveKinds.IsCutSegment(mv.Kind)) continue;
                     if (DataContext is ViewportViewModel bpVm && !PaintPickAllowed(mv, bpVm)) continue;
                     var mid = (mv.From + mv.To) * 0.5f;
                     var world = TransformPoint(
@@ -11298,7 +11303,7 @@ public partial class ViewportView : UserControl
         for (int i = 0; i < span.Count && span.Start + i < layer.Moves.Count; i++)
         {
             var mv = layer.Moves[span.Start + i];
-            if (mv.Kind != MoveKind.Extrude) continue;
+            if (!ToolpathMoveKinds.IsCutSegment(mv.Kind)) continue;
             accum += System.Numerics.Vector3.Distance(mv.From, mv.To);
             if (accum < stepMm && pts.Count > 0) continue;
             accum = 0f;
@@ -11312,7 +11317,7 @@ public partial class ViewportView : UserControl
             int mi = span.Start + i;
             if (mi < 0 || mi >= layer.Moves.Count) continue;
             var mv = layer.Moves[mi];
-            if (mv.Kind != MoveKind.Extrude) continue;
+            if (!ToolpathMoveKinds.IsCutSegment(mv.Kind)) continue;
             var last = (mv.From + mv.To) * 0.5f;
             if (System.Numerics.Vector3.Distance(pts[^1], last) > stepMm * 0.25f)
                 pts.Add(last);
@@ -11368,7 +11373,7 @@ public partial class ViewportView : UserControl
         for (int i = 0; i < span.Count && span.Start + i < layer.Moves.Count; i++)
         {
             var mv = layer.Moves[span.Start + i];
-            if (mv.Kind != MoveKind.Extrude) continue;
+            if (!ToolpathMoveKinds.IsCutSegment(mv.Kind)) continue;
             sum += (mv.From + mv.To) * 0.5f;
             n++;
         }
@@ -11566,7 +11571,7 @@ public partial class ViewportView : UserControl
                         for (int i = 0; i < span.Count && !hit; i += stride)
                         {
                             var mv = layer.Moves[span.Start + i];
-                            if (mv.Kind != MoveKind.Extrude) continue;
+                            if (!ToolpathMoveKinds.IsCutSegment(mv.Kind)) continue;
                             // continue (not break): mixed contours may start with a
                             // filtered bead type then contain allowed ones.
                             if (!PaintPickAllowed(mv, vm)) continue;
@@ -11587,7 +11592,7 @@ public partial class ViewportView : UserControl
                     for (int i = i0; i < i1; i++)
                     {
                         var mv = moves[i];
-                        if (mv.Kind != MoveKind.Extrude) continue;
+                        if (!ToolpathMoveKinds.IsCutSegment(mv.Kind)) continue;
                         if (mv.IsLayerStitch || mv.IsLayerChange) continue;
                         if (!PaintPickAllowed(mv, vm)) continue;
                         if (!TryProjectMoveVertex(mv, origin, wt, viewProj, vpW, vpH,
@@ -11767,7 +11772,7 @@ public partial class ViewportView : UserControl
                 for (int i = i0; i < i1; i++)
                 {
                     var mv = moves[i];
-                    if (mv.Kind != MoveKind.Extrude) continue;
+                    if (!ToolpathMoveKinds.IsCutSegment(mv.Kind)) continue;
                     if (mv.IsLayerStitch || mv.IsLayerChange) continue;
                     if (vmPick is not null && !PaintPickAllowed(mv, vmPick)) continue;
 
@@ -12502,7 +12507,7 @@ public partial class ViewportView : UserControl
             int mi = span.Start + i;
             if ((uint)mi >= (uint)layer.Moves.Count) break;
             var mv = layer.Moves[mi];
-            if (mv.Kind != MoveKind.Extrude) continue;
+            if (!ToolpathMoveKinds.IsCutSegment(mv.Kind)) continue;
             accum += System.Numerics.Vector3.Distance(mv.From, mv.To);
             if (accum < spacing) continue;
             accum = 0f;
@@ -12542,7 +12547,7 @@ public partial class ViewportView : UserControl
         for (int i = span.Start; i < end; i++)
         {
             var mv = layer.Moves[i];
-            if (mv.Kind != MoveKind.Extrude) continue;
+            if (!ToolpathMoveKinds.IsCutSegment(mv.Kind)) continue;
             len += System.Numerics.Vector3.Distance(mv.From, mv.To);
             extrudes++;
             if (mv.IsLightning) lightning++;
@@ -15505,7 +15510,7 @@ public partial class ViewportView : UserControl
     {
         foreach (var mv in layer.Moves)
         {
-            if (mv.Kind != MoveKind.Extrude) continue;
+            if (!ToolpathMoveKinds.IsCutSegment(mv.Kind)) continue;
             if (mv.IsLayerStitch || mv.IsLayerChange) continue;
             var a = TransformPoint(
                 new TkVector3(mv.From.X - origin.X, mv.From.Y - origin.Y, mv.From.Z - origin.Z), wt);
@@ -15746,7 +15751,7 @@ public partial class ViewportView : UserControl
         for (int i = 0; i < moves.Count; i += stride)
         {
             var mv = moves[i];
-            if (mv.Kind != MoveKind.Extrude) continue;
+            if (!ToolpathMoveKinds.IsCutSegment(mv.Kind)) continue;
             if (mv.IsLayerStitch || mv.IsLayerChange) continue;
             var mid = (mv.From + mv.To) * 0.5f;
             var w = TransformPoint(new TkVector3(
@@ -17663,6 +17668,25 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
+    /// Lab team default wins when MassiveLAB is connected. Otherwise the
+    /// settings-menu / factory recipe already on <paramref name="settings"/>.
+    /// </summary>
+    private async Task RefreshKrlPostProcessRecipeAsync(
+        ViewportViewModel vm, AdditiveSettingsViewModel settings)
+    {
+        try
+        {
+            var lab = await vm.Erp.TryRefreshKrlPostProcessAsync();
+            if (lab is not null)
+                settings.KrlPostProcess.LoadFrom(lab);
+        }
+        catch (Exception ex)
+        {
+            LogToConsole($"[export] KRL post-process Lab refresh skipped: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// The one place UI settings become RPM inputs. Export and the viewport highlight both
     /// go through here, so the RPM drawn on screen is the RPM written to the .src — there is
     /// no second calculation that could drift.
@@ -17816,6 +17840,8 @@ public partial class ViewportView : UserControl
         AdditiveSettingsViewModel settings,
         string path)
     {
+        await RefreshKrlPostProcessRecipeAsync(vm, settings);
+
         var wt    = node.WorldTransform;
         var sysWt = new System.Numerics.Matrix4x4(
             wt.M11, wt.M12, wt.M13, wt.M14,
@@ -17970,7 +17996,6 @@ public partial class ViewportView : UserControl
             RobotModeEnabled        = settings.RobotModeEnabled,
             TravelStartStopEnabled  = settings.TravelStartStopEnabled,
             DigitalStartStopEnabled = false,
-            CodeEditorInject        = settings.CodeEditorInject.Clone(),
             ExtruderAirEnabled      = settings.ExtruderAirEnabled,
             SlicerVersion           = MassiveSlicer.App.BuildInfo.Label,
             MaterialPresetName      = selectedPreset?.Name,
@@ -17980,6 +18005,7 @@ public partial class ViewportView : UserControl
             ExtruderIsHf            = settings.ActiveExtruderIsHf,
         };
         exportSettings = WithRpmInputs(exportSettings, settings);
+        exportSettings = KrlPostProcessRecipe.Apply(exportSettings, postProcess);
 
         string krl;
         try

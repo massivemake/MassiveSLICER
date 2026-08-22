@@ -174,6 +174,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         RightPanel.Subtractive.PushBitToErp = bit => Viewport.Erp.PushMillBitInBackground(bit);
         RightPanel.Subtractive.DeleteBitFromErp = bit => Viewport.Erp.DeleteMillBitInBackground(bit);
         Viewport.Erp.PresetsLibraryChanged += ReloadPresetLibrariesFromDisk;
+        Viewport.Erp.KrlPostProcessPulled += ApplyLabKrlPostProcess;
         Toolbar.SetRecentWorkspaces(AppPreferences.RecentWorkspaces);
         Toolbar.OpenRecentRequested += (_, recentPath) =>
         {
@@ -292,9 +293,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Restore all persisted settings before subscribing so saves don't fire
         // during initialisation.
         SyncViewportFromPrefs();
-        // Factory JSON wins over machine prefs for KRL Post-Processing so a
-        // rebuild / GitHub clone keeps the committed recipe.
-        RightPanel.Additive.KrlPostProcess.ApplyRulesToOwner(KrlPostProcessLoader.Load());
+        // Factory / Lab recipe wins over machine prefs and .mass flags for KRL
+        // Post-Processing (header, footer, Robot Mode, Travel Moves).
+        RightPanel.Additive.KrlPostProcess.LoadFrom(KrlPostProcessLoader.Load());
         PersistSettings();
         _lastCommittedPrefsJson = CapturePrefsJson();
 
@@ -4141,6 +4142,9 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         CopyPreferences(doc.Settings);
         SyncViewportFromPrefs();
+        // Settings-menu / Lab recipe owns KRL post-process — a .mass must not
+        // restore stale Robot Mode / Travel Moves / header over it.
+        RightPanel.Additive.KrlPostProcess.LoadFrom(KrlPostProcessLoader.Load());
         if (doc.Settings.Mill is { } millSnap)
             Console.Log($"[workspace] Restored mill {millSnap.SelectedOperation} / {millSnap.AreaSelectTool}.");
         if (doc.UiSession?.XBracingShowHelper is bool showXHelper)
@@ -4269,6 +4273,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         Console.Log("[erp] local preset + mill-tool libraries reloaded from ERP sync");
     }
 
+    /// <summary>Lab team default is the factory recipe — apply Rules + Header + Footer.</summary>
+    private void ApplyLabKrlPostProcess(KrlPostProcessSettings settings)
+    {
+        RightPanel.Additive.KrlPostProcess.LoadFrom(settings);
+        PersistSettings();
+        PreferencesLoader.Save(AppPreferences);
+        Console.Log("[erp] applied Lab KRL post-process default (Rules + Header + Footer)");
+    }
+
     private void OnSettingsChanged()
     {
         if (_applyingUndoRedo) return;
@@ -4389,7 +4402,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.SsResumePrimePercent    = copy.SsResumePrimePercent;
         live.DigitalStartStopEnabled = copy.DigitalStartStopEnabled;
         live.RobotModeEnabled        = copy.RobotModeEnabled;
-        live.CodeEditorInject        = copy.CodeEditorInject?.Clone() ?? new();
         live.ExtruderAirEnabled      = copy.ExtruderAirEnabled;
         live.ResumeRampEnabled         = copy.ResumeRampEnabled;
         live.ResumeRampStartSpeed      = copy.ResumeRampStartSpeed;
@@ -4795,12 +4807,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.ExtrusionResumeWaitSec  = p.ExtrusionResumeWaitSec;
         add.SsPreTravelWaitSec      = p.SsPreTravelWaitSec;
         add.SsResumePrimePercent    = p.SsResumePrimePercent;
-        add.DigitalStartStopEnabled = p.DigitalStartStopEnabled;
-        // Pre-split workspaces only had DigitalStartStop (both MAT + travel).
-        add.RobotModeEnabled = p.RobotModeEnabled ?? p.DigitalStartStopEnabled;
-        add.ApplyUrmPostProcessTemplates(add.RobotModeEnabled);
-        if (p.CodeEditorInject is { } inject)
-            add.CodeEditorInject = inject.Clone();
         add.ExtruderAirEnabled = p.ExtruderAirEnabled;
         add.ResumeRampEnabled         = p.ResumeRampEnabled;
         add.ResumeRampStartSpeed      = p.ResumeRampStartSpeed;
@@ -5131,7 +5137,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.SsResumePrimePercent    = add.SsResumePrimePercent;
         p.DigitalStartStopEnabled = add.DigitalStartStopEnabled;
         p.RobotModeEnabled        = add.RobotModeEnabled;
-        p.CodeEditorInject        = add.CodeEditorInject.Clone();
         p.ExtruderAirEnabled      = add.ExtruderAirEnabled;
         p.ResumeRampEnabled         = add.ResumeRampEnabled;
         p.ResumeRampStartSpeed      = add.ResumeRampStartSpeed;
