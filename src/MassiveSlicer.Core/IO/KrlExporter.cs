@@ -118,19 +118,16 @@ public sealed record KrlExportSettings
     public bool RobotModeEnabled { get; init; }
 
     /// <summary>
-    /// Travel Moves (Start/Stop): Caracol injector around travels / wipes / z-hops.
-    /// Independent of Robot Mode.
+    /// Travel Moves: <c>RPM = 0</c> at <c>;travel start</c>, print <c>RPM =</c>
+    /// again just before <c>;travel end</c>. Independent of Robot Mode.
     /// </summary>
     public bool TravelStartStopEnabled { get; init; }
 
     /// <summary>MAT temps/RPM via T1/T2/T3/RPM (Robot Mode or legacy URM).</summary>
     public bool UseRobotMode => RobotModeEnabled || DigitalStartStopEnabled;
 
-    /// <summary>Travel start/stop injector (Travel Moves or legacy URM).</summary>
+    /// <summary>Travel start/stop <c>RPM =</c> (Travel Moves or legacy URM).</summary>
     public bool UseTravelStartStop => TravelStartStopEnabled || DigitalStartStopEnabled;
-
-    /// <summary>Code Editor inject recipe. Null = built-in shop defaults.</summary>
-    public Models.CodeEditorInjectSettings? CodeEditorInject { get; init; }
 
     /// <summary>
     /// Extruder cooling air: <c>$OUT[5]</c> TRUE in the header, FALSE in the footer.
@@ -526,8 +523,6 @@ public static class KrlExporter
         GuardTemplateRpm(s.HeaderTemplate, "header");
         GuardTemplateRpm(s.FooterTemplate, "footer");
         string body = ExportCore(toolpath, s);
-        if (s.UseTravelStartStop)
-            body = CodeEditorSrcInjector.Apply(body, s);
         return body.ReplaceLineEndings("\r\n");
     }
 
@@ -601,9 +596,12 @@ public static class KrlExporter
         // Exact stop at the touch-down point so the RPM-on TRIGGER fires at the
         // correct physical position (not inside a C_VEL blend zone).
         sb.AppendLine(FormatLinExact(p0, a0, b0, c0, e1Approach));
-        // Caracol URM (MTruck): approach ends with ";travel end" before first ";rpm change".
+        // Approach ends with ";travel end" then first bead writes RPM =.
         if (s.UseTravelStartStop)
+        {
+            sb.AppendLine(FormatTravelRpmOn(s, 1f));
             sb.AppendLine(";travel end");
+        }
         sb.AppendLine();
 
         Vector3 lastPos = p0;
@@ -658,7 +656,7 @@ public static class KrlExporter
                         {
                             if (s.UseTravelStartStop && !ssStopActive)
                             {
-                                sb.AppendLine(";travel start");
+                                WriteTravelStart(sb, s);
                                 ssStopActive = true;
                             }
                             sb.AppendLine(";z-hop");
@@ -686,17 +684,20 @@ public static class KrlExporter
 
                     if (s.UseTravelStartStop)
                     {
-                        // Code Editor polyline: wipe/z-hop already opened ;travel start.
-                        // Always write ;travel start here too so a hop without wipe still pairs.
+                        // Wipe/z-hop may already have opened ;travel start + RPM = 0.
                         if (!ssStopActive)
-                            sb.AppendLine(";travel start");
+                        {
+                            WriteTravelStart(sb, s);
+                            ssStopActive = true;
+                        }
                         if (move.IsLayerChange)
                             sb.AppendLine(";layer change");
                         else if (move.IsMergeConnector)
                             sb.AppendLine(";merge travel");
                         sb.AppendLine($"$VEL.CP = {travelSpeed.ToString("F6", Inv)}");
                         sb.AppendLine(FormatLinExact(to, ta, tb, tc, e1Travel));
-                        sb.AppendLine(";travel end");
+                        float resumeScale = lastExtrudeRpmScale > 0f ? lastExtrudeRpmScale : 1f;
+                        WriteTravelEnd(sb, s, resumeScale);
                         sb.AppendLine();
                         ssStopActive = false;
                     }
@@ -730,10 +731,10 @@ public static class KrlExporter
 
                     if (move.IsWipe)
                     {
-                        // Wipe is the start of a travel (Code Editor polyline).
+                        // Wipe opens a travel: RPM = 0 at ;travel start.
                         if (s.UseTravelStartStop && !ssStopActive)
                         {
-                            sb.AppendLine(";travel start");
+                            WriteTravelStart(sb, s);
                             ssStopActive = true;
                         }
                         sb.AppendLine(";wipe");
@@ -762,7 +763,7 @@ public static class KrlExporter
                             {
                                 if (ssStopActive)
                                 {
-                                    sb.AppendLine(";travel end");
+                                    WriteTravelEnd(sb, layerS, rpmScale);
                                     ssStopActive = false;
                                 }
                                 sb.AppendLine(FormatExtruderOn(layerS, rpmScale, "RPM ramp", useTrigger: false));
@@ -807,13 +808,11 @@ public static class KrlExporter
                         float waitSec = ResolveResumeWaitSec(
                             isFirstPrintStart, s, pendingResumeWaitSec, move.ResumeWaitSec);
                         pendingResumeWaitSec = null;
-                        // Code Editor injects $OUT[7] + WAIT after ;travel end.
-                        // Close an open wipe/z-hop travel, then only write RPM here.
                         if (s.UseTravelStartStop)
                         {
                             if (ssStopActive)
                             {
-                                sb.AppendLine(";travel end");
+                                WriteTravelEnd(sb, layerS, extrudeRpmScale);
                                 ssStopActive = false;
                             }
                             sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "RPM on", useTrigger: false));
@@ -906,57 +905,6 @@ public static class KrlExporter
         if (pendingFromTravel is { } p)
             return p;
         return s.ExtrusionResumeWaitSec;
-    }
-
-    /// <summary>
-    /// Caracol S&amp;S steps 1–4 (travel_ss-post / Handover V2): enable URM, stop screw,
-    /// slow approach at half print speed, wait before travel motion.
-    /// OUT[8] (URM request) is only TRUE during this window — not for the whole job.
-    /// </summary>
-    private static void EmitCaracolSsPreTravel(
-        StringBuilder sb,
-        KrlExportSettings s,
-        Vector3 lastPos,
-        float a, float b, float c,
-        float e1,
-        float printSpeedMps)
-    {
-        sb.AppendLine(";digital start/stop - stop (Caracol URM)");
-        // Fire TRIGGERs at current pose (DISTANCE=0 on next motion).
-        sb.AppendLine("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = TRUE");
-        sb.AppendLine("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[7] = FALSE");
-        float scale = s.SsApproachSpeedScale > 0.05f && s.SsApproachSpeedScale <= 1f
-            ? s.SsApproachSpeedScale : 0.5f;
-        float approach = Math.Max(0.005f, printSpeedMps * scale);
-        sb.AppendLine($"$VEL.CP = {approach.ToString("F6", Inv)}");
-        // Re-issue current pose so TRIGGERs execute, then dwell.
-        sb.AppendLine(FormatLinExact(lastPos, a, b, c, e1));
-        float preWait = s.SsPreTravelWaitSec >= 0f ? s.SsPreTravelWaitSec : 0.5f;
-        if (preWait > 0f)
-            sb.AppendLine(FormatWaitSec(preWait));
-    }
-
-    /// <summary>
-    /// Caracol S&amp;S steps 8–10: re-enable screw, resume wait, disable URM, set RPM for print.
-    /// </summary>
-    private static void EmitCaracolSsPostTravel(
-        StringBuilder sb,
-        KrlExportSettings s,
-        float waitSec,
-        float rpmScale,
-        bool isFirstPrintStart)
-    {
-        sb.AppendLine(";digital start/stop - start (Caracol URM)");
-        sb.AppendLine("$OUT[7] = TRUE");
-        float primePct = Math.Clamp(
-            s.SsResumePrimePercent <= 0f ? 100f : s.SsResumePrimePercent, 5f, 100f);
-        if (waitSec > 0f && primePct < 99.5f && !isFirstPrintStart)
-            sb.AppendLine(FormatExtruderOn(s, rpmScale * primePct / 100f, "resume prime", useTrigger: false));
-        if (waitSec > 0f)
-            sb.AppendLine(FormatWaitSec(waitSec));
-        sb.AppendLine("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = FALSE");
-        // Keep screw speed command (material RPM%) for the print segment.
-        sb.AppendLine(FormatExtruderOn(s, rpmScale, isFirstPrintStart ? "RPM on" : "", useTrigger: false));
     }
 
     /// <summary>Emits a relief-milling body: LIN cuts at the cutting feed, rapids/plunges for
@@ -1440,8 +1388,35 @@ public static class KrlExporter
             : $"$ANOUT[4] = {text} ; {comment}";
 
     /// <summary>
+    /// Travel start: comment + <c>RPM = 0.00</c>. Screw off for the hop.
+    /// </summary>
+    private static void WriteTravelStart(StringBuilder sb, KrlExportSettings s)
+    {
+        _ = s;
+        sb.AppendLine(";travel start");
+        sb.AppendLine(FormatTravelRpmOff());
+    }
+
+    /// <summary>
+    /// Right before print resumes: <c>RPM =</c> print value, then <c>;travel end</c>.
+    /// </summary>
+    private static void WriteTravelEnd(StringBuilder sb, KrlExportSettings s, float rpmScale)
+    {
+        sb.AppendLine(FormatTravelRpmOn(s, rpmScale));
+        sb.AppendLine(";travel end");
+    }
+
+    private static string FormatTravelRpmOff() => "RPM = 0.00";
+
+    private static string FormatTravelRpmOn(KrlExportSettings s, float rpmScale)
+    {
+        float rpmPercent = ResolveRpmPercent(s, rpmScale <= 0f ? 1f : rpmScale);
+        return $"RPM = {FormatCaracolRpm(rpmPercent)}";
+    }
+
+    /// <summary>
     /// Extruder off. Normal export: <c>$ANOUT[4] = 0</c>.
-    /// URM / Digital Start-Stop: Caracol Eidos <c>RPM = 0.00</c> (MTruck Wheel style; used on wipe/retreat/footer).
+    /// Robot Mode: Caracol <c>RPM = 0.00</c>.
     /// </summary>
     private static string FormatExtruderOff(KrlExportSettings s, string comment)
     {

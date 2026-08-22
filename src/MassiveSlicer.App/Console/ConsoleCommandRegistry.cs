@@ -1,4 +1,5 @@
 using MassiveSlicer.Commands;
+using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.ViewModels;
 
@@ -2473,8 +2474,8 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "krlpost",
             Aliases = ["krl-post", "krlpostprocess"],
-            Description = "KRL post-processing: show state, toggle Robot Mode / Travel Moves, set $APO.CVEL, reset or save header/footer defaults",
-            Usage = "krlpost | krlpost open | krlpost robot <on|off> | krlpost travel <on|off> | krlpost air <on|off> | krlpost urm <on|off> | krlpost apocvel <0-100> | krlpost reset <header|footer> | krlpost save-default <header|footer>",
+            Description = "KRL post-processing: show state, import/export, Lab pull/publish, toggle Robot Mode / Travel Moves",
+            Usage = "krlpost | krlpost open | krlpost export <path> | krlpost import <path> | krlpost pull | krlpost publish | krlpost robot <on|off> | krlpost travel <on|off> | krlpost air <on|off> | krlpost urm <on|off> | krlpost apocvel <0-100> | krlpost reset <header|footer> | krlpost save-default <header|footer>",
             Execute = (ctx, args) =>
             {
                 var add  = ctx.Main.RightPanel.Additive;
@@ -2493,6 +2494,51 @@ public sealed class ConsoleCommandRegistry
 
                 switch (parts.FirstOrDefault())
                 {
+                    case "export" when parts.Length >= 2:
+                    {
+                        var path = args.Trim()[("export".Length)..].Trim().Trim('"');
+                        try
+                        {
+                            var json = KrlPostProcessDocument.SerializeEnvelope(post.ToSettings());
+                            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+                            File.WriteAllText(path, json);
+                            ctx.Log($"[krlpost] exported {path}");
+                        }
+                        catch (Exception ex)
+                        {
+                            ctx.LogError($"[krlpost] export failed: {ex.Message}");
+                        }
+                        break;
+                    }
+                    case "import" when parts.Length >= 2:
+                    {
+                        var path = args.Trim()[("import".Length)..].Trim().Trim('"');
+                        try
+                        {
+                            if (!KrlPostProcessDocument.TryParse(File.ReadAllText(path), out var imported, out var err))
+                            {
+                                ctx.LogError($"[krlpost] import failed: {err}");
+                                break;
+                            }
+                            post.LoadFrom(imported);
+                            post.Save();
+                            ctx.Log($"[krlpost] imported {path}");
+                            Report();
+                        }
+                        catch (Exception ex)
+                        {
+                            ctx.LogError($"[krlpost] import failed: {ex.Message}");
+                        }
+                        break;
+                    }
+                    case "pull" or "lab-pull":
+                        ctx.Log("[krlpost] pull started — connect MassiveLAB first if this no-ops");
+                        _ = PullKrlPostFromLab(ctx);
+                        break;
+                    case "publish" or "lab-publish" or "push":
+                        ctx.Log("[krlpost] publish started — connect MassiveLAB first if this no-ops");
+                        _ = PublishKrlPostToLab(ctx, post);
+                        break;
                     case "open":
                         ctx.Log(add.RequestOpenKrlPostProcess()
                             ? "[krlpost] dialog opened"
@@ -3177,5 +3223,32 @@ public sealed class ConsoleCommandRegistry
             spans.Add(new ContourSpan(start, count, closed, -1));
         }
         return spans;
+    }
+
+    static async Task PullKrlPostFromLab(ConsoleCommandContext ctx)
+    {
+        try
+        {
+            var summary = await ctx.Main.Viewport.Erp.PullKrlPostProcessAsync();
+            ctx.Log($"[krlpost] {summary}");
+        }
+        catch (Exception ex)
+        {
+            ctx.LogError($"[krlpost] pull failed: {ex.Message}");
+        }
+    }
+
+    static async Task PublishKrlPostToLab(ConsoleCommandContext ctx, KrlPostProcessSettingsViewModel post)
+    {
+        try
+        {
+            post.Save();
+            var summary = await ctx.Main.Viewport.Erp.PublishKrlPostProcessAsync(post.ToSettings());
+            ctx.Log($"[krlpost] {summary}");
+        }
+        catch (Exception ex)
+        {
+            ctx.LogError($"[krlpost] publish failed: {ex.Message}");
+        }
     }
 }

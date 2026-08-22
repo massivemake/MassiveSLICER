@@ -20,8 +20,6 @@ public sealed class KrlPostProcessLoaderTest
         var loaded = KrlPostProcessLoader.Load();
         Assert.True(loaded.RulesSaved);
         Assert.True(loaded.TravelStartStopEnabled);
-        Assert.NotNull(loaded.CodeEditorInject);
-        Assert.Equal("Before", loaded.CodeEditorInject!.StopDirection);
-        Assert.Equal(350.0, loaded.CodeEditorInject.StopDistance);
+        Assert.True(loaded.RobotModeEnabled);
     }
 }

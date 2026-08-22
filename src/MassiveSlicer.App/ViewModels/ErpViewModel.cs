@@ -730,6 +730,11 @@ public sealed class ErpViewModel : ViewModelBase
     /// </summary>
     public event Action? PresetsLibraryChanged;
 
+    /// <summary>Lab team KRL post-process default was pulled — apply to Additive.</summary>
+    public event Action<KrlPostProcessSettings>? KrlPostProcessPulled;
+
+    public string KrlPostProcessSyncStatus { get; private set; } = "";
+
     /// <summary>
     /// Last presets-sync summary (console + optional status). Empty until first connect attempt.
     /// </summary>
@@ -746,16 +751,21 @@ public sealed class ErpViewModel : ViewModelBase
         try
         {
             var summary = await ErpPresetSync.SyncOnConnectAsync(client, _log, CancellationToken.None);
+            var krl = await ErpKrlPostProcessSync.PullAsync(client, _log, CancellationToken.None);
             Post(() =>
             {
                 PresetsSyncStatus = summary;
                 OnPropertyChanged(nameof(PresetsSyncStatus));
+                KrlPostProcessSyncStatus = krl.Summary;
+                OnPropertyChanged(nameof(KrlPostProcessSyncStatus));
                 if (!summary.Contains("not available", StringComparison.OrdinalIgnoreCase)
                     && !summary.Contains("failed", StringComparison.OrdinalIgnoreCase))
                     PresetsLibraryChanged?.Invoke();
                 else if (summary.Contains("from ERP", StringComparison.OrdinalIgnoreCase)
                          || summary.Contains("pushed", StringComparison.OrdinalIgnoreCase))
                     PresetsLibraryChanged?.Invoke();
+                if (krl.Settings is { } recipe)
+                    KrlPostProcessPulled?.Invoke(recipe);
             });
         }
         catch (Exception ex)
@@ -810,6 +820,56 @@ public sealed class ErpViewModel : ViewModelBase
             try { await ErpPresetSync.DeleteMillToolAsync(client, record, _log, CancellationToken.None); }
             catch (Exception ex) { _log?.Invoke($"[erp] mill-tool delete exception: {ex.Message}"); }
         });
+    }
+
+    /// <summary>
+    /// Pull Lab team default if connected. Returns the recipe on 200 so the
+    /// caller can apply it on this thread (Dispatcher.Post would race export).
+    /// </summary>
+    public async Task<KrlPostProcessSettings?> TryRefreshKrlPostProcessAsync()
+    {
+        var client = _client;
+        if (client is null || !IsConnected)
+            return null;
+        var krl = await ErpKrlPostProcessSync.PullAsync(client, _log, CancellationToken.None);
+        Post(() =>
+        {
+            KrlPostProcessSyncStatus = krl.Summary;
+            OnPropertyChanged(nameof(KrlPostProcessSyncStatus));
+        });
+        return krl.Settings;
+    }
+
+    /// <summary>Pull Lab team KRL post-process default and apply via <see cref="KrlPostProcessPulled"/>.</summary>
+    public async Task<string> PullKrlPostProcessAsync()
+    {
+        var client = _client;
+        if (client is null || !IsConnected)
+            return "not connected to Lab";
+        var krl = await ErpKrlPostProcessSync.PullAsync(client, _log, CancellationToken.None);
+        Post(() =>
+        {
+            KrlPostProcessSyncStatus = krl.Summary;
+            OnPropertyChanged(nameof(KrlPostProcessSyncStatus));
+            if (krl.Settings is { } recipe)
+                KrlPostProcessPulled?.Invoke(recipe);
+        });
+        return krl.Summary;
+    }
+
+    /// <summary>Publish the current recipe as the Lab team default.</summary>
+    public async Task<string> PublishKrlPostProcessAsync(KrlPostProcessSettings settings)
+    {
+        var client = _client;
+        if (client is null || !IsConnected)
+            return "not connected to Lab";
+        var summary = await ErpKrlPostProcessSync.PublishAsync(client, settings, _log, CancellationToken.None);
+        Post(() =>
+        {
+            KrlPostProcessSyncStatus = summary;
+            OnPropertyChanged(nameof(KrlPostProcessSyncStatus));
+        });
+        return summary;
     }
 
     /// <summary>Fetches /pricing and caches it. Safe to call repeatedly.</summary>

@@ -212,9 +212,10 @@ HTTP 404 still means "stay local" if a route is missing.
 
 ### GET /presets-bundle
 
-Returns `{ "version", "printPresets": [...], "materialPresets": [...], "millTools": [...] }`.
-Each entry: `{ "id", "updatedAt?", "updatedBy?", "payload": { …desktop record… } }`.
+Returns `{ "version", "printPresets": [...], "materialPresets": [...], "millTools": [...], "krlPostProcess"? }`.
+Each list entry: `{ "id", "updatedAt?", "updatedBy?", "payload": { …desktop record… } }`.
 `millTools` is live; the slicer also calls `GET /mill-tools` if the array is empty.
+`krlPostProcess` is the **singleton team default** for KRL Post-Processing (not a list). Lab has not shipped it yet (404 / omit = stay local).
 
 ### GET/POST/PUT/DELETE /print-presets[/{id}]
 ### GET/POST/PUT/DELETE /material-presets[/{id}]
@@ -241,6 +242,18 @@ Slicer behavior:
 - Console: `erp presets` or `erp millbits` re-runs the pull.
 - `payload` is opaque JSON matching `PrintPresetRecord` / `MaterialPreset` / `MillBitTool`.
 - Mill bits also stay in `%AppData%/MassiveSlicer/mill_tools.json`.
+
+### GET/PUT /krl-postprocess  (slicer ships this; Lab 404 until it lands)
+
+One org-wide factory recipe (Rules + Header + Footer + Code Injector).
+
+- `GET` → `{ id, updatedAt, updatedBy, payload }` or **404** (no default yet)
+- `PUT` body `{ "payload": { …KrlPostProcessSettings… } }` → 200 same shape
+- On connect: GET (fallback `presets-bundle.krlPostProcess`). Lab wins when present.
+- Publish is explicit (dialog **Publish to Lab** / `krlpost publish`). Never auto-overwrite Lab on connect.
+- Import/Export are local JSON (`kind: MassiveSLICER.KrlPostProcess`).
+
+See `docs/ERP-KrlPostProcess-API-Replit-Prompt.md`.
 
 See `docs/ERP-Presets-API-Replit-Prompt.md` and
 `docs/ERP-MillTools-API-Replit-Prompt.md`.
