@@ -241,16 +241,15 @@ public sealed record KrlExportSettings
 
     /// <summary>
     /// Custom header template. Null/empty uses the built-in default for the export mode.
-    /// Ignored when <see cref="UseRobotMode"/> (Robot Mode always uses
-    /// <see cref="KrlExporter.DefaultUrmHeaderTemplate"/> so LFAM post-process
-    /// <c>$ANOUT</c> MAT blocks cannot override Caracol <c>T1/T2/T3/RPM</c>).
+    /// Robot Mode uses this text as-is unless it is the LFAM <c>$ANOUT</c> MAT header
+    /// (then it falls back to <see cref="KrlExporter.DefaultUrmHeaderTemplate"/>).
+    /// Shop headers that say <c>;FOLD Safety</c> instead of <c>CaracolSafety</c> must still export.
     /// </summary>
     public string? HeaderTemplate { get; init; }
 
     /// <summary>
     /// Custom footer template. Null/empty uses the built-in default.
-    /// Ignored when <see cref="UseRobotMode"/> (Robot Mode uses
-    /// <see cref="KrlExporter.DefaultUrmFooterTemplate"/>).
+    /// Robot Mode uses this text as-is unless it is the short LFAM <c>$OUT[7/8/9]</c> footer.
     /// </summary>
     public string? FooterTemplate { get; init; }
 }
@@ -878,10 +877,10 @@ public static class KrlExporter
         if (s.IsMilling)
             template = string.IsNullOrWhiteSpace(s.HeaderTemplate) ? DefaultMillHeaderTemplate : s.HeaderTemplate!;
         else if (s.UseRobotMode)
-            // Honor an edited URM header (gear menu) as long as it is still URM-shaped;
-            // otherwise fall back so URM mode never exports an ANOUT header by mistake.
-            template = !string.IsNullOrWhiteSpace(s.HeaderTemplate)
-                       && s.HeaderTemplate!.Contains("CaracolSafety", System.StringComparison.Ordinal)
+            // Settings-menu / Lab header wins. Only reject the LFAM $ANOUT MAT
+            // so Robot Mode never ships analog temps instead of T1/T2/T3/RPM.
+            // Do NOT require the string "CaracolSafety" — shop headers use ";FOLD Safety".
+            template = !string.IsNullOrWhiteSpace(s.HeaderTemplate) && !IsLfamAnoutHeader(s.HeaderTemplate)
                 ? s.HeaderTemplate!
                 : DefaultUrmHeaderTemplate;
         else
@@ -889,6 +888,18 @@ public static class KrlExporter
         AppendRenderedTemplate(sb, RenderHeaderTemplate(template, name, s));
         ApplyExtruderAirHeader(sb, s);
     }
+
+    /// <summary>True when the template is the LFAM analog MAT (must not export in Robot Mode).</summary>
+    public static bool IsLfamAnoutHeader(string? header)
+        => !string.IsNullOrWhiteSpace(header)
+           && header.Contains("$ANOUT[1]", StringComparison.Ordinal);
+
+    /// <summary>True when the template is the short LFAM OUT-only footer (no Caracol air/RPM shutdown).</summary>
+    public static bool IsLfamAnoutFooter(string? footer)
+        => !string.IsNullOrWhiteSpace(footer)
+           && footer.Contains("$OUT[7]", StringComparison.Ordinal)
+           && !footer.Contains("EXTRUDER MOTOR COMMAND", StringComparison.Ordinal)
+           && !footer.Contains("RPM =", StringComparison.Ordinal);
 
 
 
@@ -956,8 +967,7 @@ public static class KrlExporter
         // Caracol air / temp / RPM shutdown (MTruck footer).
         string template;
         if (s.UseRobotMode && !s.IsMilling)
-            template = !string.IsNullOrWhiteSpace(s.FooterTemplate)
-                       && s.FooterTemplate!.Contains("EXTRUDER MOTOR COMMAND", System.StringComparison.Ordinal)
+            template = !string.IsNullOrWhiteSpace(s.FooterTemplate) && !IsLfamAnoutFooter(s.FooterTemplate)
                 ? s.FooterTemplate!
                 : DefaultUrmFooterTemplate;
         else

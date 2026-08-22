@@ -636,6 +636,58 @@ public sealed class KrlExporterTest
     }
 
     [Fact]
+    public void RobotMode_exports_settings_menu_Safety_header_not_stock_CaracolSafety()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        const string shopHeader = """
+            &ACCESS RVP
+            DEF {{PROGRAM_NAME}}()
+
+            ;FOLD Safety
+            INTERRUPT DECL 1 WHEN $STOPMESS==TRUE DO STOPEXTRHF()
+            INTERRUPT ON 1
+            ;in 5 -> Alarms
+            ;in 6 -> PLC signal - extrusion enabled
+            ;in 7 -> Anticollision Flange
+            $CYCFLAG[2] = ($IN[5]==TRUE) OR ($IN[6]==FALSE) OR ($IN[7] == TRUE)
+            INTERRUPT DECL 4 WHEN $CYCFLAG[2] DO FULLREMOTESTOPHF()
+            INTERRUPT ON 4
+            ;ENDFOLD(Safety)
+
+            ;FOLD MAT out of INI
+            T1 = {{TEMP1_C}}
+            T2 = {{TEMP2_C}}
+            T3 = {{TEMP3_C}}
+            RPM = 1
+            ;ENDFOLD MAT
+            """;
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName = "test_shop_header",
+            ExtrusionRpmPercent = 50f,
+            Temperature1 = 250f,
+            RobotModeEnabled = true,
+            TravelStartStopEnabled = true,
+            HeaderTemplate = shopHeader,
+        });
+
+        Assert.Contains(";FOLD Safety", krl);
+        Assert.Contains(";in 5 -> Alarms", krl);
+        Assert.Contains(";in 7 -> Anticollision Flange", krl);
+        Assert.Contains(";ENDFOLD(Safety)", krl);
+        Assert.DoesNotContain(";FOLD CaracolSafety", krl);
+        Assert.DoesNotContain("Antincendio", krl);
+        Assert.DoesNotContain("flangia anti caduta", krl);
+        Assert.DoesNotContain("$ANOUT[1]", krl);
+    }
+
+    [Fact]
     public void Export_resume_prime_reduces_rpm_during_resume_wait()
     {
         var tp = new Toolpath();

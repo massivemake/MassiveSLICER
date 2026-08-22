@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-22** (SRC/export uses Lab-synced KRL post-process recipe)
+Last updated: **2026-08-22** (export uses settings-menu header, not stock CaracolSafety)
 
 ---
 
@@ -516,6 +516,18 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-22 — Export ignored settings-menu header (CaracolSafety gate)
+
+- Symptom: KRL Post-Processing showed `;FOLD Safety` / Alarms / Anticollision Flange, but the
+  `.src` still had `;FOLD CaracolSafety` / Antincendio / flangia anti caduta.
+- Cause: `WriteHeader` in Robot Mode only kept a custom header if it contained the string
+  `CaracolSafety`. Shop / factory headers use `;FOLD Safety`, so export swapped in
+  `DefaultUrmHeaderTemplate`.
+- Fix: keep the settings header unless it is the LFAM `$ANOUT[1]` MAT. Same for footer
+  (reject only the short LFAM OUT-only footer). `ApplyUrmPostProcessTemplates` treats
+  `;FOLD Safety` / `T1=` as Robot Mode so toggling does not overwrite the shop header.
+- Not print-verified.
 
 ### 2026-08-22 — SRC / Send to Robot uses Lab-synced KRL post-process recipe
 

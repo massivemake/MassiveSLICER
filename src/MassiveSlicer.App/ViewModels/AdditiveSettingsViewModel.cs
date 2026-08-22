@@ -2228,11 +2228,13 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         string h = KrlPostProcess.HeaderText ?? "";
         string f = KrlPostProcess.FooterText ?? "";
-        bool headerIsLfamAnout = h.Contains("$ANOUT[1]", StringComparison.Ordinal)
-            || (h.Contains(";FOLD MAT", StringComparison.Ordinal)
-                && !h.Contains("MAT out of INI", StringComparison.Ordinal));
-        bool headerIsUrm = h.Contains("CaracolSafety", StringComparison.Ordinal)
-            || h.Contains("MAT out of INI", StringComparison.Ordinal);
+        bool headerIsLfamAnout = KrlExporter.IsLfamAnoutHeader(h);
+        bool headerIsUrm = !headerIsLfamAnout
+            && (h.Contains("CaracolSafety", StringComparison.Ordinal)
+                || h.Contains("MAT out of INI", StringComparison.Ordinal)
+                || h.Contains(";FOLD Safety", StringComparison.Ordinal)
+                || h.Contains("T1 =", StringComparison.Ordinal)
+                || h.Contains("T1=", StringComparison.Ordinal));
         bool footerIsUrm = f.Contains(";AIR COMMAND", StringComparison.Ordinal)
             || f.Contains(";EXTRUDER MOTOR COMMAND", StringComparison.Ordinal);
 
