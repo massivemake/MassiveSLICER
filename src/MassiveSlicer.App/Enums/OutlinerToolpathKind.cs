@@ -2,7 +2,10 @@ using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.App.Enums;
 
-/// <summary>Outliner badge for a generated or imported toolpath (print/extruder vs mill/spindle).</summary>
+/// <summary>
+/// Distinguishes print vs mill toolpaths hanging off the same model in the outliner
+/// so one does not overwrite the other.
+/// </summary>
 public enum OutlinerToolpathKind
 {
     Print,
@@ -40,7 +43,7 @@ public static class OutlinerToolpathKinds
             }
         }
 
-        if (!string.IsNullOrEmpty(name)
+        if (!string.IsNullOrWhiteSpace(name)
             && name.Contains("Mill", StringComparison.OrdinalIgnoreCase))
             return OutlinerToolpathKind.Mill;
 

@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-21** (auto shop wipe when slice has travels)
+Last updated: **2026-08-21** (code-editor-inject merged onto main)
 
 ---
 
@@ -926,6 +926,36 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 - Putting T12 TOOL_DATA on the triad (and skipping SpindleBitTCP during playback) moved the TCP off the mesh. Mesh/TCP were already aligned; only the path follow was wrong.
 - Reverted: triad always uses `TryGetCutterWorld` (SpindleBitTCP). Generate no longer swaps in T12 offsets / SelectToolByKrlIndex(12).
 - File: `ViewportView.axaml.cs`.
+
+### 2026-08-21 — Sidebar StepCard expand crashed the app ("Infinite layout loop detected")
+
+- **Symptom:** clicking **Pattern/Effects** or **Toolpath** in the right panel aborted the
+  process (SIGABRT). The macOS crash report showed only native Avalonia/Skia frames; the
+  managed exception was `InvalidOperationException: Infinite layout loop detected` thrown from
+  `MediaContext.FireInvokeOnRenderCallbacks`.
+- **Cause:** `SidebarExpandScroll.Schedule` subscribed `sv.LayoutUpdated` to a handler calling
+  `TryPinToTop`, which writes `sv.Offset` and resizes the scroll pad — so *every* call dirtied
+  layout and re-raised `LayoutUpdated` inside the **same** render callback. The retry counter
+  `attempts` was only advanced by `Tick` (dispatcher-driven), never by the layout handler, and
+  the handler's only exit was `TryPinToTop` returning true (`|origin.Y| < 3`) — unreachable for
+  a card whose content grew such that it can no longer reach the top. Unbounded re-entry inside
+  one layout pass, so Avalonia aborted the process.
+- **Fix (this branch):** do not hook `LayoutUpdated` at all — background dispatcher retries only.
+  Main's `MaxLayoutPasses` cap is superseded by that (same crash, stronger fix).
+- **Diagnostics:** `Program.cs` now adds Trace listeners into the crash log and stderr.
+- **Files:** `src/MassiveSlicer.App/Behaviors/SidebarExpandScroll.cs`,
+  `src/MassiveSlicer.App/Program.cs`.
+
+### 2026-08-21 — `main` was unbuildable Aug 17–21; fixed upstream. Joint-limit envelope still open
+
+- `2181741` (Aug 17) committed the new `ViewportView.axaml.cs` referencing `OutlinerToolpathKind`
+  et al. without the files defining them — a clean clone failed at `ViewportView.axaml.cs(13922)`
+  with CS0246. Nick and Jeff fell back to build 573 as a baseline for four days.
+- Fixed upstream by `336e69d` (Aug 21, MassiveMAKE), which restored **8 files / 233 lines**.
+- **Root-cause pattern to avoid:** `git commit -a` stages tracked-file edits but silently skips
+  untracked files. Use `git add -A`, and build a clean worktree before pushing.
+- **STILL OPEN — robot motion.** `JointLimitEnvelope.MarginFraction = 0.05f` insets 5% of each
+  axis travel. Not applied here.
 
 ### 2026-08-16 — macOS Release build: NETSDK1177 on SMB apphost
 

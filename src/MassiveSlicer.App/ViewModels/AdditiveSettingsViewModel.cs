@@ -25,6 +25,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         SetPatternCommand = new RelayCommand<string>(p => PatternType = p ?? "Smooth");
         AutoTiltCommand       = new RelayCommand(() => OnAutoTiltRequested?.Invoke(false), () => !IsAutoTiltRunning);
         AutoTiltRotateCommand = new RelayCommand(() => OnAutoTiltRequested?.Invoke(true),  () => !IsAutoTiltRunning);
+        AutoOrientCommand     = new RelayCommand(() => OnAutoOrientRequested?.Invoke(),    () => !IsAutoOrientRunning);
         OpenSeamEditorCommand            = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
         SimulateThermalCommand           = new RelayCommand(() => OnSimulateThermalRequested?.Invoke());
         OptimizeToolpathCommand          = new RelayCommand(() => OnOptimizeToolpathRequested?.Invoke());
@@ -865,6 +866,47 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             AutoTiltCommand.RaiseCanExecuteChanged();
             AutoTiltRotateCommand.RaiseCanExecuteChanged();
         }
+    }
+
+    /// <summary>
+    /// Searches full 3D rotations for the orientation with the least overhang risk that the
+    /// robot can actually print (reachable, no predicted collisions), then rotates the part
+    /// into it. Unlike auto-tilt this moves the part, not the slice planes.
+    /// </summary>
+    public RelayCommand AutoOrientCommand { get; }
+
+    /// <summary>Raised by <see cref="AutoOrientCommand"/>; the viewport does the search and the rotate.</summary>
+    internal Action? OnAutoOrientRequested { get; set; }
+
+    private bool _isAutoOrientRunning;
+
+    /// <summary>True while the orientation search runs — disables the command.</summary>
+    public bool IsAutoOrientRunning
+    {
+        get => _isAutoOrientRunning;
+        set
+        {
+            if (!SetField(ref _isAutoOrientRunning, value)) return;
+            AutoOrientCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private double _autoOrientProgressPercent;
+
+    /// <summary>Auto Orient progress 0-100 — stage 1 search, then per-candidate stage 2.</summary>
+    public double AutoOrientProgressPercent
+    {
+        get => _autoOrientProgressPercent;
+        set => SetField(ref _autoOrientProgressPercent, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    private string _autoOrientStatusDetail = "";
+
+    /// <summary>Short progress line shown in the busy overlay while Auto Orient runs.</summary>
+    public string AutoOrientStatusDetail
+    {
+        get => _autoOrientStatusDetail;
+        set => SetField(ref _autoOrientStatusDetail, value);
     }
 
     // -- Motion ---------------------------------------------------------------

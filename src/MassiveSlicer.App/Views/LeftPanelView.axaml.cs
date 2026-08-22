@@ -5,6 +5,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using MassiveSlicer.App.Behaviors;
+using MassiveSlicer.ViewModels;
 
 namespace MassiveSlicer.App.Views;
 
@@ -57,4 +58,5 @@ public partial class LeftPanelView : UserControl
         if (e.Key == Key.Enter)
             e.Handled = true;
     }
+
 }

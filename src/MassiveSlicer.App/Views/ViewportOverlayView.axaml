@@ -667,6 +667,13 @@
                     CornerRadius="6"
                     Padding="3">
                 <StackPanel Orientation="Horizontal" Spacing="4">
+                    <Button Classes="ToolbarButton" Padding="12,4"
+                            Command="{Binding AdditiveSettings.AutoOrientCommand}"
+                            IsEnabled="{Binding HasMeshSelected}"
+                            ToolTip.Tip="Auto Orient — rotate the part to the orientation with least overhang and no robot conflicts">
+                        <ia:Icon Value="mdi-cube-scan" FontSize="14"/>
+                    </Button>
+                    <Border Width="1" Background="#3D3D3D" Margin="4,3"/>
                     <Button Classes="ToolbarButton" ToolTip.Tip="Move" Padding="12,4"
                             Classes.active="{Binding IsMoveActive}"
                             Command="{Binding GizmoMoveCommand}">

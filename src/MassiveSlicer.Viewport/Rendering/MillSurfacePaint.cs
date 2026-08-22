@@ -204,6 +204,17 @@ public sealed class MillSurfacePaint : IDisposable
             _dirty = true;
         }
 
+        public void StampIndices(IEnumerable<int> indices, float strength, bool erase)
+        {
+            strength = Math.Clamp(strength, 0.05f, 1f);
+            foreach (var i in indices)
+            {
+                if ((uint)i >= (uint)Weights.Length) continue;
+                ApplyWeight(i, strength, erase);
+            }
+            _dirty = true;
+        }
+
         public void StampTriangle(int triangleIndex, bool erase)
         {
             if (!Picker.TryGetTriangleLocal(Mesh, triangleIndex, out _, out _, out _))
@@ -237,17 +248,6 @@ public sealed class MillSurfacePaint : IDisposable
                 float wy = lp.X * wt.M12 + lp.Y * wt.M22 + lp.Z * wt.M32 + wt.M42;
                 float wz = lp.X * wt.M13 + lp.Y * wt.M23 + lp.Z * wt.M33 + wt.M43;
                 if (!acceptWorld(new Vector3(wx, wy, wz))) continue;
-                ApplyWeight(i, strength, erase);
-            }
-            _dirty = true;
-        }
-
-        public void StampIndices(IEnumerable<int> indices, float strength, bool erase)
-        {
-            strength = Math.Clamp(strength, 0.05f, 1f);
-            foreach (int i in indices)
-            {
-                if ((uint)i >= (uint)Weights.Length) continue;
                 ApplyWeight(i, strength, erase);
             }
             _dirty = true;

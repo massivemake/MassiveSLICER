@@ -5345,8 +5345,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         MillCommand = new RelayCommand(() => _ = OnMillRequested?.Invoke());
         PreviewDisplacedCommand = new RelayCommand(() => _ = OnPreviewDisplacedRequested?.Invoke());
         GenerateMultiAxisCommand = new RelayCommand(() => _ = OnGenerateMultiAxisRequested?.Invoke());
-        GenerateMillFromSettingsCommand = new RelayCommand(
-            () => _ = OnGenerateMillFromSettingsRequested?.Invoke());
+        GenerateMillFromSettingsCommand = new RelayCommand(() => _ = OnGenerateMillFromSettingsRequested?.Invoke());
 
         UpdateSliceCommand = new RelayCommand(
             execute:    () => _ = OnUpdateSliceRequested?.Invoke(),
@@ -6145,6 +6144,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Callback registered by the viewport code-behind to generate a relief-milling toolpath.</summary>
     internal Func<Task>? OnMillRequested { get; set; }
+
+    /// <summary>Planar facing/clearing from the Mill settings panel (TOOL AXIS + T12).</summary>
     internal Func<Task>? OnGenerateMillFromSettingsRequested { get; set; }
 
     /// <summary>Callback registered by the viewport code-behind to build + show the displaced surface.</summary>
@@ -6269,7 +6270,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// <summary>Generates a multi-axis surface-following finish toolpath over the displaced surface.</summary>
     public RelayCommand GenerateMultiAxisCommand { get; }
 
-    /// <summary>Mill the selected / painted workpiece from the live BITS + TOOLPATHING settings.</summary>
+    /// <summary>Planar facing/clearing from Mill settings (TOOL AXIS, T12 TCP).</summary>
     public RelayCommand GenerateMillFromSettingsCommand { get; }
 
     /// <summary>Re-slices the parent mesh at its current pose and replaces the selected toolpath.</summary>
@@ -7384,15 +7385,18 @@ public sealed partial class ViewportViewModel : ViewModelBase
         => FindOutlinerItem(node);
 
     /// <summary>
-    /// LFAM 3 Mill phase (or dedicated mill generators) produce spindle paths;
-    /// every other slice/import is a print/extruder path.
+    /// Print vs mill for Slice / auto-slice. LFAM 3 Mill phase (or dedicated mill
+    /// generators) produce spindle paths beside the print path.
     /// </summary>
     internal OutlinerToolpathKind ActiveSliceToolpathKind
         => ShowLfam3ToolPicker && IsMillStepActive
             ? OutlinerToolpathKind.Mill
             : OutlinerToolpathKind.Print;
 
-    /// <summary>First toolpath child of <paramref name="parent"/> matching <paramref name="kind"/>.</summary>
+    /// <summary>
+    /// Direct or nested toolpath child of <paramref name="parent"/> matching
+    /// <paramref name="kind"/> (print and mill sit as siblings).
+    /// </summary>
     internal static OutlinerItemViewModel? FindToolpathChild(
         OutlinerItemViewModel parent, OutlinerToolpathKind kind)
     {
@@ -7400,6 +7404,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
         {
             if (child.IsToolpath && child.ToolpathKind == kind)
                 return child;
+            var nested = FindToolpathChild(child, kind);
+            if (nested is not null)
+                return nested;
         }
         return null;
     }
@@ -7409,10 +7416,11 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// (or top-level if <c>null</c>), and enqueues its node for GL upload.
     /// Must be called on the UI thread.
     /// </summary>
+    internal void RegisterToolpathInOutliner(SceneNode toolpathNode, OutlinerItemViewModel? parentItem)
+        => RegisterToolpathInOutliner(toolpathNode, parentItem, OutlinerToolpathKind.Print);
+
     internal void RegisterToolpathInOutliner(
-        SceneNode toolpathNode,
-        OutlinerItemViewModel? parentItem,
-        OutlinerToolpathKind kind = OutlinerToolpathKind.Print)
+        SceneNode toolpathNode, OutlinerItemViewModel? parentItem, OutlinerToolpathKind kind)
     {
         var item = CreateOutlinerItem(toolpathNode, child =>
         {
@@ -7421,7 +7429,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             PendingRemoveNodes.Enqueue(child.Node);
             NotifyRenderNeeded();
         }, () => OnNodeHidden?.Invoke(toolpathNode), modelFileOps: true);
-        item.IsToolpath   = true;
+        item.IsToolpath = true;
         item.ToolpathKind = kind;
 
         if (parentItem is not null)

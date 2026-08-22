@@ -379,6 +379,26 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             if (e.PropertyName is nameof(AdditiveSettingsViewModel.SelectedPresetIndex))
                 return;
+
+            if (e.PropertyName is nameof(AdditiveSettingsViewModel.IsAutoOrientRunning))
+            {
+                if (RightPanel.Additive.IsAutoOrientRunning)
+                    ShowBusy("Auto Orient", "Searching orientations…");
+                else
+                    HideBusy();
+                return;
+            }
+            if (e.PropertyName is nameof(AdditiveSettingsViewModel.AutoOrientProgressPercent)
+                                or nameof(AdditiveSettingsViewModel.AutoOrientStatusDetail))
+            {
+                if (RightPanel.Additive.IsAutoOrientRunning)
+                {
+                    UpdateBusyProgress(RightPanel.Additive.AutoOrientProgressPercent);
+                    UpdateBusy(RightPanel.Additive.AutoOrientStatusDetail);
+                }
+                return;
+            }
+
             OnSettingsChanged();
         };
         RightPanel.Scan.PropertyChanged          += (_, e) =>

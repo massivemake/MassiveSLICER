@@ -25,6 +25,20 @@ class Program
             }
             catch { /* best effort */ }
         }
+        // LogToTrace() sends Avalonia's warnings to System.Diagnostics.Trace, which has no
+        // listener by default — so they went nowhere. That hid the one line that names the
+        // control behind an "Infinite layout loop detected" crash:
+        //   "Layout cycle detected. Item {Item} was enqueued {Count} times."
+        // Mirror Trace into the same crash log the handlers below write to.
+        try
+        {
+            System.Diagnostics.Trace.Listeners.Add(new System.Diagnostics.TextWriterTraceListener(crashLog));
+            System.Diagnostics.Trace.Listeners.Add(
+                new System.Diagnostics.TextWriterTraceListener(global::System.Console.Error));
+            System.Diagnostics.Trace.AutoFlush = true;
+        }
+        catch { /* diagnostics only — never block startup */ }
+
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             LogCrash("AppDomain.UnhandledException", e.ExceptionObject as Exception);
         TaskScheduler.UnobservedTaskException += (_, e) =>

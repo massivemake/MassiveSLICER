@@ -76,19 +76,6 @@ public static class SpindleBitCylinder
     }
 
     /// <summary>
-    /// Parent the preview to <paramref name="toolRoot"/> so hiding the TCP plane
-    /// does not hide the cylinder. Bakes <paramref name="cylinder"/>.LocalTransform
-    /// (in anchor space) into tool space.
-    /// </summary>
-    public static void AttachPreview(SceneNode toolRoot, SceneNode anchor, SceneNode cylinder)
-    {
-        var world = cylinder.LocalTransform * anchor.WorldTransform;
-        Matrix4.Invert(toolRoot.WorldTransform, out var inv);
-        cylinder.LocalTransform = world * inv;
-        toolRoot.AddChild(cylinder);
-    }
-
-    /// <summary>
     /// Housing = largest non-bit mesh under the tool. Used so the preview follows
     /// the spindle, not the bit puck's thick axis (that puck is ~31 mm along X and
     /// is not coaxial with the housing).
@@ -444,5 +431,28 @@ public static class SpindleBitCylinder
             KeepOwnMaterial = true,
             CullFaces = true,
         };
+    }
+
+    /// <summary>
+    /// Parent the preview to the tool root (not the hidden SpindleBitTCP plane —
+    /// Visible=false on the datum would swallow the cylinder).
+    /// <paramref name="local"/> from <see cref="ComputeLocalTransform"/> is in
+    /// <paramref name="anchor"/> space and is converted onto the tool.
+    /// </summary>
+    public static void AttachPreview(SceneNode tool, SceneNode anchor, SceneNode cyl)
+    {
+        var desiredWorld = cyl.LocalTransform * anchor.WorldTransform;
+        Matrix4.Invert(tool.WorldTransform, out var invTool);
+        var localOnTool = desiredWorld * invTool;
+
+        foreach (var n in tool.SelfAndDescendants().ToList())
+        {
+            if (n.Name == NodeName && !ReferenceEquals(n, cyl))
+                n.Parent?.RemoveChild(n);
+        }
+
+        cyl.Parent?.RemoveChild(cyl);
+        cyl.LocalTransform = localOnTool;
+        tool.AddChild(cyl);
     }
 }
