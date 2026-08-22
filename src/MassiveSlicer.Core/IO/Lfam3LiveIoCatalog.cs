@@ -58,11 +58,15 @@ public static class Lfam3LiveIoCatalog
         new("EV Scanner",           "$OUT[17]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
         new("Spindle",              "$OUT[51]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
 
-        // Analog outputs — zone heater + extruder RPM commands
-        new("Zone 1 temp cmd",     "$ANOUT[1]", LiveIoSignalKind.AnalogOutput, LiveIoSource.Kuka, Unit: "°C", ValueFormat: LiveIoValueFormat.TempC),
-        new("Zone 2 temp cmd",     "$ANOUT[2]", LiveIoSignalKind.AnalogOutput, LiveIoSource.Kuka, Unit: "°C", ValueFormat: LiveIoValueFormat.TempC),
-        new("Zone 3 temp cmd",     "$ANOUT[3]", LiveIoSignalKind.AnalogOutput, LiveIoSource.Kuka, Unit: "°C", ValueFormat: LiveIoValueFormat.TempC),
-        new("Extruder RPM cmd",    "$ANOUT[4]", LiveIoSignalKind.AnalogOutput, LiveIoSource.Kuka, Unit: "%",   ValueFormat: LiveIoValueFormat.RpmPercent),
+        // Analog outputs O1-O4 ($ANOUT) — editable for all cells via C3Bridge
+        new("Analog O1", "$ANOUT[1]", LiveIoSignalKind.AnalogOutput, LiveIoSource.Kuka,
+            Unit: "°C", Writable: true, ValueFormat: LiveIoValueFormat.TempC),
+        new("Analog O2", "$ANOUT[2]", LiveIoSignalKind.AnalogOutput, LiveIoSource.Kuka,
+            Unit: "°C", Writable: true, ValueFormat: LiveIoValueFormat.TempC),
+        new("Analog O3", "$ANOUT[3]", LiveIoSignalKind.AnalogOutput, LiveIoSource.Kuka,
+            Unit: "°C", Writable: true, ValueFormat: LiveIoValueFormat.TempC),
+        new("Analog O4", "$ANOUT[4]", LiveIoSignalKind.AnalogOutput, LiveIoSource.Kuka,
+            Unit: "%", Writable: true, ValueFormat: LiveIoValueFormat.RpmPercent),
     ]);
 
     static LiveIoSectionConfig ScanSection() => new("Scanner",

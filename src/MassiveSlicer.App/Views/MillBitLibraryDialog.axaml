@@ -11,7 +11,8 @@
         WindowDecorations="None"
         CanResize="True"
         ShowInTaskbar="False"
-        Background="{DynamicResource Bg0}">
+        TransparencyLevelHint="Transparent"
+        Background="Transparent">
 
     <Window.Styles>
         <!-- Room for value + spinner so digits are not clipped -->
@@ -40,12 +41,18 @@
         </Style>
     </Window.Styles>
 
-    <Border BorderBrush="{DynamicResource Border2}" BorderThickness="1">
+    <Border Classes="DialogChrome"
+            Background="{DynamicResource Bg0}"
+            BorderBrush="{DynamicResource Border2}"
+            BorderThickness="1"
+            CornerRadius="10"
+            ClipToBounds="True">
         <Grid RowDefinitions="44,*,56">
 
             <!-- Title bar -->
             <Border Grid.Row="0" x:Name="TitleBar"
                     Background="{DynamicResource Bg1}"
+                    CornerRadius="10,10,0,0"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,0,0,1"
                     Cursor="SizeAll">
@@ -246,7 +253,7 @@
 
                                 <TextBlock Text="SPINDLE CYLINDER" Classes="LabelMuted" FontSize="10" LetterSpacing="1.2" Margin="0,14,0,0"/>
                                 <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.65" Margin="0,0,0,4"
-                                           Text="Starts at the centre of the SpindleBit disc and grows along the disc-face normal. Diameter and length are millimetres."/>
+                                           Text="Starts on the SpindleBitTCP plane (or the SpindleBit disc) and grows along the plane normal. Diameter and length are millimetres."/>
                                 <CheckBox Content="Show cylinder on spindle"
                                           IsChecked="{Binding SelectedTool.ShowSpindleCylinder, Mode=TwoWay}"
                                           FontSize="12"/>
@@ -448,7 +455,8 @@
             <Border Grid.Row="2"
                     Background="{DynamicResource Bg1}"
                     BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="0,1,0,0">
+                    BorderThickness="0,1,0,0"
+                    CornerRadius="0,0,10,10">
                 <Grid Margin="20,0" ColumnDefinitions="*,Auto">
                     <TextBlock Text="Save writes the library and applies the selected tool to Mill → BITS."
                                Classes="LabelMuted" FontSize="11"

@@ -9,6 +9,7 @@ public partial class KrlPostProcessWindow : Window
     public KrlPostProcessWindow()
     {
         InitializeComponent();
+        DialogWindowChrome.Apply(this);
         TitleBar.PointerPressed += (_, e) => BeginMoveDrag(e);
     }
 

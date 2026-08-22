@@ -640,8 +640,8 @@ public sealed class SceneRenderer : IDisposable
     public int[]? SlicePlaneLayerEnds { get; set; }
 
     /// <summary>
-    /// When true, draw a point at every extrude bead (edit Point mode) instead of
-    /// only contour start/end seams.
+    /// When true, draw a point at every programmed vertex (edit Point mode)
+    /// instead of only contour start/end seams.
     /// </summary>
     public bool ShowAllPathPoints { get; set; }
 
@@ -1307,8 +1307,7 @@ public sealed class SceneRenderer : IDisposable
             _grid?.Draw(mvp);
         }
         if (ShowAxes)    _axes?.Draw(mvp);
-        if (ShowBedGrid && !arcticPresentation && !SlicePlaneViewerActive)
-            _bedBoundary?.Draw(BedBoundaryModel * mvp, mvp);
+        // Bed grid is drawn AFTER meshes so the rotary table cannot bury it.
 
         // Bind backdrop HDR to unit 1 for env reflections in the mesh shader.
         // Unit 0 is left for other samplers; unit 1 stays bound for all mesh draws.
@@ -1363,6 +1362,18 @@ public sealed class SceneRenderer : IDisposable
             if (!child.CullFaces) GL.Enable(EnableCap.CullFace);
         }
         GL.Disable(EnableCap.PolygonOffsetFill);
+
+        // LFAM 3 rotary top mesh sits on the same Z as the polar overlay. Draw
+        // the bed grid after meshes, without depth, so Bed Grid still shows the
+        // circle + origin on top of the platter.
+        if (ShowBedGrid && !arcticPresentation && !SlicePlaneViewerActive && _bedBoundary is not null)
+        {
+            GL.Disable(EnableCap.DepthTest);
+            GL.DepthMask(false);
+            _bedBoundary.Draw(BedBoundaryModel * mvp, mvp);
+            GL.DepthMask(true);
+            GL.Enable(EnableCap.DepthTest);
+        }
 
         // Geometry-projected ground shadows (multiply blend) on the contact plane.
         if (ShowContactShadows && _contactShadows is not null)

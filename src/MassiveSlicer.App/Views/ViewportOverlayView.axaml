@@ -598,39 +598,7 @@
             </Border>
         </StackPanel>
 
-        <!-- ERP project attachment — bottom-left dock (mirror of the Live I/O dock) -->
-        <Border HorizontalAlignment="Left"
-                VerticalAlignment="Bottom"
-                Margin="{Binding BottomDockMargin}"
-                Background="#E6303030"
-                BorderBrush="{DynamicResource Border1}"
-                BorderThickness="1"
-                CornerRadius="6"
-                Padding="8,6"
-                ZIndex="27"
-                ClipToBounds="False">
-            <StackPanel Spacing="6">
-                <ScrollViewer MaxHeight="480"
-                              VerticalScrollBarVisibility="Auto"
-                              IsVisible="{Binding Erp.IsExpanded}">
-                    <local:ErpDockPanelView DataContext="{Binding Erp}"/>
-                </ScrollViewer>
-                <Button Classes="Lfam3LiveIoToggleBar"
-                        Classes.expanded="{Binding Erp.IsExpanded}"
-                        Command="{Binding Erp.ToggleExpandedCommand}"
-                        HorizontalAlignment="Left"
-                        ToolTip.Tip="ERP project attachment — link this workspace to a Project/Lead">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <ia:Icon Value="{Binding Erp.ToggleIcon}" FontSize="14" Foreground="#40b840"/>
-                        <TextBlock Text="{Binding Erp.ToggleLabel}"
-                                   FontSize="10"
-                                   FontWeight="SemiBold"
-                                   Foreground="#40b840"
-                                   LetterSpacing="0.6"/>
-                    </StackPanel>
-                </Button>
-            </StackPanel>
-        </Border>
+        <!-- MassiveLAB (ERP) lives in the left sidebar between ROBOT and VIEWPORT. -->
 
         <!-- LFAM 3 workflow timeline — always visible on LFAM 3; minimize via left chevron in bar -->
         <local:SequenceWaypointEditorView DataContext="{Binding SequenceWaypointEditor}"
@@ -1623,21 +1591,6 @@
             </Grid>
         </Border>
 
-        <!-- Square marquee -->
-        <Canvas IsVisible="{Binding PaintMarqueeVisible}" ZIndex="40" IsHitTestVisible="False">
-            <Border Canvas.Left="{Binding PaintMarqueeX}" Canvas.Top="{Binding PaintMarqueeY}"
-                    Width="{Binding PaintMarqueeW}" Height="{Binding PaintMarqueeH}"
-                    BorderBrush="#80B7FF" BorderThickness="1" Background="#2280B7FF"/>
-        </Canvas>
-
-        <!-- Lasso freehand path (Avalonia 12: StrokeJoin, not StrokeLineJoin) -->
-        <Canvas IsVisible="{Binding PaintLassoVisible}" ZIndex="40" IsHitTestVisible="False">
-            <Polyline Points="{Binding PaintLassoPoints}"
-                      Stroke="#80B7FF" StrokeThickness="1.5"
-                      Fill="#2280B7FF"
-                      StrokeJoin="Round" StrokeLineCap="Round"/>
-        </Canvas>
-
         <!-- Mill soft-brush controls: center, ~250px from bottom so it clears timeline/panels -->
         <Border IsVisible="{Binding ShowMillBrushToolbar}"
                 HorizontalAlignment="Center" VerticalAlignment="Bottom"
@@ -1978,6 +1931,21 @@
 
         <!-- TCP / flange / sensor triad names + x/y/z. Full-viewport coords (not OverlayRoot inset). -->
     </Grid>
+
+        <!-- Mill / paint box + lasso: same space as pointer events and ProjectToScreen
+             (ViewportView / GlCanvas). Must NOT live in OverlayRoot — that grid is
+             inset 320px for chrome and was drawing the marquee a panel-width to the right. -->
+        <Canvas IsVisible="{Binding PaintMarqueeVisible}" ZIndex="40" IsHitTestVisible="False">
+            <Border Canvas.Left="{Binding PaintMarqueeX}" Canvas.Top="{Binding PaintMarqueeY}"
+                    Width="{Binding PaintMarqueeW}" Height="{Binding PaintMarqueeH}"
+                    BorderBrush="#80B7FF" BorderThickness="1" Background="#2280B7FF"/>
+        </Canvas>
+        <Canvas IsVisible="{Binding PaintLassoVisible}" ZIndex="40" IsHitTestVisible="False">
+            <Polyline Points="{Binding PaintLassoPoints}"
+                      Stroke="#80B7FF" StrokeThickness="1.5"
+                      Fill="#2280B7FF"
+                      StrokeJoin="Round" StrokeLineCap="Round"/>
+        </Canvas>
 
         <ItemsControl IsVisible="{Binding HasTcpAxisTags}"
                       ItemsSource="{Binding TcpAxisTags}"

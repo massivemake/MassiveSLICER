@@ -35,10 +35,11 @@ public partial class MaterialPresetDialog : Window
     public bool SaveAsNew { get; private set; }
 
     public MaterialPresetDialog()
-    {
-        InitializeComponent();
-        TitleBar.PointerPressed += (_, e) => BeginMoveDrag(e);
-    }
+        {
+            InitializeComponent();
+            DialogWindowChrome.Apply(this);
+            TitleBar.PointerPressed += (_, e) => BeginMoveDrag(e);
+        }
 
     private void OnSave(object? sender, RoutedEventArgs e)
     {

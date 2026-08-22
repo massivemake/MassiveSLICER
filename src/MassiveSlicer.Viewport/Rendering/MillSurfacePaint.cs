@@ -242,6 +242,17 @@ public sealed class MillSurfacePaint : IDisposable
             _dirty = true;
         }
 
+        public void StampIndices(IEnumerable<int> indices, float strength, bool erase)
+        {
+            strength = Math.Clamp(strength, 0.05f, 1f);
+            foreach (int i in indices)
+            {
+                if ((uint)i >= (uint)Weights.Length) continue;
+                ApplyWeight(i, strength, erase);
+            }
+            _dirty = true;
+        }
+
         void ApplyWeight(int i, float w, bool erase)
         {
             float cur = Weights[i];

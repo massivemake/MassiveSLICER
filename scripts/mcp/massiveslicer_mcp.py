@@ -3,15 +3,19 @@
 
 The running MassiveSlicer app writes the bridge port to:
   Windows:     %LOCALAPPDATA%/MassiveSlicer/bridge.port
-  macOS/Linux: ~/.local/share/MassiveSlicer/bridge.port  (.NET LocalApplicationData)
+  macOS:       ~/Library/Application Support/MassiveSlicer/bridge.port
+  Linux:       ~/.local/share/MassiveSlicer/bridge.port
 Falls back to $MASSIVESLICER_BRIDGE_PORT or 8723 if no port file is found.
+Remote shop PC (SB101): set MASSIVESLICER_BRIDGE_HOST=192.168.0.69 and enable
+LAN listen on the app (bridge.lan file or MASSIVESLICER_BRIDGE_LAN=1).
 
-Claude Code config (project .mcp.json or `claude mcp add`):
+Hermes / Claude Code config:
   {
     "mcpServers": {
       "massiveslicer": {
         "command": "python3",
-        "args": ["/abs/path/to/scripts/mcp/massiveslicer_mcp.py"]
+        "args": ["/abs/path/to/scripts/mcp/massiveslicer_mcp.py"],
+        "env": { "MASSIVESLICER_BRIDGE_HOST": "192.168.0.69" }
       }
     }
   }
@@ -28,7 +32,17 @@ from pathlib import Path
 from typing import Any
 
 
+def bridge_host() -> str:
+    return (os.environ.get("MASSIVESLICER_BRIDGE_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+
+
 def bridge_port() -> int:
+    env_port = os.environ.get("MASSIVESLICER_BRIDGE_PORT")
+    if env_port:
+        try:
+            return int(env_port)
+        except ValueError:
+            pass
     candidates = []
     localappdata = os.environ.get("LOCALAPPDATA")
     if localappdata:  # Windows
@@ -36,7 +50,9 @@ def bridge_port() -> int:
     xdg = os.environ.get("XDG_DATA_HOME")
     if xdg:
         candidates.append(Path(xdg) / "MassiveSlicer" / "bridge.port")
-    # .NET SpecialFolder.LocalApplicationData on macOS/Linux
+    # .NET SpecialFolder.LocalApplicationData on macOS
+    candidates.append(Path.home() / "Library" / "Application Support" / "MassiveSlicer" / "bridge.port")
+    # .NET LocalApplicationData on Linux
     candidates.append(Path.home() / ".local" / "share" / "MassiveSlicer" / "bridge.port")
     for port_file in candidates:
         try:
@@ -44,13 +60,16 @@ def bridge_port() -> int:
                 return int(port_file.read_text(encoding="utf-8").strip())
         except (ValueError, OSError):
             pass
-    return int(os.environ.get("MASSIVESLICER_BRIDGE_PORT", "8723"))
+    return 8723
+
+
+def bridge_url(path: str) -> str:
+    return f"http://{bridge_host()}:{bridge_port()}{path}"
 
 
 def bridge_get(path: str, accept: str = "application/json") -> bytes:
-    port = bridge_port()
     req = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}",
+        bridge_url(path),
         headers={"Accept": accept},
         method="GET",
     )
@@ -59,10 +78,9 @@ def bridge_get(path: str, accept: str = "application/json") -> bytes:
 
 
 def bridge_post_command(command: str) -> dict[str, Any]:
-    port = bridge_port()
     body = json.dumps({"command": command}).encode("utf-8")
     req = urllib.request.Request(
-        f"http://127.0.0.1:{port}/command",
+        bridge_url("/command"),
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -72,10 +90,9 @@ def bridge_post_command(command: str) -> dict[str, Any]:
 
 
 def bridge_post_json(path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    port = bridge_port()
     body = json.dumps(payload or {}).encode("utf-8")
     req = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}",
+        bridge_url(path),
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -273,8 +290,7 @@ def handle_tools_call(req_id: Any, name: str, arguments: dict[str, Any]) -> None
             path = data.get("path", "")
             extra = ""
             if arguments.get("raw"):
-                port = bridge_port()
-                extra = f"\nraw: http://127.0.0.1:{port}/screenshot?format=png"
+                extra = f"\nraw: {bridge_url('/screenshot?format=png')}"
             tool_result(req_id, f"Screenshot saved: {path} ({data.get('bytes', 0)} bytes){extra}")
 
         elif name == "massiveslicer_materials_get":
@@ -318,7 +334,7 @@ def handle_tools_call(req_id: Any, name: str, arguments: dict[str, Any]) -> None
             tool_error(req_id, f"unknown tool: {name}")
 
     except urllib.error.URLError as ex:
-        tool_error(req_id, f"MassiveSlicer bridge not reachable on port {bridge_port()}: {ex}")
+        tool_error(req_id, f"MassiveSlicer bridge not reachable at {bridge_url('')}: {ex}")
     except Exception as ex:  # noqa: BLE001
         tool_error(req_id, str(ex))
 

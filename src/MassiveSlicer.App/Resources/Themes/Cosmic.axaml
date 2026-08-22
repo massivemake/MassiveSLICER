@@ -1,36 +1,37 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <!-- Deep space void with violet undertone — the dark matter between stars -->
-    <SolidColorBrush x:Key="Bg0" Color="#06040e"/>
-    <SolidColorBrush x:Key="Bg1" Color="#0d0a1a"/>
-    <SolidColorBrush x:Key="Bg2" Color="#131020"/>
-    <SolidColorBrush x:Key="Bg3" Color="#1c1730"/>
-    <SolidColorBrush x:Key="Bg4" Color="#271f3e"/>
+    <!-- Deep space void — neutral dark matter (no violet undertone).
+         Accent is MassiveMAKE lime #71a72a so highlights never go purple. -->
+    <SolidColorBrush x:Key="Bg0" Color="#0a0a0a"/>
+    <SolidColorBrush x:Key="Bg1" Color="#121212"/>
+    <SolidColorBrush x:Key="Bg2" Color="#1a1a1a"/>
+    <SolidColorBrush x:Key="Bg3" Color="#242424"/>
+    <SolidColorBrush x:Key="Bg4" Color="#2e2e2e"/>
 
     <!-- Borders -->
-    <SolidColorBrush x:Key="Border0" Color="#040310"/>
-    <SolidColorBrush x:Key="Border1" Color="#1c1434"/>
-    <SolidColorBrush x:Key="Border2" Color="#2f2550"/>
+    <SolidColorBrush x:Key="Border0" Color="#080808"/>
+    <SolidColorBrush x:Key="Border1" Color="#333333"/>
+    <SolidColorBrush x:Key="Border2" Color="#454545"/>
 
-    <!-- Text — violet-tinted white, like starlight through a nebula -->
-    <SolidColorBrush x:Key="TextPrimary"   Color="#ede8ff"/>
-    <SolidColorBrush x:Key="TextSecondary" Color="#9f8fd0"/>
-    <SolidColorBrush x:Key="TextMuted"     Color="#4e4070"/>
-    <SolidColorBrush x:Key="TextDisabled"  Color="#2c2448"/>
+    <!-- Text -->
+    <SolidColorBrush x:Key="TextPrimary"   Color="#e8e8e8"/>
+    <SolidColorBrush x:Key="TextSecondary" Color="#acacac"/>
+    <SolidColorBrush x:Key="TextMuted"     Color="#7c7c7c"/>
+    <SolidColorBrush x:Key="TextDisabled"  Color="#4a4a4a"/>
 
-    <!-- Accent — nova plasma: hot magenta-violet, the colour of a supernova shock front -->
-    <SolidColorBrush x:Key="Accent"      Color="#c054f0"/>
-    <SolidColorBrush x:Key="AccentHover" Color="#d870ff"/>
-    <SolidColorBrush x:Key="AccentMuted" Color="#3d1060"/>
+    <!-- Accent — lime (was nova magenta-violet) -->
+    <SolidColorBrush x:Key="Accent"      Color="#71a72a"/>
+    <SolidColorBrush x:Key="AccentHover" Color="#8bc43a"/>
+    <SolidColorBrush x:Key="AccentMuted" Color="#3a5716"/>
 
     <!-- Semantic -->
-    <SolidColorBrush x:Key="ColorSuccess" Color="#4dd8a0"/>
+    <SolidColorBrush x:Key="ColorSuccess" Color="#71a72a"/>
     <SolidColorBrush x:Key="ColorWarning" Color="#f5c040"/>
-    <SolidColorBrush x:Key="ColorError"   Color="#ff4080"/>
+    <SolidColorBrush x:Key="ColorError"   Color="#ff4d4d"/>
     <SolidColorBrush x:Key="ColorInfo"    Color="#60a8ff"/>
 
-    <!-- Viewport — the void -->
-    <SolidColorBrush x:Key="ViewportBackground" Color="#030209"/>
+    <!-- Viewport -->
+    <SolidColorBrush x:Key="ViewportBackground" Color="#080808"/>
 
 </ResourceDictionary>

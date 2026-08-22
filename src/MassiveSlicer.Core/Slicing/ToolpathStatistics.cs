@@ -78,7 +78,7 @@ public static class ToolpathStatistics
     {
         if (move.IsWipe)
             return distanceMm / rates.WipeMmS;
-        if (move.Kind == MoveKind.Extrude)
+        if (move.Kind == MoveKind.Extrude || move.Kind == MoveKind.Mill)
         {
             double speed = rates.PrintMmS;
             if (!ignorePrintSpeedScale)

@@ -156,6 +156,7 @@ public sealed class PrintPresetSample
     public string? TemperatureOffset { get; init; }
     public string? ExtrusionSpeedOffset { get; init; }
     public bool? DigitalStartStopEnabled { get; init; }
+    public bool? RobotModeEnabled { get; init; }
     public double? ExtrusionStartWaitSec { get; init; }
     public double? ExtrusionResumeWaitSec { get; init; }
 
@@ -393,7 +394,8 @@ public sealed class PrintPresetSample
             {
                 S(s, "Temperature offset", TemperatureOffset);
                 S(s, "Extrusion speed offset", ExtrusionSpeedOffset);
-                B(s, "Digital start/stop", DigitalStartStopEnabled);
+                B(s, "Robot mode", RobotModeEnabled);
+                B(s, "Travel start/stop", DigitalStartStopEnabled);
                 D(s, "Extrusion start wait", ExtrusionStartWaitSec, " s");
                 D(s, "Extrusion resume wait", ExtrusionResumeWaitSec, " s");
             });
@@ -997,7 +999,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
             Temperature1 = d.Temperature1, Temperature2 = d.Temperature2, Temperature3 = d.Temperature3,
 
             TemperatureOffset = d.TemperatureOffset, ExtrusionSpeedOffset = d.ExtrusionSpeedOffset,
-            DigitalStartStopEnabled = d.DigitalStartStopEnabled, ExtrusionStartWaitSec = d.ExtrusionStartWaitSec,
+            DigitalStartStopEnabled = d.DigitalStartStopEnabled, RobotModeEnabled = d.RobotModeEnabled, ExtrusionStartWaitSec = d.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec = d.ExtrusionResumeWaitSec,
 
             ZHopMm = d.ZHopMm, WipeModeDisplay = d.WipeModeDisplay, WipeLengthMm = d.WipeLengthMm,
@@ -1313,6 +1315,10 @@ public sealed class PresetsCardViewModel : ViewModelBase
         if (p.TemperatureOffset is { } temperatureOffset) _additive.TemperatureOffset = temperatureOffset;
         if (p.ExtrusionSpeedOffset is { } extrusionSpeedOffset) _additive.ExtrusionSpeedOffset = extrusionSpeedOffset;
         if (p.DigitalStartStopEnabled is { } digitalStartStopEnabled) _additive.DigitalStartStopEnabled = digitalStartStopEnabled;
+        if (p.RobotModeEnabled is { } robotModeEnabled)
+            _additive.RobotModeEnabled = robotModeEnabled;
+        else if (p.DigitalStartStopEnabled is { } legacyUrm)
+            _additive.RobotModeEnabled = legacyUrm;
         if (p.ExtrusionStartWaitSec is { } extrusionStartWaitSec) _additive.ExtrusionStartWaitSec = extrusionStartWaitSec;
         if (p.ExtrusionResumeWaitSec is { } extrusionResumeWaitSec) _additive.ExtrusionResumeWaitSec = extrusionResumeWaitSec;
 
@@ -1541,6 +1547,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
             TemperatureOffset = krlTuning ? a.TemperatureOffset : null,
             ExtrusionSpeedOffset = krlTuning ? a.ExtrusionSpeedOffset : null,
             DigitalStartStopEnabled = krlTuning ? a.DigitalStartStopEnabled : null,
+            RobotModeEnabled = krlTuning ? a.RobotModeEnabled : null,
             ExtrusionStartWaitSec = krlTuning ? a.ExtrusionStartWaitSec : null,
             ExtrusionResumeWaitSec = krlTuning ? a.ExtrusionResumeWaitSec : null,
 
@@ -1643,7 +1650,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         Temperature1 = p.Temperature1, Temperature2 = p.Temperature2, Temperature3 = p.Temperature3,
 
         TemperatureOffset = p.TemperatureOffset, ExtrusionSpeedOffset = p.ExtrusionSpeedOffset,
-        DigitalStartStopEnabled = p.DigitalStartStopEnabled, ExtrusionStartWaitSec = p.ExtrusionStartWaitSec,
+        DigitalStartStopEnabled = p.DigitalStartStopEnabled, RobotModeEnabled = p.RobotModeEnabled, ExtrusionStartWaitSec = p.ExtrusionStartWaitSec,
         ExtrusionResumeWaitSec = p.ExtrusionResumeWaitSec,
 
         ZHopMm = p.ZHopMm, WipeModeDisplay = p.WipeModeDisplay, WipeLengthMm = p.WipeLengthMm,
@@ -1721,7 +1728,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         Temperature1 = r.Temperature1, Temperature2 = r.Temperature2, Temperature3 = r.Temperature3,
 
         TemperatureOffset = r.TemperatureOffset, ExtrusionSpeedOffset = r.ExtrusionSpeedOffset,
-        DigitalStartStopEnabled = r.DigitalStartStopEnabled, ExtrusionStartWaitSec = r.ExtrusionStartWaitSec,
+        DigitalStartStopEnabled = r.DigitalStartStopEnabled, RobotModeEnabled = r.RobotModeEnabled, ExtrusionStartWaitSec = r.ExtrusionStartWaitSec,
         ExtrusionResumeWaitSec = r.ExtrusionResumeWaitSec,
 
         ZHopMm = r.ZHopMm, WipeModeDisplay = r.WipeModeDisplay, WipeLengthMm = r.WipeLengthMm,

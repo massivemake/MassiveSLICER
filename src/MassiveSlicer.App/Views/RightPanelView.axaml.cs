@@ -234,6 +234,11 @@ public partial class RightPanelView : UserControl
             DataContext = vm.Additive.KrlPostProcess,
         };
         await dialog.ShowDialog(parent);
+        if (parent.DataContext is MainWindowViewModel main)
+        {
+            main.PersistSettings();
+            PreferencesLoader.Save(main.AppPreferences);
+        }
     }
 
     private async void OnEditMaterialClicked(object? sender, RoutedEventArgs e)

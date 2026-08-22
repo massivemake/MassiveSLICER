@@ -10,6 +10,7 @@ public partial class MeshCleanupDialog : Window
     public MeshCleanupDialog()
     {
         InitializeComponent();
+        DialogWindowChrome.Apply(this);
         TitleBar.PointerPressed += (_, e) => BeginMoveDrag(e);
     }
 

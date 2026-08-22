@@ -3,10 +3,13 @@ using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.Core.IO;
 
-/// <summary>Persists KRL post-process settings to <c>assets/krl_postprocess.json</c>.</summary>
+/// <summary>
+/// Factory file for KRL Post-Processing. Writes the git checkout
+/// <c>assets/krl_postprocess.json</c> (not the bin/ copy a rebuild wipes).
+/// </summary>
 public static class KrlPostProcessLoader
 {
-    private const string RelativePath = "assets/krl_postprocess.json";
+    public const string RelativePath = "assets/krl_postprocess.json";
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -16,28 +19,56 @@ public static class KrlPostProcessLoader
         AllowTrailingCommas         = true,
     };
 
-    private static string ResolvePath() => AssetPaths.Resolve(RelativePath);
+    /// <summary>Repo file when the checkout is visible; else the resolved asset.</summary>
+    public static string FactoryPath()
+    {
+        var repo = AssetPaths.FindRepoRoot();
+        if (repo is not null)
+            return Path.GetFullPath(Path.Combine(repo, RelativePath));
+        return AssetPaths.Resolve(RelativePath);
+    }
 
     public static KrlPostProcessSettings Load()
     {
-        var path = ResolvePath();
-        if (!File.Exists(path)) return new KrlPostProcessSettings();
-        try
+        foreach (var path in ReadCandidates())
         {
-            return JsonSerializer.Deserialize<KrlPostProcessSettings>(File.ReadAllText(path), Options)
-                   ?? new KrlPostProcessSettings();
+            if (!File.Exists(path))
+                continue;
+            try
+            {
+                var s = JsonSerializer.Deserialize<KrlPostProcessSettings>(File.ReadAllText(path), Options);
+                if (s is not null)
+                    return s;
+            }
+            catch { /* try the next candidate */ }
         }
-        catch { return new KrlPostProcessSettings(); }
+        return new KrlPostProcessSettings();
     }
 
     public static void Save(KrlPostProcessSettings settings)
     {
-        var path = ResolvePath();
-        try
+        string json = JsonSerializer.Serialize(settings, Options);
+        var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in WriteCandidates())
         {
+            if (!written.Add(path))
+                continue;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(settings, Options));
+            File.WriteAllText(path, json);
         }
-        catch { }
+    }
+
+    private static IEnumerable<string> ReadCandidates()
+    {
+        yield return FactoryPath();
+        yield return AssetPaths.Resolve(RelativePath);
+        yield return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, RelativePath));
+    }
+
+    private static IEnumerable<string> WriteCandidates()
+    {
+        yield return FactoryPath();
+        var bin = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, RelativePath));
+        yield return bin;
     }
 }

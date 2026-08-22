@@ -72,6 +72,25 @@ public sealed class MillPlanarOrientationTest
     }
 
     [Fact]
+    public void Positive_offset_pushes_path_out_along_surface_normal()
+    {
+        Vector3[] pos = [new(0, 0, 0), new(0, 20, 0), new(0, 20, 20), new(0, 0, 20)];
+        Vector3[] nrm = [Vector3.UnitX, Vector3.UnitX, Vector3.UnitX, Vector3.UnitX];
+        int[] idx = [0, 1, 2, 0, 2, 3];
+        var mill = new MillSettings
+        {
+            ToolDiameterMm = 4f, ToolEnd = ToolEndType.Flat, StepoverMm = 4f, RapidZMm = 10f,
+            OffsetDistanceMm = 3f,
+        };
+
+        var side = SurfaceFollowMillGenerator.Generate(
+            pos, nrm, idx, mill, approachAxis: Vector3.UnitX, lockToolToApproach: true);
+        var cuts = side.Layers.SelectMany(l => l.Moves).Where(m => m.Kind == MoveKind.Mill).ToList();
+        Assert.NotEmpty(cuts);
+        Assert.All(cuts, m => Assert.InRange(m.To.X, 2.95f, 3.05f));
+    }
+
+    [Fact]
     public void Average_normal_of_plusX_quad()
     {
         Vector3[] pos = [new(0, 0, 0), new(0, 10, 0), new(0, 10, 10), new(0, 0, 10)];

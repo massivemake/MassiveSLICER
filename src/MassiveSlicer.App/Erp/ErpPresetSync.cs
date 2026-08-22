@@ -6,8 +6,8 @@ using MassiveSlicer.Core.Models;
 namespace MassiveSlicer.App.Erp;
 
 /// <summary>
-/// Pulls the shared print + material preset libraries from the ERP, merges into the
-/// local AppData files, pushes any local-only rows, and can upsert a single row after
+/// Pulls the shared print, material, and mill-tool libraries from the ERP, merges into
+/// the local AppData files, pushes any local-only rows, and can upsert a single row after
 /// a desktop save. Safe when the ERP has not shipped the endpoints yet (404 → no-op).
 /// </summary>
 public static class ErpPresetSync
@@ -36,8 +36,10 @@ public static class ErpPresetSync
             {
                 var printList = await client.ListPrintPresetsAsync(ct);
                 var matList   = await client.ListMaterialPresetsAsync(ct);
+                var millList  = await client.ListMillToolsAsync(ct);
                 if (!printList.Ok && printList.Error!.HttpStatus is 404
-                    && !matList.Ok && matList.Error!.HttpStatus is 404)
+                    && !matList.Ok && matList.Error!.HttpStatus is 404
+                    && !millList.Ok && millList.Error!.HttpStatus is 404)
                 {
                     log?.Invoke("[erp] presets API not available on this ERP yet — local AppData libraries only");
                     return "presets API not available yet";
@@ -45,12 +47,15 @@ public static class ErpPresetSync
 
                 var printEntries = printList.Ok ? printList.Value! : (IReadOnlyList<ErpPresetEntry>)[];
                 var matEntries   = matList.Ok   ? matList.Value!   : (IReadOnlyList<ErpPresetEntry>)[];
+                var millEntries  = millList.Ok  ? millList.Value!  : (IReadOnlyList<ErpPresetEntry>)[];
                 if (!printList.Ok && printList.Error!.HttpStatus is not 404)
                     log?.Invoke($"[erp] print-presets list failed: {printList.Error!.Message}");
                 if (!matList.Ok && matList.Error!.HttpStatus is not 404)
                     log?.Invoke($"[erp] material-presets list failed: {matList.Error!.Message}");
+                if (!millList.Ok && millList.Error!.HttpStatus is not 404)
+                    log?.Invoke($"[erp] mill-tools list failed: {millList.Error!.Message}");
 
-                return await MergeAndPushAsync(client, printEntries, matEntries, log, ct);
+                return await MergeAndPushAsync(client, printEntries, matEntries, millEntries, log, ct);
             }
 
             log?.Invoke($"[erp] presets pull failed: {bundleResult.Error.Kind} — {bundleResult.Error.Message}");
@@ -59,26 +64,42 @@ public static class ErpPresetSync
 
         var bundle = bundleResult.Value!;
         log?.Invoke($"[erp] presets-bundle v{Truncate(bundle.Version, 24)} — "
-            + $"{bundle.PrintPresets.Count} print, {bundle.MaterialPresets.Count} material");
-        return await MergeAndPushAsync(client, bundle.PrintPresets, bundle.MaterialPresets, log, ct);
+            + $"{bundle.PrintPresets.Count} print, {bundle.MaterialPresets.Count} material, "
+            + $"{bundle.MillTools.Count} mill");
+
+        var bundleMill = bundle.MillTools;
+        if (bundleMill.Count == 0)
+        {
+            var millList2 = await client.ListMillToolsAsync(ct);
+            if (millList2.Ok)
+                bundleMill = millList2.Value!;
+            else if (millList2.Error!.HttpStatus is not 404)
+                log?.Invoke($"[erp] mill-tools list failed: {millList2.Error.Message}");
+        }
+
+        return await MergeAndPushAsync(client, bundle.PrintPresets, bundle.MaterialPresets, bundleMill, log, ct);
     }
 
     private static async Task<string> MergeAndPushAsync(
         ErpClient client,
         IReadOnlyList<ErpPresetEntry> serverPrint,
         IReadOnlyList<ErpPresetEntry> serverMaterials,
+        IReadOnlyList<ErpPresetEntry> serverMill,
         Action<string>? log,
         CancellationToken ct)
     {
         int printMerged = MergePrintFromServer(serverPrint);
         int matMerged   = MergeMaterialsFromServer(serverMaterials);
+        int millMerged  = MergeMillFromServer(serverMill);
 
         int printPushed = await PushLocalOnlyPrintAsync(client, log, ct);
         int matPushed   = await PushLocalOnlyMaterialsAsync(client, log, ct);
+        int millPushed  = await PushLocalOnlyMillAsync(client, log, ct);
 
         var summary =
-            $"presets sync: +{printMerged} print from ERP, +{matMerged} materials from ERP; "
-            + $"pushed {printPushed} print / {matPushed} material local-only";
+            $"presets sync: +{printMerged} print from ERP, +{matMerged} materials from ERP, "
+            + $"+{millMerged} mill from ERP; "
+            + $"pushed {printPushed} print / {matPushed} material / {millPushed} mill local-only";
         log?.Invoke($"[erp] {summary}");
         return summary;
     }
@@ -151,6 +172,55 @@ public static class ErpPresetSync
 
         StampMaterialErpId(record.Name, result.Value!.Id);
         log?.Invoke($"[erp] material \"{record.Name}\" → ERP id {result.Value.Id}");
+    }
+
+    /// <summary>After a local mill-library save — upsert one cutting tool to the ERP.</summary>
+    public static async Task PushMillToolAsync(
+        ErpClient client, MillBitTool record, Action<string>? log, CancellationToken ct)
+    {
+        var payload = CloneMillForWire(record);
+        var result = string.IsNullOrWhiteSpace(record.ErpId)
+            ? await client.CreateMillToolAsync(payload, ct)
+            : await client.UpdateMillToolAsync(record.ErpId!, payload, ct);
+
+        if (!result.Ok)
+        {
+            if (result.Error!.HttpStatus is 404)
+            {
+                if (!string.IsNullOrWhiteSpace(record.ErpId))
+                {
+                    var create = await client.CreateMillToolAsync(payload, ct);
+                    if (create.Ok)
+                    {
+                        StampMillErpId(record, create.Value!.Id);
+                        log?.Invoke($"[erp] mill tool \"{record.Name}\" re-created as {create.Value.Id}");
+                        return;
+                    }
+                }
+                log?.Invoke("[erp] mill-tool push skipped — endpoint not available");
+                return;
+            }
+            log?.Invoke($"[erp] mill-tool push failed for \"{record.Name}\": {result.Error.Message}");
+            return;
+        }
+
+        StampMillErpId(record, result.Value!.Id);
+        log?.Invoke($"[erp] mill tool \"{record.Name}\" → ERP id {result.Value.Id}");
+    }
+
+    /// <summary>After a local mill-library delete — drop the ERP row when we have an id.</summary>
+    public static async Task DeleteMillToolAsync(
+        ErpClient client, MillBitTool record, Action<string>? log, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(record.ErpId)) return;
+        var result = await client.DeleteMillToolAsync(record.ErpId!, ct);
+        if (!result.Ok)
+        {
+            if (result.Error!.HttpStatus is 404) return;
+            log?.Invoke($"[erp] mill-tool delete failed for \"{record.Name}\": {result.Error.Message}");
+            return;
+        }
+        log?.Invoke($"[erp] mill tool \"{record.Name}\" deleted from ERP");
     }
 
     // -- Merge -----------------------------------------------------------------
@@ -270,6 +340,65 @@ public static class ErpPresetSync
         return pushed;
     }
 
+    private static int MergeMillFromServer(IReadOnlyList<ErpPresetEntry> server)
+    {
+        var local = MillBitLibraryLoader.Load();
+        int addedOrUpdated = 0;
+
+        foreach (var entry in server)
+        {
+            var remote = DeserializeMill(entry.PayloadJson);
+            if (remote is null) continue;
+            remote.ErpId = entry.Id;
+
+            int idx = FindMillIndex(local, entry.Id, remote.Id, remote.Name);
+            if (idx < 0)
+            {
+                local.Add(remote);
+                addedOrUpdated++;
+            }
+            else
+            {
+                // Keep the local desktop Id if the server row only has ErpId.
+                if (string.IsNullOrWhiteSpace(remote.Id))
+                    remote.Id = local[idx].Id;
+                if (!MillEqual(local[idx], remote))
+                    addedOrUpdated++;
+                local[idx] = remote;
+            }
+        }
+
+        MillBitLibraryLoader.Save(local, touchTimestamps: false);
+        return addedOrUpdated;
+    }
+
+    private static async Task<int> PushLocalOnlyMillAsync(
+        ErpClient client, Action<string>? log, CancellationToken ct)
+    {
+        var local = MillBitLibraryLoader.Load();
+        int pushed = 0;
+        bool dirty = false;
+
+        foreach (var row in local)
+        {
+            if (!string.IsNullOrWhiteSpace(row.ErpId)) continue;
+            var payload = CloneMillForWire(row);
+            var result = await client.CreateMillToolAsync(payload, ct);
+            if (!result.Ok)
+            {
+                if (result.Error!.HttpStatus is 404) return pushed;
+                log?.Invoke($"[erp] could not upload mill \"{row.Name}\": {result.Error.Message}");
+                continue;
+            }
+            row.ErpId = result.Value!.Id;
+            dirty = true;
+            pushed++;
+        }
+
+        if (dirty) MillBitLibraryLoader.Save(local, touchTimestamps: false);
+        return pushed;
+    }
+
     // -- Helpers ---------------------------------------------------------------
 
     private static void StampPrintErpId(string name, string id)
@@ -295,6 +424,16 @@ public static class ErpPresetSync
         MaterialPresetsLoader.Save(local);
     }
 
+    private static void StampMillErpId(MillBitTool record, string id)
+    {
+        record.ErpId = id;
+        var local = MillBitLibraryLoader.Load();
+        int idx = FindMillIndex(local, id, record.Id, record.Name);
+        if (idx < 0) return;
+        local[idx].ErpId = id;
+        MillBitLibraryLoader.Save(local, touchTimestamps: false);
+    }
+
     private static int FindPrintIndex(List<PrintPresetRecord> local, string? erpId, string name)
     {
         if (!string.IsNullOrWhiteSpace(erpId))
@@ -315,6 +454,22 @@ public static class ErpPresetSync
         return local.FindIndex(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
     }
 
+    private static int FindMillIndex(List<MillBitTool> local, string? erpId, string? desktopId, string name)
+    {
+        if (!string.IsNullOrWhiteSpace(erpId))
+        {
+            int byErp = local.FindIndex(p => string.Equals(p.ErpId, erpId, StringComparison.Ordinal));
+            if (byErp >= 0) return byErp;
+        }
+        if (!string.IsNullOrWhiteSpace(desktopId))
+        {
+            int byId = local.FindIndex(p => string.Equals(p.Id, desktopId, StringComparison.Ordinal));
+            if (byId >= 0) return byId;
+        }
+        if (string.IsNullOrWhiteSpace(name)) return -1;
+        return local.FindIndex(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static PrintPresetRecord? DeserializePrint(string json)
     {
         try { return JsonSerializer.Deserialize<PrintPresetRecord>(json, JsonOptions); }
@@ -324,6 +479,12 @@ public static class ErpPresetSync
     private static MaterialPreset? DeserializeMaterial(string json)
     {
         try { return JsonSerializer.Deserialize<MaterialPreset>(json, JsonOptions); }
+        catch { return null; }
+    }
+
+    private static MillBitTool? DeserializeMill(string json)
+    {
+        try { return JsonSerializer.Deserialize<MillBitTool>(json, JsonOptions); }
         catch { return null; }
     }
 
@@ -344,6 +505,14 @@ public static class ErpPresetSync
         return clone;
     }
 
+    private static MillBitTool CloneMillForWire(MillBitTool m)
+    {
+        var json = JsonSerializer.Serialize(m, JsonOptions);
+        var clone = JsonSerializer.Deserialize<MillBitTool>(json, JsonOptions) ?? m;
+        clone.ErpId = null;
+        return clone;
+    }
+
     private static bool RecordsEqual(PrintPresetRecord a, PrintPresetRecord b)
         => JsonSerializer.Serialize(ClonePrintForWire(a), JsonOptions)
         == JsonSerializer.Serialize(ClonePrintForWire(b), JsonOptions);
@@ -351,6 +520,10 @@ public static class ErpPresetSync
     private static bool MaterialEqual(MaterialPreset a, MaterialPreset b)
         => JsonSerializer.Serialize(CloneMaterialForWire(a), JsonOptions)
         == JsonSerializer.Serialize(CloneMaterialForWire(b), JsonOptions);
+
+    private static bool MillEqual(MillBitTool a, MillBitTool b)
+        => JsonSerializer.Serialize(CloneMillForWire(a), JsonOptions)
+        == JsonSerializer.Serialize(CloneMillForWire(b), JsonOptions);
 
     private static string Truncate(string s, int n)
         => string.IsNullOrEmpty(s) ? "" : s.Length <= n ? s : s[..n];

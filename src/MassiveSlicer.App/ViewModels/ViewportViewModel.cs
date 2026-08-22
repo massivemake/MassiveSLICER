@@ -674,7 +674,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// <summary>MassiveBRAIN sync server (Blender/Rhino push bridge), below Plasticity in the N-key HUD.</summary>
     public MassiveBrainViewModel MassiveBrain { get; } = new();
 
-    /// <summary>ERP project-attachment dock (bottom-left of the viewport).</summary>
+    /// <summary>MassiveLAB / ERP project attachment (left sidebar between ROBOT and VIEWPORT).</summary>
     public ErpViewModel Erp { get; } = new();
 
     /// <summary>
@@ -1388,7 +1388,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
         // Instant flange swap for the phase (Extruder / Scanner / Spindle).
         // Do not leave the TCP selected — that used to steal the viewport gizmo.
         SuppressNextToolViewportSelect = true;
-        SelectLfam3Tool(toolName);
+        if (!string.Equals(MountedToolName, toolName, StringComparison.Ordinal))
+            SelectLfam3Tool(toolName);
         NotifyWorkflowStateChanged();
     }
 
@@ -1399,12 +1400,112 @@ public sealed partial class ViewportViewModel : ViewModelBase
         {
             "Extruder" or "HV Extruder" => PrintPhaseIndex,
             "Scanner" or "Scanner (Calibrated)" or "Scanner (No Calibration)" => ScanPhaseIndex,
-            "Spindle" or "Spindle (No Bit)" or "Spindle (Probe)" => MillPhaseIndex,
-            _             => null,
+            _ => IsMillWorkflowToolName(MountedToolName) ? MillPhaseIndex : null,
         };
         if (phase is int p && p != _lfam3WorkflowPhaseIndex)
             _lfam3WorkflowPhaseIndex = p;
     }
+
+    /// <summary>PRINT / SCAN / MILL / PrePrintScan for .mass save. Null when not LFAM 3.</summary>
+    internal string? CaptureLfam3WorkflowPhaseName()
+    {
+        if (!ShowLfam3ToolPicker) return null;
+        if (IsPrePrintScanStepActive) return "PrePrintScan";
+        if (IsPrintStepActive) return "Print";
+        if (IsVerifyScanStepActive) return "Scan";
+        if (IsMillStepActive) return "Mill";
+        return null;
+    }
+
+    /// <summary>
+    /// Reopen MILL (or Print/Scan) without forcing Spindle (No Bit) / T2.
+    /// Keeps saved TOOL #12 when that is already a mill tool.
+    /// </summary>
+    internal void RestoreLfam3Workflow(string? phaseName, bool? hasPrePrint, int savedKrlTool, string? savedMountedName, string? rightPanelTab)
+    {
+        if (!ShowLfam3ToolPicker) return;
+
+        if (hasPrePrint is bool hp && hp != _hasPrePrintScanStep)
+        {
+            _hasPrePrintScanStep = hp;
+            OnPropertyChanged(nameof(HasPrePrintScanStep));
+        }
+
+        int phase = ParseLfam3WorkflowPhase(phaseName);
+        if (phase < 0)
+            phase = InferLfam3WorkflowPhase(savedKrlTool, savedMountedName, rightPanelTab);
+        if (phase < 0) return;
+
+        _lfam3WorkflowPhaseIndex = phase;
+        NotifyWorkflowStateChanged();
+
+        if (phase != MillPhaseIndex) return;
+
+        string millTool = ResolveMillWorkflowToolName(savedKrlTool, savedMountedName);
+        SuppressNextToolViewportSelect = true;
+        if (!string.Equals(MountedToolName, millTool, StringComparison.Ordinal))
+            SelectLfam3Tool(millTool);
+        if (savedKrlTool > 0 && Robot is { } robot && IsMillWorkflowTool(FindCellToolByKrl(savedKrlTool)))
+            robot.SelectToolByKrlIndex(savedKrlTool);
+    }
+
+    int ParseLfam3WorkflowPhase(string? name) => name switch
+    {
+        "PrePrintScan" => HasPrePrintScanStep ? 0 : -1,
+        "Print" => PrintPhaseIndex,
+        "Scan" => ScanPhaseIndex,
+        "Mill" => MillPhaseIndex,
+        _ => -1,
+    };
+
+    int InferLfam3WorkflowPhase(int krl, string? mounted, string? rightPanelTab)
+    {
+        if (IsMillWorkflowTool(FindCellToolByKrl(krl)) || IsMillWorkflowToolName(mounted))
+            return MillPhaseIndex;
+        if (string.Equals(rightPanelTab, "Subtractive", StringComparison.OrdinalIgnoreCase))
+            return MillPhaseIndex;
+        if (IsScanToolName(mounted) || krl is 5 or 6)
+            return ScanPhaseIndex;
+        return -1;
+    }
+
+    /// <summary>MILL button: keep T12 / Face Mill / etc. Only default T2 when the live tool is not a mill.</summary>
+    string ResolveMillWorkflowToolName(int preferKrl = 0, string? preferName = null)
+    {
+        int krl = preferKrl > 0 ? preferKrl : Robot?.KrlToolIndex ?? 0;
+        var byKrl = FindCellToolByKrl(krl);
+        if (IsMillWorkflowTool(byKrl)) return byKrl!.Name;
+
+        if (!string.IsNullOrWhiteSpace(preferName) && IsMillWorkflowToolName(preferName))
+            return preferName;
+
+        if (IsMillWorkflowToolName(MountedToolName))
+            return MountedToolName;
+
+        return "Spindle (No Bit)";
+    }
+
+    ToolCellConfig? FindCellToolByKrl(int krl) =>
+        krl > 0 ? ActiveCell?.EffectiveTools.FirstOrDefault(t => t.KrlIndex == krl) : null;
+
+    static bool IsMillWorkflowTool(ToolCellConfig? t)
+    {
+        if (t is null) return false;
+        if (t.KrlIndex is 2 or 3 or 7 or 8 or 9 or 10 or 12) return true;
+        return IsMillWorkflowToolName(t.Name) ||
+               (t.ModelPath?.Contains("spindle", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    static bool IsMillWorkflowToolName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        return name.Contains("Spindle", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Mill", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Tool 12", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static bool IsScanToolName(string? name) =>
+        !string.IsNullOrWhiteSpace(name) && name.Contains("Scanner", StringComparison.OrdinalIgnoreCase);
 
     void AdjustPhaseIndexForPrePrintScanToggle(bool prePrintScanEnabled)
     {
@@ -1479,7 +1580,10 @@ public sealed partial class ViewportViewModel : ViewModelBase
         for (int i = 0; i < tools.Count; i++)
         {
             if (!string.Equals(tools[i].Name, toolName, StringComparison.Ordinal)) continue;
-            Robot.SelectedToolIndex = i;
+            if (Robot.SelectedToolIndex != i)
+                Robot.SelectedToolIndex = i;
+            else
+                Robot.ApplyCurrentToolSelection();
             return;
         }
     }
@@ -3577,10 +3681,27 @@ public sealed partial class ViewportViewModel : ViewModelBase
             if (moves.Count == 0) return string.Empty;
             int start = li == 0 ? 0 : _scrubLayerEnds[li - 1];
             var mv = moves[Math.Clamp(_toolpathScrubIndex - start, 0, moves.Count - 1)];
-            if (mv.Kind == MoveKind.Mill) return string.Empty;
+            if (mv.Kind == MoveKind.Mill)
+            {
+                double millSpeed = SubtractiveSettings is { } mill
+                    ? mill.CuttingFeedMmS
+                    : add.PrintSpeed;
+                double rpm = SubtractiveSettings?.SpindleRpm ?? 0;
+                return $"{millSpeed:0.##} mm/s · {rpm:0} rpm";
+            }
             if (mv.Kind == MoveKind.Travel)
             {
-                double tSpeed = mv.TravelSpeedMps is { } o ? o * 1000.0 : add.TravelSpeed;
+                bool millTravel = tp.Layers.Any(l => l.Moves.Any(m => m.Kind == MoveKind.Mill));
+                double tSpeed = mv.TravelSpeedMps is { } o
+                    ? o * 1000.0
+                    : millTravel && SubtractiveSettings is { } millT
+                        ? millT.TravelSpeedMmS
+                        : add.TravelSpeed;
+                if (millTravel)
+                {
+                    double rpm = SubtractiveSettings?.SpindleRpm ?? 0;
+                    return $"{tSpeed:0} mm/s · {rpm:0} rpm";
+                }
                 return $"{tSpeed:0} mm/s · RPM {KrlAnout.RpmIdlePercent:0}%";
             }
             double speed;
@@ -5224,6 +5345,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
         MillCommand = new RelayCommand(() => _ = OnMillRequested?.Invoke());
         PreviewDisplacedCommand = new RelayCommand(() => _ = OnPreviewDisplacedRequested?.Invoke());
         GenerateMultiAxisCommand = new RelayCommand(() => _ = OnGenerateMultiAxisRequested?.Invoke());
+        GenerateMillFromSettingsCommand = new RelayCommand(
+            () => _ = OnGenerateMillFromSettingsRequested?.Invoke());
 
         UpdateSliceCommand = new RelayCommand(
             execute:    () => _ = OnUpdateSliceRequested?.Invoke(),
@@ -5259,7 +5382,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
         SelectVerifyScanPhaseCommand = new RelayCommand(
             () => SelectLfam3WorkflowPhase(ScanPhaseIndex, "Scanner (Calibrated)"), () => ShowLfam3ToolPicker);
         SelectMillPhaseCommand = new RelayCommand(
-            () => SelectLfam3WorkflowPhase(MillPhaseIndex, "Spindle (No Bit)"), () => ShowLfam3ToolPicker);
+            () => SelectLfam3WorkflowPhase(MillPhaseIndex, ResolveMillWorkflowToolName()),
+            () => ShowLfam3ToolPicker);
         ToggleLfam3WorkflowCommand = new RelayCommand(
             () => IsLfam3WorkflowExpanded = !IsLfam3WorkflowExpanded, () => ShowLfam3ToolPicker);
 
@@ -6021,6 +6145,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Callback registered by the viewport code-behind to generate a relief-milling toolpath.</summary>
     internal Func<Task>? OnMillRequested { get; set; }
+    internal Func<Task>? OnGenerateMillFromSettingsRequested { get; set; }
 
     /// <summary>Callback registered by the viewport code-behind to build + show the displaced surface.</summary>
     internal Func<Task>? OnPreviewDisplacedRequested { get; set; }
@@ -6143,6 +6268,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Generates a multi-axis surface-following finish toolpath over the displaced surface.</summary>
     public RelayCommand GenerateMultiAxisCommand { get; }
+
+    /// <summary>Mill the selected / painted workpiece from the live BITS + TOOLPATHING settings.</summary>
+    public RelayCommand GenerateMillFromSettingsCommand { get; }
 
     /// <summary>Re-slices the parent mesh at its current pose and replaces the selected toolpath.</summary>
     public RelayCommand UpdateSliceCommand { get; }
@@ -6900,7 +7028,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
             if (item.IsModifiersGroup) flags.Add("ModifiersGroup");
             if (item.IsPiecesGroup) flags.Add("PiecesGroup");
             if (item.IsModifier) flags.Add("Modifier");
-            if (item.IsToolpath) flags.Add("Toolpath");
+            if (item.IsMillToolpath) flags.Add("MillToolpath");
+            else if (item.IsPrintToolpath) flags.Add("PrintToolpath");
+            else if (item.IsToolpath) flags.Add("Toolpath");
             if (item.IsEffector) flags.Add("Effector");
             if (!item.Visible) flags.Add("Hidden");
             string flagStr = flags.Count == 0 ? "" : $" [{string.Join(",", flags)}]";
@@ -7064,7 +7194,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
     public void AddImportedToolpath(MassiveSlicer.Core.Models.Toolpath tp, string name, float beadWidth = 6f)
     {
         var node = new SceneNode { Name = name, Selectable = true };
-        RegisterToolpathInOutliner(node, ResolveToolpathParentOutlinerItem());
+        RegisterToolpathInOutliner(node, ResolveToolpathParentOutlinerItem(),
+            OutlinerToolpathKinds.Infer(name, tp));
         PendingToolpath.Enqueue(new PendingToolpathEntry
         {
             Toolpath      = tp,
@@ -7253,11 +7384,35 @@ public sealed partial class ViewportViewModel : ViewModelBase
         => FindOutlinerItem(node);
 
     /// <summary>
+    /// LFAM 3 Mill phase (or dedicated mill generators) produce spindle paths;
+    /// every other slice/import is a print/extruder path.
+    /// </summary>
+    internal OutlinerToolpathKind ActiveSliceToolpathKind
+        => ShowLfam3ToolPicker && IsMillStepActive
+            ? OutlinerToolpathKind.Mill
+            : OutlinerToolpathKind.Print;
+
+    /// <summary>First toolpath child of <paramref name="parent"/> matching <paramref name="kind"/>.</summary>
+    internal static OutlinerItemViewModel? FindToolpathChild(
+        OutlinerItemViewModel parent, OutlinerToolpathKind kind)
+    {
+        foreach (var child in parent.Children)
+        {
+            if (child.IsToolpath && child.ToolpathKind == kind)
+                return child;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Creates a new toolpath outliner item as a child of <paramref name="parentItem"/>
     /// (or top-level if <c>null</c>), and enqueues its node for GL upload.
     /// Must be called on the UI thread.
     /// </summary>
-    internal void RegisterToolpathInOutliner(SceneNode toolpathNode, OutlinerItemViewModel? parentItem)
+    internal void RegisterToolpathInOutliner(
+        SceneNode toolpathNode,
+        OutlinerItemViewModel? parentItem,
+        OutlinerToolpathKind kind = OutlinerToolpathKind.Print)
     {
         var item = CreateOutlinerItem(toolpathNode, child =>
         {
@@ -7266,7 +7421,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
             PendingRemoveNodes.Enqueue(child.Node);
             NotifyRenderNeeded();
         }, () => OnNodeHidden?.Invoke(toolpathNode), modelFileOps: true);
-        item.IsToolpath = true;
+        item.IsToolpath   = true;
+        item.ToolpathKind = kind;
 
         if (parentItem is not null)
             parentItem.AddChild(item);
@@ -7492,7 +7648,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
     {
         if (!_modifierOutlinerItems.TryGetValue(cut, out var cutItem)) return null;
         if (OwningModelItem(cutItem) is not { } ownerItem) return null;
-        if (ownerItem.Children.FirstOrDefault(c => c.IsToolpath) is not { } tpItem) return null;
+        var tpItem = FindToolpathChild(ownerItem, OutlinerToolpathKind.Print)
+                     ?? ownerItem.Children.FirstOrDefault(c => c.IsToolpath);
+        if (tpItem is null) return null;
         return GetToolpathSnapshot?.Invoke(tpItem.Node)?.Raw.Layers;
     }
 
@@ -8039,6 +8197,13 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal void RequestCreateToolpath(OutlinerItemViewModel item)
     {
         ForceSelectNode?.Invoke(item.Node);
+        // Mill phase: never fall through to the additive slicer — that ignored
+        // SELECT AREA paint and tooled the whole mesh.
+        if (ShowLfam3ToolPicker && IsMillStepActive)
+        {
+            GenerateMillFromSettingsCommand.Execute(null);
+            return;
+        }
         if (SliceCommand.CanExecute(null))
             SliceCommand.Execute(null);
     }

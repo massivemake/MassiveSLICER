@@ -136,7 +136,7 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "erp",
-            Description = "ERP: erp url | email | password | token | connect | expand | search | attach | newelem | sendslice | pricing | quote | presets | detach | status",
+            Description = "ERP: erp url | email | password | token | connect | expand | search | attach | newelem | sendslice | pricing | quote | presets | millbits | detach | status",
             Execute = (ctx, args) =>
             {
                 var erp = ctx.Main.Viewport.Erp;
@@ -150,11 +150,11 @@ public sealed class ConsoleCommandRegistry
                     case "connect": erp.ConnectCommand.Execute(null); break;
                     case "expand":
                     case "toggle":
-                        // Force-open the ERP dock (same as clicking the ERP button).
+                        // Force-open MassiveLAB panel state (content is left sidebar StepCard).
                         try
                         {
                             erp.IsExpanded = true;
-                            ctx.Log($"[erp] expanded={erp.IsExpanded} attached='{erp.ToggleLabel}' " +
+                            ctx.Log($"[erp] MassiveLAB badge='{erp.HeaderBadge}' " +
                                     $"showAtt={erp.ShowAttachment} showSearch={erp.ShowSearch} " +
                                     $"showSettings={erp.ShowSettings} candidates={erp.WorkspaceCandidates.Count} " +
                                     $"pricing='{erp.PricingSummary}' status='{erp.Status}'");
@@ -200,9 +200,11 @@ public sealed class ConsoleCommandRegistry
                     case "sendslice": erp.SendSliceCommand.Execute(null); break;
                     case "presets":
                     case "syncpresets":
+                    case "millbits":
+                    case "milltools":
                         ctx.Log(erp.PresetsSyncStatus.Length > 0
                             ? $"[erp] last presets sync: {erp.PresetsSyncStatus}"
-                            : "[erp] no presets sync yet — pulling now…");
+                            : "[erp] no presets sync yet - pulling now...");
                         _ = erp.SyncPresetsLibraryAsync();
                         break;
                     case "reattach":  erp.ReattachToProjectCommand.Execute(null); break;
@@ -739,6 +741,7 @@ public sealed class ConsoleCommandRegistry
                     ctx.Log("[mill] brush size <mm> | brush falloff <0..1>");
                     ctx.Log("[mill] op <MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf>");
                     ctx.Log("[mill] axis <-z|+z|+x|-x|+y|-y|paint|camera|custom> | tilt <deg> | azimuth <deg>");
+                    ctx.Log("[mill] speed <mm/s> | travel <mm/s> | offset <mm>");
                     return;
                 }
 
@@ -751,6 +754,8 @@ public sealed class ConsoleCommandRegistry
                         ctx.Log($"[mill] operation={sub.SelectedOperation}");
                         var tool = sub.ResolvePlanarToolAxis();
                         ctx.Log($"[mill] tool-axis={sub.PlanarToolAxis.Kind} tilt={sub.PlanarTiltDeg:0.#} az={sub.PlanarAzimuthDeg:0.#}  T12=({tool.X:0.###},{tool.Y:0.###},{tool.Z:0.###})");
+                        ctx.Log($"[mill] milling={sub.CuttingFeedMmS:0.##} mm/s  travel={sub.TravelSpeedMmS:0.#} mm/s  (not print travel)");
+                        ctx.Log($"[mill] offset={sub.OffsetDistanceMm:0.##} mm  (+ out, − into work)");
                         ctx.Log($"[mill] status: {vp.MillAreaStatusText}");
                         break;
 
@@ -877,6 +882,84 @@ public sealed class ConsoleCommandRegistry
                         }
                         sub.PlanarAzimuthDeg = deg;
                         ctx.Log($"[mill] azimuth → {sub.PlanarAzimuthDeg:0.#}°  {sub.PlanarAxisStatus}");
+                        break;
+                    }
+
+                    case "speed" or "feed" or "mms" when parts.Length >= 2:
+                    {
+                        if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var mmS))
+                        {
+                            ctx.LogError("[mill] speed <mm/s>");
+                            break;
+                        }
+                        sub.CuttingFeedMmS = mmS;
+                        ctx.Log($"[mill] milling speed → {sub.CuttingFeedMmS:0.##} mm/s  travel {sub.TravelSpeedMmS:0.#} mm/s");
+                        break;
+                    }
+
+                    case "travel" when parts.Length >= 2:
+                    {
+                        if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var mmS))
+                        {
+                            ctx.LogError("[mill] travel <mm/s>");
+                            break;
+                        }
+                        sub.TravelSpeedMmS = mmS;
+                        ctx.Log($"[mill] travel speed → {sub.TravelSpeedMmS:0.#} mm/s  mill {sub.CuttingFeedMmS:0.##} mm/s");
+                        break;
+                    }
+
+                    case "offset" when parts.Length >= 2:
+                    {
+                        if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var mm))
+                        {
+                            ctx.LogError("[mill] offset <mm>  (+ out, − into the work)");
+                            break;
+                        }
+                        sub.OffsetDistanceMm = mm;
+                        ctx.Log($"[mill] offset → {sub.OffsetDistanceMm:0.##} mm");
+                        break;
+                    }
+
+                    case "y" or "orient-y" when parts.Length >= 2:
+                    {
+                        if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var deg))
+                        {
+                            ctx.LogError("[mill] y <deg>");
+                            break;
+                        }
+                        sub.ToolheadB = deg;
+                        ctx.Log($"[mill] orient Y={sub.ToolheadB:0.#}  X={sub.ToolheadC:0.#}  Z={sub.ToolheadA:0.#}");
+                        break;
+                    }
+
+                    case "x" or "orient-x" when parts.Length >= 2:
+                    {
+                        if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var deg))
+                        {
+                            ctx.LogError("[mill] x <deg>");
+                            break;
+                        }
+                        sub.ToolheadC = deg;
+                        ctx.Log($"[mill] orient Y={sub.ToolheadB:0.#}  X={sub.ToolheadC:0.#}  Z={sub.ToolheadA:0.#}");
+                        break;
+                    }
+
+                    case "z" or "orient-z" when parts.Length >= 2:
+                    {
+                        if (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var deg))
+                        {
+                            ctx.LogError("[mill] z <deg>");
+                            break;
+                        }
+                        sub.ToolheadA = deg;
+                        ctx.Log($"[mill] orient Y={sub.ToolheadB:0.#}  X={sub.ToolheadC:0.#}  Z={sub.ToolheadA:0.#}");
                         break;
                     }
 
@@ -2390,8 +2473,8 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "krlpost",
             Aliases = ["krl-post", "krlpostprocess"],
-            Description = "KRL post-processing: show state, toggle Digital Start/Stop (URM), set $APO.CVEL, reset or save header/footer defaults",
-            Usage = "krlpost | krlpost open | krlpost urm <on|off> | krlpost apocvel <0-100> | krlpost reset <header|footer> | krlpost save-default <header|footer>",
+            Description = "KRL post-processing: show state, toggle Robot Mode / Travel Moves, set $APO.CVEL, reset or save header/footer defaults",
+            Usage = "krlpost | krlpost open | krlpost robot <on|off> | krlpost travel <on|off> | krlpost air <on|off> | krlpost urm <on|off> | krlpost apocvel <0-100> | krlpost reset <header|footer> | krlpost save-default <header|footer>",
             Execute = (ctx, args) =>
             {
                 var add  = ctx.Main.RightPanel.Additive;
@@ -2400,7 +2483,9 @@ public sealed class ConsoleCommandRegistry
 
                 void Report()
                 {
-                    ctx.Log($"[krlpost] Digital Start/Stop (URM): {(add.DigitalStartStopEnabled ? "ON" : "off")}");
+                    ctx.Log($"[krlpost] Robot Mode: {(add.RobotModeEnabled ? "ON" : "off")}");
+                    ctx.Log($"[krlpost] Travel Moves (start/stop): {(add.TravelStartStopEnabled ? "ON" : "off")}");
+                    ctx.Log($"[krlpost] Extruder Air (OUT[5]): {(add.ExtruderAirEnabled ? "ON" : "off")}");
                     ctx.Log($"[krlpost] $APO.CVEL: {add.ApoCvel:0.##}%");
                     ctx.Log($"[krlpost] header {post.HeaderText.Length} chars, saved default: {(post.HasSavedHeaderDefault ? "yes" : "no (built-in)")}");
                     ctx.Log($"[krlpost] footer {post.FooterText.Length} chars, saved default: {(post.HasSavedFooterDefault ? "yes" : "no (built-in)")}");
@@ -2413,9 +2498,26 @@ public sealed class ConsoleCommandRegistry
                             ? "[krlpost] dialog opened"
                             : "[krlpost] no right panel attached — cannot open the dialog");
                         break;
+                    case "robot" or "robotmode" when parts.Length >= 2:
+                        add.RobotModeEnabled = parts[1] is "on" or "1" or "true";
+                        ctx.Log($"[krlpost] Robot Mode {(add.RobotModeEnabled ? "ON" : "off")} — header/footer templates swapped to match");
+                        Report();
+                        break;
+                    case "travel" or "travels" when parts.Length >= 2:
+                        add.TravelStartStopEnabled = parts[1] is "on" or "1" or "true";
+                        ctx.Log($"[krlpost] Travel Moves {(add.TravelStartStopEnabled ? "ON" : "off")}");
+                        Report();
+                        break;
+                    case "air" or "extruderair" when parts.Length >= 2:
+                        add.ExtruderAirEnabled = parts[1] is "on" or "1" or "true";
+                        ctx.Log($"[krlpost] Extruder Air {(add.ExtruderAirEnabled ? "ON" : "off")} — header OUT[5] TRUE / footer FALSE");
+                        Report();
+                        break;
                     case "urm" when parts.Length >= 2:
-                        add.DigitalStartStopEnabled = parts[1] is "on" or "1" or "true";
-                        ctx.Log($"[krlpost] URM {(add.DigitalStartStopEnabled ? "ON" : "off")} — header/footer templates swapped to match");
+                        bool on = parts[1] is "on" or "1" or "true";
+                        add.RobotModeEnabled = on;
+                        add.TravelStartStopEnabled = on;
+                        ctx.Log($"[krlpost] legacy URM {(on ? "ON" : "off")} — Robot Mode + Travel Moves");
                         Report();
                         break;
                     case "apocvel" or "apo-cvel" or "cvel" when parts.Length >= 2:

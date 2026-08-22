@@ -4,13 +4,14 @@
         x:Class="MassiveSlicer.App.Views.KrlPostProcessWindow"
         x:CompileBindings="False"
         Title="KRL Post-Processing"
-        Width="720" Height="520"
+        Width="720" Height="680"
         WindowStartupLocation="CenterOwner"
         WindowDecorations="None"
         CanResize="True"
         MinWidth="560" MinHeight="400"
         ShowInTaskbar="False"
-        Background="{DynamicResource Bg0}">
+        TransparencyLevelHint="Transparent"
+        Background="Transparent">
 
     <Window.Styles>
         <Style Selector="Button.NavBtn">
@@ -31,9 +32,30 @@
             <Setter Property="Foreground"  Value="{DynamicResource Accent}"/>
             <Setter Property="Background"  Value="{DynamicResource Bg3}"/>
         </Style>
+        <Style Selector="ToggleButton">
+            <Setter Property="Background" Value="{DynamicResource Bg3}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Border1}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
+        <Style Selector="ToggleButton:checked">
+            <Setter Property="Background" Value="#E63a5716"/>
+            <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+            <Setter Property="BorderBrush" Value="#71a72a"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style Selector="ToggleButton:pointerover">
+            <Setter Property="BorderBrush" Value="#71a72a"/>
+        </Style>
     </Window.Styles>
 
-    <Border BorderBrush="{DynamicResource Border2}" BorderThickness="1">
+    <Border Classes="DialogChrome"
+            Background="{DynamicResource Bg0}"
+            BorderBrush="{DynamicResource Border2}"
+            BorderThickness="1"
+            CornerRadius="10"
+            ClipToBounds="True">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="40"/>
@@ -43,6 +65,7 @@
 
             <Border Grid.Row="0" x:Name="TitleBar"
                     Background="{DynamicResource Bg1}"
+                    CornerRadius="10,10,0,0"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,0,0,1"
                     Cursor="SizeAll">
@@ -96,14 +119,215 @@
                         <StackPanel IsVisible="{Binding IsRulesTab}" Spacing="10">
                             <TextBlock Text="EXPORT RULES"
                                        Classes="SectionHeader"/>
-                            <CheckBox Content="Digital Start/Stop (URM)"
-                                      IsChecked="{Binding DigitalStartStopEnabled, Mode=TwoWay}"
-                                      FontSize="12"
-                                      ToolTip.Tip="Caracol Eidos / MTruck style: header with CaracolSafety + T1/T2/T3/RPM (no $ANOUT MAT), body ;travel start/end + ;rpm change + RPM = N. Unchecked = LFAM $ANOUT[1–4] export."/>
-                            <TextBlock Text="When checked: Caracol MAT (T1/T2/T3/RPM), not $ANOUT. Travel uses ;travel start/end and ;rpm change. Toggling this swaps the Header and Footer templates to match."
+
+                            <Grid ColumnDefinitions="*,8,*">
+                                <ToggleButton Grid.Column="0"
+                                              Content="Robot Mode"
+                                              IsEnabled="True"
+                                              IsChecked="{Binding RobotModeEnabled, Mode=TwoWay}"
+                                              HorizontalAlignment="Stretch"
+                                              HorizontalContentAlignment="Center"
+                                              Padding="10,8"
+                                              FontSize="12"
+                                              CornerRadius="5"
+                                              ToolTip.Tip="Caracol T1/T2/T3/RPM MAT — sets temperatures and screw RPM. Does not write travel start/stop."/>
+                                <ToggleButton Grid.Column="2"
+                                              Content="Travel Moves"
+                                              IsEnabled="True"
+                                              IsChecked="{Binding TravelStartStopEnabled, Mode=TwoWay}"
+                                              HorizontalAlignment="Stretch"
+                                              HorizontalContentAlignment="Center"
+                                              Padding="10,8"
+                                              FontSize="12"
+                                              CornerRadius="5"
+                                              ToolTip.Tip="Travel start/stop around travels, wipes, and z-hops. Independent of Robot Mode."/>
+                            </Grid>
+                            <TextBlock Text="Robot Mode writes temps + RPM (T1/T2/T3/RPM). Travel Moves handles start/stop on travels. Each button stays available — they do not disable each other."
                                        Classes="LabelMuted"
                                        FontSize="11"
                                        TextWrapping="Wrap"/>
+
+                            <CheckBox Content="Extruder Air"
+                                      IsChecked="{Binding ExtruderAirEnabled, Mode=TwoWay}"
+                                      FontSize="12"
+                                      ToolTip.Tip="Cooling air on Digital Output 5 (Live I/O: Extruder Cooling). Writes TRUE in the SRC header and FALSE in the footer. Print only."/>
+
+                            <Border IsVisible="{Binding TravelStartStopEnabled}"
+                                    Background="#1a1a1a"
+                                    CornerRadius="6"
+                                    Padding="10,8"
+                                    BorderBrush="{DynamicResource Border1}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="CODE EDITOR INJECT"
+                                               Classes="LabelMuted"
+                                               FontSize="9"
+                                               LetterSpacing="1"/>
+                                    <TextBlock Text="{Binding CodeEditorPrintSpeedHint}"
+                                               Classes="LabelMuted"
+                                               FontSize="11"
+                                               TextWrapping="Wrap"/>
+
+                                    <TextBlock Text="Short travel (mm)" FontSize="11" Classes="LabelMuted"/>
+                                    <TextBox Classes="PanelTextBox"
+                                             Text="{Binding CodeEditorShortTravelMm, Mode=TwoWay}"/>
+
+                                    <TextBlock Text="Start extruding (after ;travel end)" FontSize="11" Classes="LabelMuted"/>
+                                    <TextBox Classes="PanelTextBox"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             MinHeight="44"
+                                             FontFamily="Consolas,Courier New,monospace"
+                                             FontSize="11"
+                                             Text="{Binding CodeEditorStartExtrudingCommand, Mode=TwoWay}"/>
+
+                                    <TextBlock Text="Stop extruding" FontSize="11" Classes="LabelMuted"
+                                               ToolTip.Tip="$VEL.CP is rewritten to half of print speed on export. Before = walk back along the bead to ;travel start. After = into the travel hop."/>
+                                    <TextBox Classes="PanelTextBox"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             MinHeight="44"
+                                             FontFamily="Consolas,Courier New,monospace"
+                                             FontSize="11"
+                                             Text="{Binding CodeEditorStopExtrudingCommand, Mode=TwoWay}"/>
+                                    <Grid ColumnDefinitions="*,8,120,8,100">
+                                        <TextBox Grid.Column="0" Classes="PanelTextBox"
+                                                 Text="{Binding CodeEditorStopDistance, Mode=TwoWay}"/>
+                                        <ComboBox Grid.Column="2"
+                                                  ItemsSource="{Binding CodeEditorUnitOptions}"
+                                                  SelectedItem="{Binding CodeEditorStopUnits, Mode=TwoWay}"
+                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
+                                        <ComboBox Grid.Column="4"
+                                                  ItemsSource="{Binding CodeEditorDirectionOptions}"
+                                                  SelectedItem="{Binding CodeEditorStopDirection, Mode=TwoWay}"
+                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
+                                    </Grid>
+
+                                    <TextBlock Text="Enter URM" FontSize="11" Classes="LabelMuted"/>
+                                    <TextBox Classes="PanelTextBox"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             MinHeight="36"
+                                             FontFamily="Consolas,Courier New,monospace"
+                                             FontSize="11"
+                                             Text="{Binding CodeEditorEnterUrmCommand, Mode=TwoWay}"/>
+                                    <Grid ColumnDefinitions="*,8,120,8,100">
+                                        <TextBox Grid.Column="0" Classes="PanelTextBox"
+                                                 Text="{Binding CodeEditorEnterUrmDistance, Mode=TwoWay}"/>
+                                        <ComboBox Grid.Column="2"
+                                                  ItemsSource="{Binding CodeEditorUnitOptions}"
+                                                  SelectedItem="{Binding CodeEditorEnterUrmUnits, Mode=TwoWay}"
+                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
+                                        <ComboBox Grid.Column="4"
+                                                  ItemsSource="{Binding CodeEditorDirectionOptions}"
+                                                  SelectedItem="{Binding CodeEditorEnterUrmDirection, Mode=TwoWay}"
+                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
+                                    </Grid>
+
+                                    <TextBlock Text="Exit URM" FontSize="11" Classes="LabelMuted"/>
+                                    <TextBox Classes="PanelTextBox"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             MinHeight="36"
+                                             FontFamily="Consolas,Courier New,monospace"
+                                             FontSize="11"
+                                             Text="{Binding CodeEditorExitUrmCommand, Mode=TwoWay}"/>
+                                    <Grid ColumnDefinitions="*,8,120,8,100">
+                                        <TextBox Grid.Column="0" Classes="PanelTextBox"
+                                                 Text="{Binding CodeEditorExitUrmDistance, Mode=TwoWay}"/>
+                                        <ComboBox Grid.Column="2"
+                                                  ItemsSource="{Binding CodeEditorUnitOptions}"
+                                                  SelectedItem="{Binding CodeEditorExitUrmUnits, Mode=TwoWay}"
+                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
+                                        <ComboBox Grid.Column="4"
+                                                  ItemsSource="{Binding CodeEditorDirectionOptions}"
+                                                  SelectedItem="{Binding CodeEditorExitUrmDirection, Mode=TwoWay}"
+                                                  Theme="{StaticResource MassiveComboBoxTheme}"/>
+                                    </Grid>
+
+                                    <CheckBox Content="Always insert (even if the bead is shorter than the offset)"
+                                              IsChecked="{Binding CodeEditorAlwaysInsert, Mode=TwoWay}"
+                                              FontSize="11"/>
+                                    <CheckBox Content="PointLoader-safe I/O (no TRIGGER in the CAD body)"
+                                              IsChecked="{Binding CodeEditorPointLoaderSafeIo, Mode=TwoWay}"
+                                              FontSize="11"
+                                              ToolTip.Tip="Rewrites TRIGGER WHEN DISTANCE=0 DO $OUT[...] to a plain $OUT line. Leave on for LFAM 1/2 PointLoader."/>
+
+                                    <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4"/>
+
+                                    <TextBlock Text="START / STOP TIMING"
+                                               Classes="LabelMuted"
+                                               FontSize="9"
+                                               LetterSpacing="1"/>
+                                    <Grid ColumnDefinitions="*,90">
+                                        <TextBlock Grid.Column="0" Text="Start wait (s)" VerticalAlignment="Center"
+                                                   FontSize="11" Classes="LabelMuted"
+                                                   ToolTip.Tip="Pause after first RPM-on before the first extrusion move."/>
+                                        <NumericUpDown Grid.Column="1"
+                                                       Value="{Binding ExtrusionStartWaitSec, Mode=TwoWay}"
+                                                       Minimum="0" Maximum="60" Increment="0.5"
+                                                       FormatString="F1" FontSize="11"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,90">
+                                        <TextBlock Grid.Column="0" Text="Pre-travel pause (ms)" VerticalAlignment="Center"
+                                                   FontSize="11" Classes="LabelMuted"
+                                                   ToolTip.Tip="Dwell after the screw stops, BEFORE the travel move - lets barrel pressure bleed so the travel entry doesn't blob."/>
+                                        <NumericUpDown Grid.Column="1"
+                                                       Value="{Binding PreTravelPauseMs, Mode=TwoWay}"
+                                                       Minimum="0" Maximum="10000" Increment="50"
+                                                       FormatString="F0" FontSize="11"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,90">
+                                        <TextBlock Grid.Column="0" Text="Pre-resume pause (ms)" VerticalAlignment="Center"
+                                                   FontSize="11" Classes="LabelMuted"
+                                                   ToolTip.Tip="Screw-on dwell AFTER each travel, before the robot moves - pressure build so layer starts aren't starved."/>
+                                        <NumericUpDown Grid.Column="1"
+                                                       Value="{Binding PreResumePauseMs, Mode=TwoWay}"
+                                                       Minimum="0" Maximum="10000" Increment="50"
+                                                       FormatString="F0" FontSize="11"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,90">
+                                        <TextBlock Grid.Column="0" Text="Resume prime (%)" VerticalAlignment="Center"
+                                                   FontSize="11" Classes="LabelMuted"
+                                                   ToolTip.Tip="Screw speed DURING the pre-resume pause, as % of the segment RPM. 100 = full-RPM pre-charge. ~30-40% widens the usable pause window. First print start always primes at 100%."/>
+                                        <NumericUpDown Grid.Column="1"
+                                                       Value="{Binding SsResumePrimePercent, Mode=TwoWay}"
+                                                       Minimum="5" Maximum="100" Increment="5"
+                                                       FormatString="F0" FontSize="11"/>
+                                    </Grid>
+
+                                    <TextBlock Text="POST-TRAVEL RAMP" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
+                                    <CheckBox Content="Ramp speed + RPM after travel"
+                                              IsChecked="{Binding ResumeRampEnabled, Mode=TwoWay}"
+                                              FontSize="11"
+                                              ToolTip.Tip="After each travel, start extrusion at low speed/RPM and step up over a set distance before reaching full print speed."/>
+                                    <Grid ColumnDefinitions="*,90" IsVisible="{Binding ResumeRampEnabled}">
+                                        <TextBlock Grid.Column="0" Text="Ramp start speed (mm/s)" VerticalAlignment="Center"
+                                                   FontSize="11" Classes="LabelMuted"/>
+                                        <TextBox Grid.Column="1" Classes="PanelTextBox"
+                                                 Text="{Binding ResumeRampStartSpeed, Mode=TwoWay}"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,90" IsVisible="{Binding ResumeRampEnabled}">
+                                        <TextBlock Grid.Column="0" Text="Ramp start RPM (%)" VerticalAlignment="Center"
+                                                   FontSize="11" Classes="LabelMuted"/>
+                                        <TextBox Grid.Column="1" Classes="PanelTextBox"
+                                                 Text="{Binding ResumeRampStartRpmPercent, Mode=TwoWay}"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,90" IsVisible="{Binding ResumeRampEnabled}">
+                                        <TextBlock Grid.Column="0" Text="Ramp distance (mm)" VerticalAlignment="Center"
+                                                   FontSize="11" Classes="LabelMuted"
+                                                   ToolTip.Tip="Total path length over which speed and RPM step up. 609.6 mm is about 2 ft."/>
+                                        <TextBox Grid.Column="1" Classes="PanelTextBox"
+                                                 Text="{Binding ResumeRampDistanceMm, Mode=TwoWay}"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,90" IsVisible="{Binding ResumeRampEnabled}">
+                                        <TextBlock Grid.Column="0" Text="Ramp steps" VerticalAlignment="Center"
+                                                   FontSize="11" Classes="LabelMuted"/>
+                                        <TextBox Grid.Column="1" Classes="PanelTextBox"
+                                                 Text="{Binding ResumeRampSteps, Mode=TwoWay}"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
 
                             <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4"/>
 
@@ -119,6 +343,52 @@
                                        Classes="LabelMuted"
                                        FontSize="11"
                                        TextWrapping="Wrap"/>
+
+                            <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4"/>
+
+                            <TextBlock Text="ORIENTATION SMOOTHING"
+                                       Classes="SectionHeader"
+                                       ToolTip.Tip="Averages toolhead ABC across neighbouring moves to prevent sharp reorientation jumps. Positions are unchanged. Look-ahead / sigma apply at KRL export."/>
+                            <CheckBox Content="Smooth rotation"
+                                      IsChecked="{Binding SmoothRotation, Mode=TwoWay}"
+                                      FontSize="12"
+                                      ToolTip.Tip="Average toolhead ABC across neighbouring moves. Positions stay the same."/>
+                            <Grid ColumnDefinitions="*,90" IsVisible="{Binding ShowSmoothRotationRadius}">
+                                <TextBlock Grid.Column="0" Text="Radius (moves)"
+                                           VerticalAlignment="Center" FontSize="12" Classes="LabelMuted"
+                                           ToolTip.Tip="Number of moves averaged on each side. Higher = smoother but deviates further from mesh normals."/>
+                                <NumericUpDown Grid.Column="1"
+                                               Value="{Binding SmoothRotationRadius, Mode=TwoWay}"
+                                               Minimum="1" Maximum="50" Increment="1"
+                                               FormatString="F0" FontSize="11"/>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,90">
+                                <TextBlock Grid.Column="0" Text="Max rate (°/mm)"
+                                           VerticalAlignment="Center" FontSize="12" Classes="LabelMuted"
+                                           ToolTip.Tip="Maximum orientation change in degrees per mm of travel. Clamps sharp turns to prevent KUKA axis overspeed. 0 = disabled."/>
+                                <NumericUpDown Grid.Column="1"
+                                               Value="{Binding SmoothRotationMaxRateDegPerMm, Mode=TwoWay}"
+                                               Minimum="0" Maximum="90" Increment="0.5"
+                                               FormatString="F1" FontSize="11"/>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,90">
+                                <TextBlock Grid.Column="0" Text="KRL look-ahead (mm)"
+                                           VerticalAlignment="Center" FontSize="12" Classes="LabelMuted"
+                                           ToolTip.Tip="Forward look-ahead distance for the KRL exporter's Gaussian normal smoother. At 60 mm/s this is about 1 second of pre-rotation per 60 mm. 0 = disabled."/>
+                                <NumericUpDown Grid.Column="1"
+                                               Value="{Binding OrientationLookAheadMm, Mode=TwoWay}"
+                                               Minimum="0" Maximum="500" Increment="10"
+                                               FormatString="F0" FontSize="11"/>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,90">
+                                <TextBlock Grid.Column="0" Text="KRL sigma (mm)"
+                                           VerticalAlignment="Center" FontSize="12" Classes="LabelMuted"
+                                           ToolTip.Tip="Gaussian kernel width for KRL normal smoothing. Controls the spread of the orientation transition ramp. Typically half of the look-ahead value."/>
+                                <NumericUpDown Grid.Column="1"
+                                               Value="{Binding OrientationSigmaMm, Mode=TwoWay}"
+                                               Minimum="1" Maximum="200" Increment="5"
+                                               FormatString="F0" FontSize="11"/>
+                            </Grid>
                         </StackPanel>
 
                         <!-- Header -->
@@ -203,13 +473,15 @@
                     Background="{DynamicResource Bg1}"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,1,0,0"
+                    CornerRadius="0,0,10,10"
                     Padding="12,0">
                 <Button Content="Done"
                         Classes="PrimaryButton"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Center"
                         Padding="16,6"
-                        Click="OnClose"/>
+                        Click="OnClose"
+                        ToolTip.Tip="Writes assets/krl_postprocess.json in the repo (the GitHub factory). Rebuilds copy that file — they no longer reset to in-code defaults."/>
             </Border>
         </Grid>
     </Border>

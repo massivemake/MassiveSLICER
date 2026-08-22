@@ -417,11 +417,11 @@ public sealed class AppPreferences
     public double ZHopMm { get; set; }
 
     /// <summary>Wipe mode display: Off, Retrace, Same-Direction.</summary>
-    public string WipeModeDisplay { get; set; } = "Off";
+    public string WipeModeDisplay { get; set; } = "Same-Direction";
 
-    public double WipeLengthMm { get; set; } = 10.0;
+    public double WipeLengthMm { get; set; } = 35.0;
     public double WipeRampMm { get; set; } = 5.0;
-    public double WipeSpeed { get; set; } = 120.0;
+    public double WipeSpeed { get; set; } = 600.0;
     /// <summary>Skip wipe when the following travel is shorter than 2× layer height.</summary>
     public bool WipeSkipShortTravels { get; set; }
     public double ExtrusionStartWaitSec { get; set; }
@@ -439,7 +439,20 @@ public sealed class AppPreferences
     /// then screw on + wait + URM off on resume. When false, <c>$OUT[9]</c> stays on for the whole job
     /// (legacy MassiveSLICER behaviour).
     /// </summary>
-    public bool DigitalStartStopEnabled { get; set; }
+    public bool DigitalStartStopEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Robot Mode MAT (T1/T2/T3/RPM). Null = not in file (pre-split) — load migrates
+    /// from <see cref="DigitalStartStopEnabled"/>. New prefs set this to false so
+    /// Travel Moves can default on without also turning on Caracol MAT.
+    /// </summary>
+    public bool? RobotModeEnabled { get; set; }
+
+    /// <summary>Code Editor inject recipe under Travel Moves. Null = defaults.</summary>
+    public CodeEditorInjectSettings? CodeEditorInject { get; set; }
+
+    /// <summary>Extruder cooling air: $OUT[5] on in header, off in footer.</summary>
+    public bool ExtruderAirEnabled { get; set; }
 
     public bool ResumeRampEnabled { get; set; }
     public double ResumeRampStartSpeed { get; set; } = 0.5;
@@ -536,6 +549,12 @@ public sealed class AppPreferences
 
     /// <summary>KUKA BASE_DATA index used while scanning (1–32).</summary>
     public int ScanBaseDataIndex { get; set; } = 1;
+
+    /// <summary>
+    /// MILL right-sidebar snapshot (operation, Box/Face area tool, bit, feeds, planar axis).
+    /// Null on files saved before this field — do not reset the live mill panel.
+    /// </summary>
+    public MillSidebarSettings? Mill { get; set; }
 
     /// <summary>Path to the last workspace saved via Save As (.mass). Restored on next launch.</summary>
     public string? LastWorkspacePath { get; set; }

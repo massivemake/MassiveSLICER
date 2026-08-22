@@ -261,28 +261,116 @@ public sealed class KrlExporterTest
         // Header: URM (OUT[8]) init FALSE; robot-mode gate (OUT[9]) latched TRUE in MAT.
         Assert.Contains("$OUT[8] = FALSE", krl);
         Assert.Contains("$OUT[9] = TRUE", krl);
-        // Body: Caracol travel_ss-post injector pattern on the verified URM output OUT[8].
-        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = TRUE", krl);
-        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[7] = FALSE", krl);
-        Assert.Contains("$OUT[7] = TRUE", krl);
-        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = FALSE", krl);
+        // Code Editor inject (PointLoader-safe default): no TRIGGER in the CAD body.
         Assert.Contains(";travel start", krl);
         Assert.Contains(";travel end", krl);
-        Assert.Contains(";digital start/stop - stop (Caracol URM)", krl);
-        Assert.Contains(";digital start/stop - start (Caracol URM)", krl);
+        Assert.Contains("; !Modified by RCE!", krl);
+        Assert.DoesNotContain("TRIGGER WHEN DISTANCE", krl);
+        Assert.Contains("$OUT[7] = TRUE; !Modified by RCE!", krl);
+        Assert.Contains("$OUT[7] = FALSE; !Modified by RCE!", krl);
+        Assert.Contains("WAIT SEC 0.5; !Modified by RCE!", krl);
 
-        // Order around first travel: OUT8 TRUE → OUT7 FALSE → wait → travel → OUT7 TRUE → wait → OUT8 FALSE
-        int out8On  = krl.IndexOf("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = TRUE", StringComparison.Ordinal);
-        int out7Off = krl.IndexOf("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[7] = FALSE", StringComparison.Ordinal);
-        int travel  = krl.IndexOf(";travel start", StringComparison.Ordinal);
-        int endTr   = krl.IndexOf(";travel end", travel, StringComparison.Ordinal);
-        int out7On  = krl.IndexOf("$OUT[7] = TRUE", endTr, StringComparison.Ordinal);
-        int out8Off = krl.IndexOf("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = FALSE", endTr, StringComparison.Ordinal);
-        Assert.True(out8On >= 0 && out7Off > out8On && travel > out7Off);
-        Assert.True(endTr > travel && out7On > endTr && out8Off > out7On);
+        int travelEnd = krl.IndexOf(";travel end", StringComparison.Ordinal);
+        int out7On    = krl.IndexOf("$OUT[7] = TRUE; !Modified by RCE!", travelEnd, StringComparison.Ordinal);
+        int travel    = krl.IndexOf(";travel start", StringComparison.Ordinal);
+        int out7Off   = krl.IndexOf("$OUT[7] = FALSE; !Modified by RCE!", StringComparison.Ordinal);
+        Assert.True(travelEnd >= 0 && out7On > travelEnd && travel > out7On);
+        Assert.True(out7Off > 0 && out7Off < travel);
+    }
 
-        // Half-speed approach after screw-off (print  default 0.05 → 0.025 if PrintSpeedMps default).
-        Assert.Contains("WAIT SEC 0.5", krl);
+    [Fact]
+    public void Export_RobotMode_only_sets_temps_and_rpm_without_travel_start_stop()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(100, 0, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(150, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName            = "test_robot_only",
+            ExtrusionRpmPercent    = 50f,
+            Temperature1           = 250f,
+            RobotModeEnabled       = true,
+            TravelStartStopEnabled = false,
+            HeaderTemplate         = KrlExporter.DefaultHeaderTemplate,
+        });
+
+        Assert.Contains(";FOLD CaracolSafety", krl);
+        Assert.Contains("T1 = 250", krl);
+        Assert.DoesNotContain("$ANOUT[1]", krl);
+        Assert.Contains("RPM =", krl);
+        Assert.DoesNotContain(";travel start", krl);
+        Assert.DoesNotContain(";digital start/stop - stop (Caracol URM)", krl);
+        Assert.Contains(";travel", krl);
+    }
+
+    [Fact]
+    public void Export_extruder_air_writes_out5_on_in_header_and_off_in_footer()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        var on = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName        = "air_on",
+            ExtrusionRpmPercent = 50f,
+            ExtruderAirEnabled = true,
+            HeaderTemplate     = KrlExporter.DefaultHeaderTemplate,
+            FooterTemplate     = KrlExporter.DefaultFooterTemplate,
+        });
+        int onIdx   = on.IndexOf("$OUT[5] = TRUE", StringComparison.Ordinal);
+        int firstLin = on.IndexOf("LIN ", StringComparison.Ordinal);
+        int retreat = on.IndexOf(";retreat", StringComparison.Ordinal);
+        int offIdx  = on.LastIndexOf("$OUT[5] = FALSE", StringComparison.Ordinal);
+        Assert.True(onIdx >= 0 && onIdx < firstLin, "air on must be in the header");
+        Assert.True(offIdx > retreat, "air off must be in the footer");
+        Assert.Contains(";extruder air on", on);
+        Assert.Contains(";extruder air off", on);
+
+        var off = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName        = "air_off",
+            ExtrusionRpmPercent = 50f,
+            ExtruderAirEnabled = false,
+            HeaderTemplate     = KrlExporter.DefaultHeaderTemplate,
+            FooterTemplate     = KrlExporter.DefaultFooterTemplate,
+        });
+        Assert.DoesNotContain("$OUT[5]", off);
+    }
+
+    [Fact]
+    public void Export_TravelMoves_only_emits_start_stop_without_forcing_robot_mat()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(100, 0, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(150, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName            = "test_travel_only",
+            ExtrusionRpmPercent    = 50f,
+            RobotModeEnabled       = false,
+            TravelStartStopEnabled = true,
+        });
+
+        Assert.Contains(";travel start", krl);
+        Assert.Contains(";travel end", krl);
+        Assert.Contains("; !Modified by RCE!", krl);
+        Assert.DoesNotContain(";FOLD CaracolSafety", krl);
+        Assert.Contains("$ANOUT[1]", krl);
     }
 
     [Fact]
@@ -572,34 +660,13 @@ public sealed class KrlExporterTest
             FooterTemplate          = KrlExporter.DefaultFooterTemplate,
         });
 
-        // Prime = 40% of the 50% segment RPM = 20, emitted between OUT[7]=TRUE and the wait.
-        Assert.Contains("; resume prime", krl);
-        Assert.Contains("RPM = 20", krl);
-        // Anchor on the REAL travel (the initial approach also emits ";travel end").
+        // Travel Moves now uses Code Editor inject after ;travel end (not PostTravel prime).
+        Assert.Contains("; !Modified by RCE!", krl);
         int travelStart = krl.IndexOf(";travel start", StringComparison.Ordinal);
         int endTr   = krl.IndexOf(";travel end", travelStart, StringComparison.Ordinal);
-        int out7On  = krl.IndexOf("$OUT[7] = TRUE", endTr, StringComparison.Ordinal);
-        int prime   = krl.IndexOf("; resume prime", endTr, StringComparison.Ordinal);
-        int wait    = krl.IndexOf("WAIT SEC 0.5", prime, StringComparison.Ordinal);
-        int out8Off = krl.IndexOf("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = FALSE", wait, StringComparison.Ordinal);
-        Assert.True(out7On >= 0 && prime > out7On && wait > prime && out8Off > wait,
-            "prime must sit between OUT[7]=TRUE and the resume wait");
-
-        // First print start keeps the full-RPM pre-charge: exactly one prime (one travel).
-        int first = krl.IndexOf("; resume prime", StringComparison.Ordinal);
-        Assert.Equal(first, krl.LastIndexOf("; resume prime", StringComparison.Ordinal));
-
-        // Default (100%) emits no prime line at all — legacy output unchanged.
-        var krlLegacy = KrlExporter.Export(tp, new KrlExportSettings
-        {
-            ProgramName             = "test_prime_off",
-            ExtrusionRpmPercent     = 50f,
-            ExtrusionResumeWaitSec  = 0.5f,
-            DigitalStartStopEnabled = true,
-            HeaderTemplate          = KrlExporter.DefaultHeaderTemplate,
-            FooterTemplate          = KrlExporter.DefaultFooterTemplate,
-        });
-        Assert.DoesNotContain("; resume prime", krlLegacy);
+        int out7On  = krl.IndexOf("$OUT[7] = TRUE; !Modified by RCE!", StringComparison.Ordinal);
+        Assert.True(travelStart >= 0 && endTr > travelStart);
+        Assert.True(out7On >= 0 && out7On < travelStart);
     }
 
     static Toolpath TwoMoveTp()

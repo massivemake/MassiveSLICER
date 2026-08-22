@@ -42,8 +42,9 @@ public partial class MainWindow : Window
             {
                 _controlBridge = new MassiveSlicer.App.Console.LocalControlBridge(vm);
                 int port = _controlBridge.Start();
+                bool lan = MassiveSlicer.App.Console.LocalControlBridge.ListenOnLan();
                 vm.Console.Log(port > 0
-                    ? $"[bridge] control API on http://127.0.0.1:{port}  — GET /status, GET /console?n=N, GET /screenshot, GET|POST /materials, POST /command"
+                    ? $"[bridge] control API on http://{(lan ? "0.0.0.0" : "127.0.0.1")}:{port}{(lan ? " (LAN)" : "")}  — GET /status, GET /console?n=N, GET /screenshot, GET|POST /materials, POST /command"
                     : "[bridge] control API failed to start (ports busy).");
             }
             catch (Exception ex) { vm.Console.LogError($"[bridge] {ex.Message}"); }
@@ -227,7 +228,7 @@ public partial class MainWindow : Window
             await win.ShowDialog(this);
         };
 
-        // ERP dock cog / hints open Preferences directly on the Connections section.
+        // MassiveLAB cog / hints open Preferences directly on the Connections section.
         vm.Viewport.Erp.OpenPreferencesRequested = () => Avalonia.Threading.Dispatcher.UIThread.Post(async () =>
         {
             vm.Preferences.Erp = vm.Viewport.Erp;

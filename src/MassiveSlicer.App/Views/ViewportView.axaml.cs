@@ -1747,7 +1747,7 @@ public partial class ViewportView : UserControl
             _renderer.SlicePlaneLayerEnds = sliceEnds;
             if (slicePlane && _activeScrubNode is not null)
                 _renderer.ToolpathActiveScrubNode = _activeScrubNode;
-            // Edit Point mode: every bead midpoint, not just contour seam ends.
+            // Edit Point mode: every programmed vertex (corners + side points).
             // Slice plane viewer is pure centre-line readout — skip dense points.
             _renderer.ShowAllPathPoints =
                 vm.IsPaintEditOpen && vm.PaintPointGranularityActive && !slicePlane;
@@ -2290,6 +2290,7 @@ public partial class ViewportView : UserControl
     private void SyncTcpReadout(ViewportViewModel vm)
     {
         if (_fkController?.FlangeNode is not { } flange) return;
+        EnsureTaughtTcpOffset(vm);
 
         var fw  = flange.WorldTransform;
         var pos = fw.Row3.Xyz;
@@ -2316,13 +2317,11 @@ public partial class ViewportView : UserControl
             0, 0, 0, 1);
         var toolN   = abcMat * kukaN;
 
-        // Spindle mesh datum is a preview. While a mill path is armed, the triad must
-        // be the same point IK solves (taught TOOL_DATA — T12), or it will not ride
-        // the beads. Idle spindle preview still snaps to SpindleBitTCP.
-        bool millPlayback = _activeScrubNode is { } millNode
-                            && _toolpathByNode.TryGetValue(millNode, out var millTp)
-                            && ToolpathHasMillMoves(millTp);
-        if (!millPlayback && _currentToolNode is not null &&
+        // Spindle mill tools: TOOL_DATA XYZ in A6 is the wrist; draw the triad on
+        // SpindleBitTCP / the bit disc. T1 extruder and scanners must keep TOOL_DATA
+        // (the Tool Triad). A mill cutter snap on T1 sat the triad on the flange.
+        if (UsesSpindleCutterTriad(vm) &&
+            _currentToolNode is not null &&
             SpindleBitCylinder.TryGetCutterWorld(_currentToolNode, out var bit, out var axisAway))
         {
             tcp = bit;
@@ -2600,13 +2599,8 @@ public partial class ViewportView : UserControl
         var joints = vm.ActiveCell?.Robot.Joints;
         if (joints is null || joints.Count < 3) return;
         float totalRoll = _toolFrameRoll + _flangeDisplayRoll;
-        float cr = MathF.Cos(totalRoll);
-        float sr = MathF.Sin(totalRoll);
-        float tx = _tcpOffsetLocal.X, ty = _tcpOffsetLocal.Y, tz = _tcpOffsetLocal.Z;
-        var tcpLocal = Matrix4.CreateTranslation(
-            (tx * cr + ty * sr) / 1000f,
-            tz / 1000f,
-            (tx * sr - ty * cr) / 1000f);
+        var tcpLocal = ResolveIkTcpLocal(totalRoll);
+        var (tcpA, tcpB, tcpC) = ResolveMillToolAbc(vm);
 
         _ikSolver = new GltfNumericalIkSolver(
             _fkController.RestPoses,
@@ -2614,9 +2608,97 @@ public partial class ViewportView : UserControl
             GetLiveRobrootWorldPos(),
             tcpLocal,
             joints,
-            totalRoll);
+            totalRoll,
+            tcpA, tcpB, tcpC);
         if (vm.Robot is not null)
             vm.Robot.IkSolver = _ikSolver;
+    }
+
+    /// <summary>
+    /// If TOOL_DATA was never mounted (T1 is the cell default, so the combo
+    /// index does not change), the triad sat on the flange. Pull taught XYZ/ABC
+    /// from the cell tool. Does not rewrite JSON.
+    /// </summary>
+    void EnsureTaughtTcpOffset(ViewportViewModel vm)
+    {
+        if (_tcpOffsetLocal.LengthSquared > 1f) return;
+        var tools = vm.ActiveCell?.EffectiveTools;
+        if (tools is null || tools.Count == 0) return;
+        int k = vm.Robot?.KrlToolIndex ?? 0;
+        var t = k > 0
+            ? tools.FirstOrDefault(x => x.KrlIndex == k)
+            : null;
+        t ??= tools.FirstOrDefault(x => x.Default) ?? tools[0];
+        float mag2 = t.TcpX * t.TcpX + t.TcpY * t.TcpY + t.TcpZ * t.TcpZ;
+        if (mag2 < 1f) return;
+        _tcpOffsetLocal    = new Vector3(t.TcpX, t.TcpY, t.TcpZ);
+        _tcpOrientationABC = new Vector3(t.TcpA, t.TcpB, t.TcpC);
+    }
+
+    /// <summary>
+    /// T1 extruder / scanners / empty flange keep taught TOOL_DATA on the triad.
+    /// Spindle mill tools snap the triad to SpindleBitTCP (wrist TOOL_DATA is not the cutter).
+    /// </summary>
+    bool UsesSpindleCutterTriad(ViewportViewModel? vm = null)
+    {
+        vm ??= _vm;
+        int k = vm?.Robot?.KrlToolIndex ?? 0;
+        if (k is 1 or 4 or 5 or 6) return false;
+        if (k is 2 or 3 or 7 or 8 or 9 or 10 or 12) return true;
+        var name = vm?.MountedToolName ?? "";
+        if (name.Contains("Extruder", StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.Contains("Scanner", StringComparison.OrdinalIgnoreCase)) return false;
+        return name.Contains("Spindle", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Tool 12", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// IK target must be the same point the triad draws. On a spindle that is
+    /// SpindleBitTCP (cutter), not taught TOOL_DATA (Spindle No Bit still has
+    /// extruder CRE_HV numbers). Does not change <see cref="_tcpOffsetLocal"/>
+    /// or the mesh/triad pairing.
+    /// </summary>
+    Matrix4 ResolveIkTcpLocal(float totalRoll)
+    {
+        if (TryCutterOffsetInFlangeLocal(out var local))
+            return Matrix4.CreateTranslation(local);
+
+        float cr = MathF.Cos(totalRoll);
+        float sr = MathF.Sin(totalRoll);
+        float tx = _tcpOffsetLocal.X, ty = _tcpOffsetLocal.Y, tz = _tcpOffsetLocal.Z;
+        return Matrix4.CreateTranslation(
+            (tx * cr + ty * sr) / 1000f,
+            tz / 1000f,
+            (tx * sr - ty * cr) / 1000f);
+    }
+
+    bool TryCutterOffsetInFlangeLocal(out Vector3 localMetres)
+    {
+        localMetres = default;
+        if (_fkController?.FlangeNode is not { } flange) return false;
+        if (_currentToolNode is null) return false;
+        if (!UsesSpindleCutterTriad()) return false;
+        if (!SpindleBitCylinder.TryGetCutterWorld(_currentToolNode, out var bit, out _))
+            return false;
+        var fw = flange.WorldTransform;
+        Matrix4.Invert(fw, out var inv);
+        localMetres = Vector3.TransformPosition(bit, inv);
+        return localMetres.LengthSquared > 1e-16f;
+    }
+
+    /// <summary>
+    /// Mill IK orientation is T12 TOOL_DATA ABC, not the flange. XYZ is not used
+    /// (triad stays on SpindleBitTCP). Print / no-spindle → 0,0,0 (flange).
+    /// </summary>
+    (float a, float b, float c) ResolveMillToolAbc(ViewportViewModel vm)
+    {
+        if (!TryCutterOffsetInFlangeLocal(out _))
+            return (0f, 0f, 0f);
+        var tools = vm.ActiveCell?.EffectiveTools;
+        var t12 = tools?.FirstOrDefault(t => t.KrlIndex == 12)
+                  ?? tools?.FirstOrDefault(t => t.Name.Contains("Tool 12", StringComparison.OrdinalIgnoreCase));
+        if (t12 is null) return (0f, 0f, 0f);
+        return (t12.TcpA, t12.TcpB, t12.TcpC);
     }
 
     // -- Workspace UI session restore (edit mode / tools / layer isolation) ----
@@ -2661,6 +2743,16 @@ public partial class ViewportView : UserControl
         }
 
         vm.ApplyUiSessionViewState(session);
+
+        if (session.Lfam3WorkflowPhase is not null || session.KrlToolIndex is > 0)
+        {
+            vm.RestoreLfam3Workflow(
+                session.Lfam3WorkflowPhase,
+                session.HasPrePrintScanStep,
+                session.KrlToolIndex ?? 0,
+                session.MountedToolName,
+                session.Lfam3WorkflowPhase == "Mill" ? "Subtractive" : null);
+        }
 
         // Restore realtime-slice pause *after* toolpaths exist so BAKED matrices stay intact.
         // When pause is requested, also drop any pending realtime work from prefs load.
@@ -3354,6 +3446,7 @@ public partial class ViewportView : UserControl
         try
         {
             ApplySpindleBitCylinderCore(vm);
+            RebuildIkSolver(vm);
         }
         catch (Exception ex)
         {
@@ -5407,6 +5500,22 @@ public partial class ViewportView : UserControl
 
     private void ApplyToolpathStats(ViewportViewModel vm, Toolpath smoothedToolpath)
     {
+        if (ToolpathHasMillMoves(smoothedToolpath) && vm.SubtractiveSettings is { } mill)
+        {
+            var millRates = new ToolpathMotionRates(mill.CuttingFeedMmS, mill.TravelSpeedMmS, mill.SkimFeedMmS);
+            var stats = ToolpathStatistics.Compute(smoothedToolpath, millRates, mill.ToolDiameterMm, mill.StepdownMm);
+            vm.StatsTimeSeconds         = stats.TotalTimeSeconds;
+            vm.StatsWeightKg            = 0;
+            vm.StatsTime                = ToolpathStatistics.FormatDuration(stats.TotalTimeSeconds);
+            vm.StatsWeight              = "";
+            vm.StatsCost                = "";
+            vm.StatsLongestLayerLength  = ToolpathStatistics.FormatLayerLength(stats.LongestCutLength);
+            vm.StatsShortestLayerLength = ToolpathStatistics.FormatLayerLength(stats.ShortestCutLength);
+            vm.StatsLongestLayerTime    = ToolpathStatistics.FormatLayerTime(stats.LongestTime);
+            vm.StatsShortestLayerTime   = ToolpathStatistics.FormatLayerTime(stats.ShortestTime);
+            vm.HasToolpathStats         = true;
+            return;
+        }
         if (vm.AdditiveSettings is not { } as2) return;
         ApplyToolpathStats(vm, smoothedToolpath, as2);
     }
@@ -5648,6 +5757,7 @@ public partial class ViewportView : UserControl
                 ScheduleClearSliceStatus(vm);
             }
             vm.MarkWorkspaceDirty?.Invoke();
+            QueueShopWipeForTravels(smoothedToolpath, sourceItem);
         }
         catch (OperationCanceledException)
         {
@@ -5786,6 +5896,7 @@ public partial class ViewportView : UserControl
         StepoverMm        = (float)s.StepoverMm,
         StepdownMm        = (float)s.StepdownMm,
         FinishAllowanceMm = (float)s.FinishAllowanceMm,
+        OffsetDistanceMm  = (float)s.OffsetDistanceMm,
         FeedRateMmMin     = (float)s.FeedRateMmMin,
         PlungeFeedMmMin   = (float)s.PlungeFeedMmMin,
         RapidZMm          = (float)s.RapidZMm,
@@ -5850,6 +5961,7 @@ public partial class ViewportView : UserControl
                 System.Console.Error.WriteLine("[mill] relief produced no cuts (check height scale / footprint).");
                 return;
             }
+            StampMillMotionSpeeds(toolpath, sub);
 
             var toolpathNode = new SceneNode
             {
@@ -6007,6 +6119,7 @@ public partial class ViewportView : UserControl
                 System.Console.Error.WriteLine("[mill] multi-axis pass produced no cuts.");
                 return;
             }
+            StampMillMotionSpeeds(toolpath, sub);
 
             var toolpathNode = new SceneNode
             {
@@ -6043,6 +6156,23 @@ public partial class ViewportView : UserControl
         finally
         {
             vm.IsSlicing = false;
+        }
+    }
+
+    /// <summary>
+    /// Bake mill robot speeds onto the path so HUD / KRL / Drive do not pick up print TravelSpeed.
+    /// </summary>
+    static void StampMillMotionSpeeds(Toolpath toolpath, SubtractiveSettingsViewModel sub)
+    {
+        float travelMps = (float)(sub.TravelSpeedMmS / 1000.0);
+        foreach (var layer in toolpath.Layers)
+        {
+            for (int i = 0; i < layer.Moves.Count; i++)
+            {
+                var m = layer.Moves[i];
+                if (m.Kind == MoveKind.Travel)
+                    layer.Moves[i] = m with { TravelSpeedMps = travelMps };
+            }
         }
     }
 
@@ -6099,7 +6229,6 @@ public partial class ViewportView : UserControl
         SetSliceStatus(vm, $"{sub.SelectedOperationDisplayName}: milling…");
         try
         {
-            ApplyMillCutterTcp(vm);
             var mill = BuildMillSettings(sub);
             bool planar = sub.IsPlanarFacing || sub.IsPlanarClearing;
             NVec3? approach = null;
@@ -6128,6 +6257,7 @@ public partial class ViewportView : UserControl
             }, cancel);
 
             cancel.ThrowIfCancellationRequested();
+            StampMillMotionSpeeds(toolpath, sub);
             if (toolpath.Layers.Count == 0 || toolpath.Layers.Sum(l => l.Moves.Count) == 0)
             {
                 SetSliceStatus(vm, "Mill finished with 0 cuts — check area selection and stepover.", isError: true);
@@ -6180,6 +6310,9 @@ public partial class ViewportView : UserControl
 
             ApplyToolpathStats(vm, toolpath);
             _pendingMillArmNode = toolpathNode;
+            var (t12a, t12b, t12c) = ResolveMillToolAbc(vm);
+            if (MathF.Abs(t12a) + MathF.Abs(t12b) + MathF.Abs(t12c) > 1e-3f)
+                ConsoleLogMill($"[mill] IK orients T12 ABC=({t12a:0.##},{t12b:0.##},{t12c:0.##}) — triad stays on cutter, not flange");
             int moves = toolpath.Layers.Sum(l => l.Moves.Count);
             string scope = hasPaint
                 ? $"{vm.MillPaintedVertices:N0} painted verts"
@@ -6189,8 +6322,9 @@ public partial class ViewportView : UserControl
             {
                 var tool = sub.ResolvePlanarToolAxis();
                 var n = MassiveSlicer.Core.Models.MillPlanarOrientation.SurfaceNormalFromToolAxis(tool);
-                var (aa, bb, cc) = KukaOrientation.AbcFromMillNormal(n);
-                axisNote = $"  T12 +Z=({tool.X:0.##},{tool.Y:0.##},{tool.Z:0.##})  ABC=({aa:0.#},{bb:0.#},{cc:0.#})";
+                var (aa, bb, cc) = KukaOrientation.AbcFromMillNormal(
+                    n, 0f, (float)sub.ToolheadA, (float)sub.ToolheadB, (float)sub.ToolheadC);
+                axisNote = $"  T12 +Z=({tool.X:0.##},{tool.Y:0.##},{tool.Z:0.##})  ABC=({aa:0.#},{bb:0.#},{cc:0.#})  orient Y={sub.ToolheadB:0.#} X={sub.ToolheadC:0.#} Z={sub.ToolheadA:0.#}";
                 ConsoleLogMill($"[mill] planar axis {sub.PlanarToolAxis.Kind} tilt={sub.PlanarTiltDeg:0.#} az={sub.PlanarAzimuthDeg:0.#}{axisNote}");
             }
             SetSliceStatus(vm, $"Mill complete — {moves:N0} cuts ({sub.SelectedOperationDisplayName}, {scope}){axisNote}");
@@ -6352,6 +6486,24 @@ public partial class ViewportView : UserControl
         if (sub is null) return;
         sub.CapturePlanarFromCamera = () => ApplyCameraToolAxis(sub);
         sub.CapturePlanarFromPaint = () => ApplyPaintedToolAxis(vm, sub);
+        sub.PropertyChanged += (_, pe) =>
+        {
+            if (pe.PropertyName is not (
+                nameof(SubtractiveSettingsViewModel.ToolheadA)
+                or nameof(SubtractiveSettingsViewModel.ToolheadB)
+                or nameof(SubtractiveSettingsViewModel.ToolheadC)))
+                return;
+            if (_activeScrubNode is { } nd
+                && _toolpathByNode.TryGetValue(nd, out var tp)
+                && ToolpathHasMillMoves(tp))
+            {
+                ScrubIk(vm.ToolpathScrubIndex);
+                _validationCts?.Cancel();
+                _validationDone = false;
+                _validationNode = null;
+                ValidateToolpathAsync(nd, tp);
+            }
+        };
     }
 
     void ApplyCameraToolAxis(SubtractiveSettingsViewModel sub)
@@ -6385,38 +6537,6 @@ public partial class ViewportView : UserControl
         var face = MillPlanarOrientation.AverageSurfaceNormal(positions, normals, indices);
         sub.SetCapturedToolAxis(-face, MillPlanarAxisKind.PaintedFace);
         ConsoleLogMill($"[mill] tool axis from paint → T12 +Z ({-face.X:0.###}, {-face.Y:0.###}, {-face.Z:0.###})");
-    }
-
-    /// <summary>
-    /// MILL workflow mounts "Spindle (No Bit)" which still carries the extruder CRE_HV TCP.
-    /// Playback must use taught T12 (or the first spindle TOOL_DATA that is not the extruder).
-    /// Mesh stays; only IK + triad offset change.
-    /// </summary>
-    void ApplyMillCutterTcp(ViewportViewModel vm)
-    {
-        var tools = vm.ActiveCell?.EffectiveTools;
-        if (tools is null || tools.Count == 0) return;
-
-        var millTool = tools.FirstOrDefault(t => t.KrlIndex == 12)
-                       ?? tools.FirstOrDefault(t =>
-                           t.Name.Contains("Tool 12", StringComparison.OrdinalIgnoreCase))
-                       ?? tools.FirstOrDefault(t =>
-                           t.KrlIndex is >= 7 and <= 12
-                           && (Math.Abs(t.TcpX) + Math.Abs(t.TcpY) + Math.Abs(t.TcpZ)) > 1f);
-
-        if (millTool is null) return;
-
-        _tcpOffsetLocal = new Vector3(millTool.TcpX, millTool.TcpY, millTool.TcpZ);
-        _tcpOrientationABC = new Vector3(millTool.TcpA, millTool.TcpB, millTool.TcpC);
-        RebuildIkSolver(vm);
-        if (vm.Robot is not null)
-            SyncTcpReadout(vm);
-
-        // Don't pick the toolhead (T12 select from PRINT used to crash). TCP/IK only.
-        vm.SuppressNextToolViewportSelect = true;
-        vm.Robot?.SelectToolByKrlIndex(millTool.KrlIndex);
-        ConsoleLogMill($"[mill] TCP → T{millTool.KrlIndex} '{millTool.Name}'  "
-                       + $"({millTool.TcpX:0.#}, {millTool.TcpY:0.#}, {millTool.TcpZ:0.#})");
     }
 
     void ArmMillPlayback(ViewportViewModel vm, SceneNode toolpathNode, Toolpath toolpath)
@@ -6455,6 +6575,34 @@ public partial class ViewportView : UserControl
     private DispatcherTimer? _realtimeSliceTimer;
     private bool _realtimeSlicePending;   // need another pass after current/cancelled slice
     private CancellationTokenSource? _sliceCts; // cancels ComputeToolpathAsync
+    /// <summary>Mesh we already auto-set shop wipe for (once per file / source item).</summary>
+    private object? _travelWipeAppliedFor;
+
+    /// <summary>
+    /// After a successful print slice: if the path has travel hops, set Wipe to
+    /// Same-Direction / 35 mm / 5 mm / 600 mm/s. Posted so we do not cancel this
+    /// finishing slice. Once per source mesh so a later Retrace edit is kept.
+    /// </summary>
+    void QueueShopWipeForTravels(Toolpath toolpath, object? sourceKey)
+    {
+        if (sourceKey is null) return;
+        if (ReferenceEquals(_travelWipeAppliedFor, sourceKey)) return;
+        if (!toolpath.HasTravelMoves()) return;
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (DataContext is not ViewportViewModel live) return;
+            if (live.AdditiveSettings is not { } add) return;
+            if (ReferenceEquals(_travelWipeAppliedFor, sourceKey)) return;
+            if (!add.ApplyShopWipeForTravels())
+            {
+                _travelWipeAppliedFor = sourceKey;
+                return;
+            }
+            _travelWipeAppliedFor = sourceKey;
+            // Wipe is now in RealtimeSliceProps; PropertyChanged schedules the rebuild.
+        }, DispatcherPriority.Background);
+    }
 
     private static readonly HashSet<string> RealtimeSliceProps =
     [
@@ -6530,6 +6678,12 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.PatternScope),
         nameof(AdditiveSettingsViewModel.WaveAmplitude),
         nameof(AdditiveSettingsViewModel.WaveWavelength),
+        nameof(AdditiveSettingsViewModel.ZHopMm),
+        nameof(AdditiveSettingsViewModel.WipeModeDisplay),
+        nameof(AdditiveSettingsViewModel.WipeLengthMm),
+        nameof(AdditiveSettingsViewModel.WipeRampMm),
+        nameof(AdditiveSettingsViewModel.WipeSpeed),
+        nameof(AdditiveSettingsViewModel.WipeSkipShortTravels),
     ];
 
     private static readonly HashSet<string> RealtimeMillProps =
@@ -6546,6 +6700,7 @@ public partial class ViewportView : UserControl
         nameof(SubtractiveSettingsViewModel.KeepToolWithinSurface),
         nameof(SubtractiveSettingsViewModel.EnableAntiGouging),
         nameof(SubtractiveSettingsViewModel.NumberOfDepthCuts),
+        nameof(SubtractiveSettingsViewModel.OffsetDistanceMm),
         nameof(SubtractiveSettingsViewModel.ApproachClearanceMm),
         nameof(SubtractiveSettingsViewModel.RetractHeightMm),
         nameof(SubtractiveSettingsViewModel.RapidZMm),
@@ -6989,6 +7144,7 @@ public partial class ViewportView : UserControl
                 ScheduleClearSliceStatus(vm);
             }
             vm.MarkWorkspaceDirty?.Invoke();
+            QueueShopWipeForTravels(smoothedToolpath, parentItem);
         }
         catch (OperationCanceledException)
         {
@@ -11412,9 +11568,9 @@ public partial class ViewportView : UserControl
                             // continue (not break): mixed contours may start with a
                             // filtered bead type then contain allowed ones.
                             if (!PaintPickAllowed(mv, vm)) continue;
-                            if (!TryProjectMoveMid(mv, origin, wt, viewProj, vpW, vpH,
-                                    out float sx, out float sy)) continue;
-                            if (screenInside(sx, sy)) hit = true;
+                            if (TryProjectMoveVertex(mv, origin, wt, viewProj, vpW, vpH,
+                                    screenInside))
+                                hit = true;
                         }
                         if (!hit) continue;
 
@@ -11425,16 +11581,15 @@ public partial class ViewportView : UserControl
                 }
                 else
                 {
-                    // No contours / point mode: every extrude mid inside → local section or bead.
+                    // No contours / point mode: every extrude vertex inside → local section or bead.
                     for (int i = i0; i < i1; i++)
                     {
                         var mv = moves[i];
                         if (mv.Kind != MoveKind.Extrude) continue;
                         if (mv.IsLayerStitch || mv.IsLayerChange) continue;
                         if (!PaintPickAllowed(mv, vm)) continue;
-                        if (!TryProjectMoveMid(mv, origin, wt, viewProj, vpW, vpH,
-                                out float sx, out float sy)) continue;
-                        if (!screenInside(sx, sy)) continue;
+                        if (!TryProjectMoveVertex(mv, origin, wt, viewProj, vpW, vpH,
+                                screenInside)) continue;
 
                         ContourSpan span = pointMode
                             ? new ContourSpan(i, 1, false, -1)
@@ -11473,19 +11628,21 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
-    private bool TryProjectMoveMid(
+    private bool TryProjectMoveVertex(
         ToolpathMove mv, System.Numerics.Vector3 origin, TkMatrix4 wt,
-        TkMatrix4 viewProj, float vpW, float vpH, out float sx, out float sy)
+        TkMatrix4 viewProj, float vpW, float vpH, Func<float, float, bool> screenInside)
     {
-        sx = sy = 0;
-        var mid = (mv.From + mv.To) * 0.5f;
-        var world = TransformPoint(new TkVector3(
-            mid.X - origin.X, mid.Y - origin.Y, mid.Z - origin.Z), wt);
-        var sp = _renderer.ProjectToScreen(
-            new Vector3(world.X, world.Y, world.Z), viewProj, vpW, vpH);
-        if (float.IsNaN(sp.X)) return false;
-        sx = sp.X; sy = sp.Y;
-        return true;
+        return ProjectInside(mv.From) || ProjectInside(mv.To);
+
+        bool ProjectInside(System.Numerics.Vector3 p)
+        {
+            var world = TransformPoint(new TkVector3(
+                p.X - origin.X, p.Y - origin.Y, p.Z - origin.Z), wt);
+            var sp = _renderer.ProjectToScreen(
+                new Vector3(world.X, world.Y, world.Z), viewProj, vpW, vpH);
+            if (float.IsNaN(sp.X)) return false;
+            return screenInside(sp.X, sp.Y);
+        }
     }
 
     /// <summary>Ray-cast point-in-polygon (screen space).</summary>
@@ -12031,9 +12188,8 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// World highlight for a pick. In point mode (or a single-bead span) returns one
-    /// midpoint so the overlay draws a sphere — never a From→To segment that looks
-    /// like a line selection.
+    /// World highlight for a pick. In point mode returns programmed vertices
+    /// (From of first + To of each move) so corners light up, not bead midpoints.
     /// </summary>
     private List<TkVector3> SpanWorldHighlight(
         (ToolpathLayer Layer, ContourSpan Span, System.Numerics.Vector3 Origin, TkMatrix4 Wt) pick,
@@ -12070,19 +12226,15 @@ public partial class ViewportView : UserControl
     internal static bool SingleMoveRendersAsLine(ToolpathMove mv, float beadWidthMm) =>
         (mv.To - mv.From).Length() > MathF.Max(beadWidthMm, 1f) * 1.5f;
 
-    /// <summary>One world-space midpoint per extrude bead in the span (point picks).</summary>
+    /// <summary>Programmed vertices of the span (From of first + To of each extrude).</summary>
     private List<TkVector3> SpanWorldMidpoints(
         (ToolpathLayer Layer, ContourSpan Span, System.Numerics.Vector3 Origin, TkMatrix4 Wt) pick)
     {
         var pts = new List<TkVector3>();
-        int end = Math.Min(pick.Layer.Moves.Count, pick.Span.Start + Math.Max(0, pick.Span.Count));
-        for (int i = pick.Span.Start; i < end; i++)
+        foreach (var v in Core.Slicing.ToolpathEditPoints.VerticesOfSpan(pick.Layer, pick.Span))
         {
-            var mv = pick.Layer.Moves[i];
-            if (mv.Kind != MoveKind.Extrude) continue;
-            var mid = (mv.From + mv.To) * 0.5f;
             var w = TransformPoint(new TkVector3(
-                mid.X - pick.Origin.X, mid.Y - pick.Origin.Y, mid.Z - pick.Origin.Z), pick.Wt);
+                v.X - pick.Origin.X, v.Y - pick.Origin.Y, v.Z - pick.Origin.Z), pick.Wt);
             pts.Add(new TkVector3(w.X, w.Y, w.Z));
         }
         return pts;
@@ -14049,7 +14201,10 @@ public partial class ViewportView : UserControl
         bool millScrub = _toolpathByNode.TryGetValue(scrubNode, out var tpOri)
                          && ToolpathHasMillMoves(tpOri);
         var targetRot = millScrub
-            ? solver.TargetRotFromMillNormal(worldNormal)
+            ? solver.TargetRotFromMillNormal(worldNormal, 0f,
+                (float)(vm.SubtractiveSettings?.ToolheadA ?? 0),
+                (float)(vm.SubtractiveSettings?.ToolheadB ?? 0),
+                (float)(vm.SubtractiveSettings?.ToolheadC ?? 0))
             : vm.AdditiveSettings is { } addSettings
                 ? solver.TargetRotFromGlobalOrientation(worldNormal,
                     (float)addSettings.ToolheadA,
@@ -14169,8 +14324,11 @@ public partial class ViewportView : UserControl
         var cts = new CancellationTokenSource();
         _validationCts = cts;
 
+        var vm = _vm;
+        if (vm is not null && ToolpathHasMillMoves(toolpath))
+            RebuildIkSolver(vm);
+
         var solver      = _ikSolver;
-        var vm          = _vm;
         var addSettings = vm?.AdditiveSettings;
         var robot       = vm?.Robot;
         if (solver is null || robot is null) return;
@@ -14184,6 +14342,9 @@ public partial class ViewportView : UserControl
         float offA    = addSettings is not null ? (float)addSettings.ToolheadA : 0f;
         float offB    = addSettings is not null ? (float)addSettings.ToolheadB : 0f;
         float offC    = addSettings is not null ? (float)addSettings.ToolheadC : 0f;
+        float millOffA = (float)(vm?.SubtractiveSettings?.ToolheadA ?? 0);
+        float millOffB = (float)(vm?.SubtractiveSettings?.ToolheadB ?? 0);
+        float millOffC = (float)(vm?.SubtractiveSettings?.ToolheadC ?? 0);
         bool  hasOff  = addSettings is not null;
         var   seed    = new float[]
         {
@@ -14295,7 +14456,7 @@ public partial class ViewportView : UserControl
             for (int i = 0; i < total; i++)
             {
                 targetRots[i] = millPath
-                    ? solver.TargetRotFromMillNormal(normals[i])
+                    ? solver.TargetRotFromMillNormal(normals[i], 0f, millOffA, millOffB, millOffC)
                     : solver.TargetRotFromGlobalOrientation(normals[i], offA, offB, offC);
             }
 
@@ -14360,6 +14521,12 @@ public partial class ViewportView : UserControl
             float printMmS       = addSettings is not null ? (float)addSettings.PrintSpeed  : 60f;
             float travelMmS      = addSettings is not null ? (float)addSettings.TravelSpeed : 150f;
             float wipeMmS        = addSettings is not null ? (float)addSettings.WipeSpeed   : 120f;
+            if (ToolpathHasMillMoves(toolpath) && vm?.SubtractiveSettings is { } millRates)
+            {
+                printMmS  = (float)millRates.CuttingFeedMmS;
+                travelMmS = (float)millRates.TravelSpeedMmS;
+                wipeMmS   = (float)millRates.SkimFeedMmS;
+            }
             float apoCvelFrac    = addSettings is not null ? (float)(addSettings.ApoCvel / 100.0) : 0.5f;
             var (moveTimes, peakVelocities) = BuildMoveProfile(toolpath, printMmS, travelMmS, wipeMmS, apoCvelFrac);
 
@@ -14413,7 +14580,7 @@ public partial class ViewportView : UserControl
                                 foreach (int ti in new[] { s0, (s0 + s1) / 2, s1 })
                                 {
                                     var rot = millPath
-                                        ? solver.TargetRotFromMillNormal(normals[ti], y)
+                                        ? solver.TargetRotFromMillNormal(normals[ti], y, millOffA, millOffB, millOffC)
                                         : solver.TargetRotFromGlobalOrientation(
                                             normals[ti], offA, offB, offC + y);
                                     var sol = solver.Solve(targets[ti],
@@ -14443,7 +14610,7 @@ public partial class ViewportView : UserControl
                             for (int i = rIn; i <= rOut; i++)
                             {
                                 var rot = millPath
-                                    ? solver.TargetRotFromMillNormal(normals[i], yawByMove[i])
+                                    ? solver.TargetRotFromMillNormal(normals[i], yawByMove[i], millOffA, millOffB, millOffC)
                                     : solver.TargetRotFromGlobalOrientation(
                                         normals[i], offA, offB, offC + yawByMove[i]);
                                 var sol = solver.Solve(targets[i], chunkSeed, rot, maxIterations: 40);
@@ -14855,7 +15022,7 @@ public partial class ViewportView : UserControl
         {
             if (moves[i].IsWipe)
                 vProg[i] = wipeMmS;
-            else if (moves[i].Kind == MoveKind.Extrude)
+            else if (moves[i].Kind == MoveKind.Extrude || moves[i].Kind == MoveKind.Mill)
             {
                 float speed = printMmS * Math.Max(moves[i].PrintSpeedScale, 1e-6f);
                 if (moves[i].IsResumeRamp)
@@ -14863,7 +15030,9 @@ public partial class ViewportView : UserControl
                 vProg[i] = speed;
             }
             else
-                vProg[i] = travelMmS;
+                vProg[i] = moves[i].TravelSpeedMps is { } tsm && tsm > 1e-8f
+                    ? tsm * 1000f
+                    : travelMmS;
             dist[i]  = NVec3.Distance(moves[i].From, moves[i].To);
         }
 
@@ -17390,26 +17559,53 @@ public partial class ViewportView : UserControl
 
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
+        bool millJob = toolpath.Layers.Any(l => l.Moves.Any(m => m.Kind == MoveKind.Mill));
+        var mill = vm.SubtractiveSettings;
+
+        var wt = node.WorldTransform;
+        var sysWt = new System.Numerics.Matrix4x4(
+            wt.M11, wt.M12, wt.M13, wt.M14,
+            wt.M21, wt.M22, wt.M23, wt.M24,
+            wt.M31, wt.M32, wt.M33, wt.M34,
+            wt.M41, wt.M42, wt.M43, wt.M44);
+        _toolpathOriginByNode.TryGetValue(node, out var origin);
+        int toolNo = vm.Robot is { KrlToolIndex: > 0 } rTool ? rTool.KrlToolIndex : settings.ToolDataIndex;
+        int baseNo = vm.Robot is { KrlBaseIndex: > 0 } rBase ? rBase.KrlBaseIndex : settings.BaseDataIndex;
+        if (millJob && toolNo <= 1)
+            toolNo = 12;
+
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
         var mvm = topLevel?.DataContext as MainWindowViewModel;
 
         var exportSettings = new MassiveDriveExportSettings
         {
-            Name = string.IsNullOrWhiteSpace(node.Name) ? "print-job" : node.Name,
+            Name = string.IsNullOrWhiteSpace(node.Name) ? (millJob ? "mill-job" : "print-job") : node.Name,
             CellId = target.CellId ?? cell.MassiveDriveCellId ?? "lfam3",
-            Tool = settings.ToolDataIndex,
-            Base = settings.BaseDataIndex,
-            PrintSpeedMmS = (float)settings.PrintSpeed,
-            TravelSpeedMmS = (float)settings.TravelSpeed,
-            ReverseMs = 200f,
-            ReversePercent = 40f,
-            TravelReverse = true,
-            // Same toolhead offsets as KRL export — ABC must match viewport / KukaAbc
-            ToolheadOffsetA = (float)settings.ToolheadA,
-            ToolheadOffsetB = (float)settings.ToolheadB,
-            ToolheadOffsetC = (float)settings.ToolheadC,
+            Tool = toolNo,
+            Base = baseNo,
+            PrintSpeedMmS = millJob && mill is not null ? (float)mill.CuttingFeedMmS : (float)settings.PrintSpeed,
+            TravelSpeedMmS = millJob && mill is not null ? (float)mill.TravelSpeedMmS : (float)settings.TravelSpeed,
+            ReverseMs = millJob ? 0f : 200f,
+            ReversePercent = millJob ? 0f : 40f,
+            TravelReverse = !millJob,
+            MillOrientation = millJob,
+            AbsolutePath = true,
+            ApproachClearanceMm = millJob && mill is not null ? (float)mill.ApproachClearanceMm : 80f,
+            SpindleRpm = millJob && mill is not null ? (float)mill.SpindleRpm : 0f,
+            ToolheadOffsetA = millJob && mill is not null ? (float)mill.ToolheadA : (float)settings.ToolheadA,
+            ToolheadOffsetB = millJob && mill is not null ? (float)mill.ToolheadB : (float)settings.ToolheadB,
+            ToolheadOffsetC = millJob && mill is not null ? (float)mill.ToolheadC : (float)settings.ToolheadC,
+            NodeWorldTransform = sysWt,
+            NodeOrigin = new System.Numerics.Vector3(origin.X, origin.Y, origin.Z),
+            RobrootWorldPos = new System.Numerics.Vector3(
+                cell.Robot.WorldPosition.X, cell.Robot.WorldPosition.Y, cell.Robot.WorldPosition.Z),
+            BaseDataOffset = new System.Numerics.Vector3(
+                cell.Bed.BaseData.X, cell.Bed.BaseData.Y, cell.Bed.BaseData.Z),
+            SliceBedWorldZ = _renderer.BedZ,
+            BedOrigin = new System.Numerics.Vector3(
+                cell.Bed.Origin.X, cell.Bed.Origin.Y, cell.Bed.Origin.Z),
             WorkspacePath = mvm?.AppPreferences.LastWorkspacePath,
-            SourceNote = $"cell={cell.Name}",
+            SourceNote = $"cell={cell.Name} T{toolNo} B{baseNo} BASE",
         };
 
         Dictionary<string, object?> package;
@@ -17426,7 +17622,7 @@ public partial class ViewportView : UserControl
 
         var segCount = (package["segments"] as System.Collections.ICollection)?.Count ?? 0;
         mvm?.Console.Log(
-            $"[drive] Sending \"{exportSettings.Name}\" ({segCount} segments) → {target.Url} …");
+            $"[drive] Sending \"{exportSettings.Name}\" ({segCount} segs) T{exportSettings.Tool} B{exportSettings.Base} BASE → {target.Url} …");
 
         try
         {
@@ -17442,6 +17638,34 @@ public partial class ViewportView : UserControl
                 SetSliceStatus(vm,
                     $"⚠ MassiveDRIVE unreachable at {target.Url} — is serve running?",
                     isError: true);
+                return;
+            }
+
+            if (millJob && mill is not null && mill.SpindleRpm <= 0)
+            {
+                mvm?.Console.LogError("[drive] Mill send needs Spindle RPM > 0 (MILL TOOLPATHING).");
+                SetSliceStatus(vm, "⚠ Set mill Spindle RPM before Send to MassiveDRIVE.", isError: true);
+                return;
+            }
+
+            if (millJob)
+            {
+                using var up = await client.UploadPackageAsync(package);
+                var packageId = up.RootElement.TryGetProperty("package_id", out var pid)
+                    ? pid.GetString()
+                    : null;
+                if (string.IsNullOrEmpty(packageId))
+                    throw new MassiveDriveClientException(0, "upload did not return package_id: " + up.RootElement.GetRawText());
+                mvm?.Console.Log(
+                    $"[drive] Uploaded mill package {packageId} ({segCount} segs, T{exportSettings.Tool} B{exportSettings.Base}, {exportSettings.SpindleRpm:0} rpm). Not started — Run from Drive Live run.");
+                if (mvm is not null)
+                {
+                    mvm.StatusBar.OperationFeedback =
+                        $"✓ Mill on MassiveDRIVE ({cell.Name}): {packageId} — Run from Jobs (no auto-start)";
+                }
+                SetSliceStatus(vm,
+                    $"✓ Mill package {packageId} on Drive. Jog to start, then Jobs → Run. Spindle {exportSettings.SpindleRpm:0} rpm.",
+                    isError: false);
                 return;
             }
 
@@ -17897,8 +18121,11 @@ public partial class ViewportView : UserControl
                 SpindleRpm       = (float)sub.SpindleRpm,
                 CuttingFeedMmMin = (float)sub.FeedRateMmMin,
                 PlungeFeedMmMin  = (float)sub.PlungeFeedMmMin,
-                TravelSpeedMps   = (float)(settings.TravelSpeed / 1000.0),
+                TravelSpeedMps   = (float)(sub.TravelSpeedMmS / 1000.0),
                 ApproachZMm      = (float)sub.RapidZMm,
+                ToolheadOffsetA  = (float)sub.ToolheadA,
+                ToolheadOffsetB  = (float)sub.ToolheadB,
+                ToolheadOffsetC  = (float)sub.ToolheadC,
                 HomePosition     = settings.SelectedHomeAngles,
                 HomeE1Mm         = cell.RobotRail is not null && vm.Robot is { } millRobot
                                        ? (float)millRobot.E1
@@ -17993,7 +18220,11 @@ public partial class ViewportView : UserControl
             ExtrusionResumeWaitSec  = (float)settings.ExtrusionResumeWaitSec,
             SsPreTravelWaitSec      = (float)settings.SsPreTravelWaitSec,
             SsResumePrimePercent    = (float)settings.SsResumePrimePercent,
-            DigitalStartStopEnabled = settings.DigitalStartStopEnabled,
+            RobotModeEnabled        = settings.RobotModeEnabled,
+            TravelStartStopEnabled  = settings.TravelStartStopEnabled,
+            DigitalStartStopEnabled = false,
+            CodeEditorInject        = settings.CodeEditorInject.Clone(),
+            ExtruderAirEnabled      = settings.ExtruderAirEnabled,
             SlicerVersion           = MassiveSlicer.App.BuildInfo.Label,
             MaterialPresetName      = selectedPreset?.Name,
             MaterialType            = selectedPreset?.MaterialType,
