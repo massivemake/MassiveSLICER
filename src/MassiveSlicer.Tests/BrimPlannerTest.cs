@@ -151,6 +151,44 @@ public class BrimPlannerTest
         Assert.True(maxX > 160f + Bead * 0.4f, $"brim maxX {maxX} does not enclose the protrusion");
     }
 
+    [Fact]
+    public void Loops_are_a_full_bead_apart_with_no_overlap()
+    {
+        // A brim is not a wall. Walls are laid overlapping so they weld into a solid skin; brim
+        // loops want to sit edge to edge — a full bead of pitch, zero overlap — so the brim peels
+        // as one sheet and does not build height against the part.
+        //
+        // Loop k's centreline is (k - 1/2) beads outside the FOOTPRINT edge, and the footprint is
+        // already the toolpath dilated by half a bead. So consecutive loops are exactly 1.0 bead
+        // apart, and loop 1 sits exactly 1.0 bead from the part's own outermost bead centreline.
+        var tp = SquareToolpath();
+        BrimPlanner.Apply(tp, Settings(loops: 3));
+        var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
+
+        // Measure the flat right side as a SEGMENT, not by vertices: simplification collapses
+        // each straight side to one corner-to-corner segment, so there are no vertices partway
+        // along it. Round joins also mean a distance-from-centre reading varies around a corner,
+        // which is why the flat side is the only unambiguous place to read the offset.
+        //
+        // Footprint spans -5..105, so loop k's right side sits at x = 105 + (k - 1/2) * bead:
+        // 110, 120, 130 — a full bead of pitch. Overlap would pull these closer together.
+        var flat = brim.Where(m => MathF.Abs(m.From.X - m.To.X) < 0.5f && m.From.X > 100f)
+                       .Select(m => MathF.Round(m.From.X, 1))
+                       .Distinct()
+                       .OrderBy(x => x)
+                       .ToList();
+        Assert.Equal(3, flat.Count);
+        // Tolerance is the ring simplification (0.3mm), not float noise — a ring is allowed to
+        // sit a fraction off its ideal offset, but nowhere near half a bead off.
+        for (int i = 1; i < flat.Count; i++)
+            Assert.True(MathF.Abs((flat[i] - flat[i - 1]) - Bead) < 0.5f,
+                $"pitch between loops is {flat[i] - flat[i - 1]:F2}mm, expected {Bead}mm — overlap?");
+        // The innermost loop clears the part's own bead (centreline x=100) by a FULL bead, not
+        // the half-bead a wall-style overlap would give.
+        Assert.True(MathF.Abs(flat[0] - (100f + Bead)) < 0.5f,
+            $"first loop sits at x={flat[0]:F2}, expected {100f + Bead} — one full bead clear");
+    }
+
     // ── Direction ────────────────────────────────────────────────────────────────
 
     [Fact]
