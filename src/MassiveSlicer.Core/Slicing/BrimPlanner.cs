@@ -151,6 +151,7 @@ public static class BrimPlanner
 
         layer0.Moves.InsertRange(0, brim);
     }
+
     /// <summary>Closed mesh contours as a Clipper region. Open contours enclose nothing.</summary>
     private static PathsD MeshRegion(IReadOnlyList<IReadOnlyList<Vector2>>? contours)
     {
@@ -161,9 +162,17 @@ public static class BrimPlanner
             if (c.Count < 3) continue;
             var path = new PathD(c.Count);
             foreach (var v in c) path.Add(new PointD(v.X, v.Y));
+            // A contour that encloses nothing (a hairline or a doubled-back sliver) contributes
+            // no region and would only add noise to the union.
+            if (Math.Abs(Clipper.Area(path)) < 1e-6) continue;
             paths.Add(path);
         }
-        return paths.Count == 0 ? paths : Clipper.Union(paths, FillRule.NonZero);
+        if (paths.Count == 0) return paths;
+        // Union with EvenOdd, not NonZero: the raw contours arrive with whatever winding the mesh
+        // gave them, and EvenOdd resolves nesting into outer/hole by containment instead of
+        // trusting that direction. A bore wound the same way as its outer wall would otherwise
+        // fill in and lose its inside brim.
+        return Clipper.Union(paths, FillRule.EvenOdd);
     }
 
     /// <summary>Flips a ring's winding.</summary>
