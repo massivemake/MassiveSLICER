@@ -1375,6 +1375,35 @@
                                                IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
                                                Text="Thinner layers on shallow surfaces. Extrusion follows the real thickness, so a thin layer is commanded less material."/>
 
+                                    <StackPanel IsVisible="{Binding Additive.ShowAdaptiveControls}" Spacing="4" Margin="0,4,0,0">
+                                        <Grid Margin="0,0,0,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Fine" Classes="LabelMuted" FontSize="10"
+                                                       VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                            <Slider    Grid.Column="1" Minimum="0" Maximum="1" TickFrequency="0.01"
+                                                       Value="{Binding Additive.AdaptiveQuality, Mode=TwoWay}"
+                                                       VerticalAlignment="Center"
+                                                       ToolTip.Tip="0 = finest detail (thinnest layers on slopes), 1 = fastest (thickest layers allowed)"/>
+                                            <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
+                                                       VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                        </Grid>
+
+                                        <Grid Margin="0,0,0,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="80"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Min feature area (mm²)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="10"/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                       Text="{Binding Additive.AdaptiveMinFaceAreaMm2, Mode=TwoWay}"
+                                                       ToolTip.Tip="Ignores triangles smaller than this when choosing a layer&apos;s thickness. Adaptive layer height only.&#x0a;&#x0a;Thickness is set by the thinnest demand of ANY single triangle the layer crosses, and every triangle counts the same — so one 0.01 mm&#xb2; sliver left over from tessellation can outvote the whole cross-section and force a thin layer nothing needed. A triangle smaller than a bead describes detail the machine cannot print, so it gets no vote.&#x0a;&#x0a;Nothing is deleted, filtered out of the mesh, or smoothed over. The small face is still sliced and still printed exactly as modelled — it just does not get to pick the thickness.&#x0a;&#x0a;0 = one bead footprint (bead width &#xd7; min layer height). Negative = off, every triangle votes. If no triangle on a layer clears the threshold, the gate stands down for that layer rather than letting it default to full thickness.&#x0a;&#x0a;Nothing to do with ramping between layers — that is Max change / layer."/>
+                                        </Grid>
+                                    </StackPanel>
+
                                     <!-- Min layer height is the floor for EVERY thickness rule below, not
                                          just the adaptive one — support-driven reads it as its floor too.
                                          It is deliberately outside the adaptive block: when it lived inside,
@@ -1409,34 +1438,6 @@
                                         </Grid>
                                     </StackPanel>
 
-                                    <StackPanel IsVisible="{Binding Additive.ShowAdaptiveControls}" Spacing="4" Margin="0,4,0,0">
-                                        <Grid Margin="0,0,0,4">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="Fine" Classes="LabelMuted" FontSize="10"
-                                                       VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                            <Slider    Grid.Column="1" Minimum="0" Maximum="1" TickFrequency="0.01"
-                                                       Value="{Binding Additive.AdaptiveQuality, Mode=TwoWay}"
-                                                       VerticalAlignment="Center"
-                                                       ToolTip.Tip="0 = finest detail (thinnest layers on slopes), 1 = fastest (thickest layers allowed)"/>
-                                            <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
-                                                       VerticalAlignment="Center" Margin="4,0,0,0"/>
-                                        </Grid>
-
-                                        <Grid Margin="0,0,0,4">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="80"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="Min feature area (mm²)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="10"/>
-                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
-                                                       Text="{Binding Additive.AdaptiveMinFaceAreaMm2, Mode=TwoWay}"
-                                                       ToolTip.Tip="Smallest triangle allowed to dictate a layer's thickness. 0 = one bead footprint (bead width × min layer height); negative = off, every triangle votes.&#x0a;&#x0a;Thickness is the thinnest demand of any single triangle crossing that height, unweighted — so one sliver can outvote the whole cross-section. A triangle smaller than a bead describes a feature the machine cannot print, so it has no business setting thickness. If nothing clears the threshold on a layer, the gate stands down rather than jumping to full thickness."/>
-                                        </Grid>
-                                    </StackPanel>
 
                                     <!-- Support-driven thinning. Deliberately OUTSIDE the adaptive block:
                                          it refines whatever ladder came out, uniform or adaptive, so it
@@ -1469,7 +1470,7 @@
                                             <TextBlock Grid.Column="0" Text="Bridge tolerance (mm)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="10"/>
                                             <TextBox   Grid.Column="1" Classes="PanelTextBox"
                                                        Text="{Binding Additive.SupportBridgeToleranceMm, Mode=TwoWay}"
-                                                       ToolTip.Tip="How long a continuous off-target stretch may be before the layer is thinned. 0 = 2 × bead width.&#x0a;&#x0a;A bead spans a short gap, so a speck of unsupported path is not worth thinning a whole layer for. This is an absolute LENGTH, not a share of the layer — 1 % of a long layer and 1 % of a short one are not the same defect. Raising it past ~2 × bead width starts excusing stretches long enough to stack vertically, which is the pattern that actually fails."/>
+                                                       ToolTip.Tip="How far a bead may run unsupported before the layer is thinned. Support-driven layer height only. 0 = 2 &#xd7; bead width.&#x0a;&#x0a;Support-driven measures how far each bead sits off the edge of the one below it. A brief off-target speck does not matter — a bead bridges a short gap on its own — so this is how long a CONTINUOUS unsupported run is allowed to get before the layer is worth thinning.&#x0a;&#x0a;An absolute LENGTH, not a share of the layer: 1 % of a long layer and 1 % of a short one are not the same defect. Past roughly 2 &#xd7; bead width you start excusing runs long enough to stack layer on layer, which is the pattern that actually collapses.&#x0a;&#x0a;It decides WHETHER a layer gets thinned, not how gradually. Ramping is Max change / layer."/>
                                         </Grid>
                                     </StackPanel>
                                 </StackPanel>
