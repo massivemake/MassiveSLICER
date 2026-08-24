@@ -44,4 +44,20 @@ public class BrimDirectionSettingTest
         Assert.Equal("Outside", new AppPreferences().BrimDirectionDisplay);
         Assert.Equal(BrimDirection.Outside, new SliceSettings().BrimDirection);
     }
+
+    [Fact]
+    public void Every_direction_has_a_display_string_that_is_actually_in_the_dropdown()
+    {
+        // The bug this pins: the console command hard-coded "Outward"/"Inward". When the options
+        // were renamed to Outside/Inside those strings matched no option, so setting the direction
+        // from the console left the dropdown rendering BLANK while the slicer quietly fell back to
+        // Outside. Anything that sets a direction must produce a string the UI can show.
+        var vm = new AdditiveSettingsViewModel();
+        foreach (BrimDirection d in Enum.GetValues<BrimDirection>())
+        {
+            string display = AdditiveSettingsViewModel.BrimDirectionDisplayFor(d);
+            Assert.Contains(display, vm.BrimDirectionOptions);
+            Assert.Equal(d, AdditiveSettingsViewModel.ParseBrimDirection(display));
+        }
+    }
 }

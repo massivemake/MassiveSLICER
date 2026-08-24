@@ -337,9 +337,9 @@ public sealed class ConsoleCommandRegistry
                     case "off":  add.BrimEnabled = false; break;
                     // Direction words rather than the display strings, so the command reads the
                     // way you'd say it. "outward"/"inward" spelled out are accepted too.
-                    case "out" or "outward": add.BrimDirectionDisplay = "Outward"; break;
-                    case "in"  or "inward":  add.BrimDirectionDisplay = "Inward";  break;
-                    case "both":             add.BrimDirectionDisplay = "Both";    break;
+                    case "out" or "outward": add.BrimDirectionDisplay = ViewModels.AdditiveSettingsViewModel.BrimDirectionDisplayFor(BrimDirection.Outside); break;
+                    case "in"  or "inward":  add.BrimDirectionDisplay = ViewModels.AdditiveSettingsViewModel.BrimDirectionDisplayFor(BrimDirection.Inside);  break;
+                    case "both":             add.BrimDirectionDisplay = ViewModels.AdditiveSettingsViewModel.BrimDirectionDisplayFor(BrimDirection.Both);    break;
                     case "loops":
                         if (parts.Length < 2 || !int.TryParse(parts[1], out int n))
                         { ctx.LogError("[brim] usage: brim loops <n>"); return; }

@@ -1083,6 +1083,20 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// The canonical display string for a direction — always one of
+    /// <see cref="BrimDirectionOptions"/>. Anything setting the direction programmatically must go
+    /// through here: the console command hard-coded its own strings, they went stale when the
+    /// options were renamed, and the dropdown silently rendered BLANK because the stored value
+    /// matched no option.
+    /// </summary>
+    public static string BrimDirectionDisplayFor(BrimDirection d) => d switch
+    {
+        BrimDirection.Inside => "Inside",
+        BrimDirection.Both   => "Both",
+        _                    => "Outside",
+    };
+
+    /// <summary>
     /// Maps the display string onto the slicing enum. Anything unrecognised is Outside, so a
     /// prefs file or preset written before this setting existed keeps the old behaviour.
     /// "Outward"/"Inward" are accepted as the earlier wording.

@@ -218,56 +218,72 @@ public class BrimPlannerTest
         Assert.Equal(1, crossings);
     }
 
-    [Fact]
-    public void An_open_path_has_two_sides_and_inside_takes_the_other_one()
+    /// <summary>A 200x200 thin closed ring — what a wall's MESH cross-section looks like.</summary>
+    private static IReadOnlyList<IReadOnlyList<Vector2>> RingMeshContours()
     {
-        // The case that motivated the side rule. An open wall encloses nothing, so a
-        // hole-based inward brim produced NOTHING on one — which is what happened on a real
-        // capital and a real bendy wall. Offsetting an open path yields one boundary running
-        // down BOTH sides, so "inside" is simply the stretch on the far side.
-        var outside = SolidLineToolpath();
-        BrimPlanner.Apply(outside, Settings(loops: 2, direction: BrimDirection.Outside));
-        var o = BrimMoves(outside, 1).Where(m => m.Kind == MoveKind.Extrude).ToList();
-
-        var inside = SolidLineToolpath();
-        BrimPlanner.Apply(inside, Settings(loops: 2, direction: BrimDirection.Inside));
-        var i = BrimMoves(inside, 1).Where(m => m.Kind == MoveKind.Extrude).ToList();
-
-        Assert.NotEmpty(o);
-        Assert.NotEmpty(i);
-        // The bead runs along y=50, so the two sides separate cleanly above and below it.
-        float oMid = o.Average(m => m.To.Y), iMid = i.Average(m => m.To.Y);
-        Assert.True(Math.Abs(oMid - iMid) > Bead,
-            $"outside (avg y {oMid:F1}) and inside (avg y {iMid:F1}) did not land on opposite sides");
+        List<Vector2> Square(float lo, float hi) =>
+            [new(lo, lo), new(hi, lo), new(hi, hi), new(lo, hi)];
+        // outer face CCW, inner face CW so it reads as a ring with a hollow.
+        var inner = Square(30f, 170f);
+        inner.Reverse();
+        return [Square(0f, 200f), inner];
     }
 
     [Fact]
-    public void Both_on_an_open_path_covers_more_than_either_side_alone()
+    public void Mesh_contours_put_inside_loops_in_the_hollow()
+    {
+        // The real path: the slicer hands over layer 0's mesh cross-section. A wall ring has a
+        // genuine hollow, so Inside has somewhere to go — this is the "hugging the inner wall"
+        // case that the toolpath-derived footprint could never express.
+        var tp = SolidLineToolpath();
+        BrimPlanner.Apply(tp, Settings(loops: 2, direction: BrimDirection.Inside), RingMeshContours());
+        var brim = BrimMoves(tp, 1).Where(m => m.Kind == MoveKind.Extrude).ToList();
+        Assert.NotEmpty(brim);
+        // Hollow is 30..170; loops must land inside it, not out beyond the ring.
+        Assert.All(brim, m => Assert.True(
+            m.To.X > 25f && m.To.X < 175f && m.To.Y > 25f && m.To.Y < 175f,
+            $"inside loop at {m.To} is not in the hollow"));
+    }
+
+    [Fact]
+    public void Mesh_contours_keep_outside_loops_beyond_the_ring()
+    {
+        var tp = SolidLineToolpath();
+        BrimPlanner.Apply(tp, Settings(loops: 2, direction: BrimDirection.Outside), RingMeshContours());
+        var brim = BrimMoves(tp, 1).Where(m => m.Kind == MoveKind.Extrude).ToList();
+        Assert.NotEmpty(brim);
+        Assert.Contains(brim, m => m.To.X < 0f || m.To.X > 200f || m.To.Y < 0f || m.To.Y > 200f);
+        Assert.DoesNotContain(brim, m =>
+            m.To.X > 35f && m.To.X < 165f && m.To.Y > 35f && m.To.Y < 165f);
+    }
+
+    [Fact]
+    public void Both_is_outside_plus_inside()
     {
         int Count(BrimDirection d)
         {
             var tp = SolidLineToolpath();
-            BrimPlanner.Apply(tp, Settings(loops: 2, direction: d));
+            BrimPlanner.Apply(tp, Settings(loops: 2, direction: d), RingMeshContours());
             return BrimMoves(tp, 1).Count(m => m.Kind == MoveKind.Extrude);
         }
-        int both = Count(BrimDirection.Both);
-        Assert.True(both > Count(BrimDirection.Outside), "Both should exceed Outside alone");
-        Assert.True(both > Count(BrimDirection.Inside),  "Both should exceed Inside alone");
+        int outside = Count(BrimDirection.Outside);
+        int inside  = Count(BrimDirection.Inside);
+        int both    = Count(BrimDirection.Both);
+        Assert.True(outside > 0 && inside > 0, $"outside={outside} inside={inside}");
+        // The bug this pins: Both came back byte-identical to Outside on a real capital because
+        // the ring classifier put the hole rings in the outer family, leaving Inside empty.
+        Assert.Equal(outside + inside, both);
     }
 
     [Fact]
-    public void Partial_runs_are_left_open_rather_than_chorded_shut()
+    public void An_open_footprint_with_no_mesh_contours_has_no_inside()
     {
-        // A side-limited run must not close on itself: the closing segment would be a chord
-        // drawn straight across the part.
+        // The fallback path (no mesh handed over). An open toolpath encloses nothing, so there is
+        // no hole and nothing for Inside — the real slicer always passes contours, so this only
+        // documents the degenerate case rather than endorsing it.
         var tp = SolidLineToolpath();
-        BrimPlanner.Apply(tp, Settings(loops: 1, direction: BrimDirection.Inside));
-        var brim = BrimMoves(tp, 1).Where(m => m.Kind == MoveKind.Extrude).ToList();
-        Assert.NotEmpty(brim);
-        float span = brim.Max(m => m.To.X) - brim.Min(m => m.To.X);
-        Assert.All(brim, m => Assert.True(
-            Vector3.Distance(m.From, m.To) < span,
-            $"a {Vector3.Distance(m.From, m.To):F1}mm segment spans the whole run — the ring was closed"));
+        BrimPlanner.Apply(tp, Settings(loops: 2, direction: BrimDirection.Inside));
+        Assert.Single(tp.Layers[0].Moves);
     }
 
     [Fact]
