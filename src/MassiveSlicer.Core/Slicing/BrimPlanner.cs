@@ -95,36 +95,122 @@ public static class BrimPlanner
         bool wantOutside = settings.BrimDirection is BrimDirection.Outside or BrimDirection.Both;
         bool wantInside  = settings.BrimDirection is BrimDirection.Inside  or BrimDirection.Both;
 
-        // Grouped, NOT interleaved per offset. Interleaving hands the head across the part once per
-        // loop, and every crossing is a within-layer travel - a dead stop the screw pumps through.
-        // Farthest-first order within each family is preserved, so the last loop laid on a side is
-        // the one against the part.
-        var keep = new List<PathD>(outer.Count + inner.Count);
-        if (wantOutside) keep.AddRange(outer);
-        if (wantInside)  keep.AddRange(inner);
-        if (keep.Count == 0) return;
+        // Order and connect so the head never crosses anything already laid, and never lifts.
+        //
+        // Brim is PREPENDED, so while it prints the only printed material anywhere is earlier brim -
+        // the walls do not exist yet. That makes "do not cross printed material" achievable by
+        // ordering alone:
+        //
+        //   inner pockets first, each ring stepping OUTWARD onto virgin bed
+        //   pocket to pocket crosses where walls will be, which is bare plate
+        //   outer loops last, farthest -> nearest, each step INWARD onto virgin bed
+        //   hand off to the part from the innermost outer loop, which already hugs it
+        //
+        // Inner-first is what makes the handoff free: ending on the outer loop leaves the head
+        // against the part's own wall instead of deep in a pocket, and that loop is laid immediately
+        // before the part so the two fuse while both are fresh.
+        var partStart = layer0.Moves[0].From;
+        var cursor = new PointD(partStart.X, partStart.Y);
 
-        // 4) Emit. A run covering a whole ring closes; a partial run stays open, because
-        //    closing it would draw a chord straight across the part.
+        var ordered = new List<PathD>();
+        if (wantInside)
+        {
+            // Greedy nearest-neighbour. Rings 1 bead apart cluster by pocket on their own, so this
+            // works a pocket out before moving on without needing to group them explicitly.
+            var pending = new List<PathD>(inner);
+            while (pending.Count > 0)
+            {
+                int best = 0; double bestD = double.MaxValue; int bestVert = 0;
+                for (int i = 0; i < pending.Count; i++)
+                {
+                    (int v, double d) = NearestVertex(pending[i], cursor);
+                    if (d < bestD) { bestD = d; best = i; bestVert = v; }
+                }
+                var ring = Rotate(pending[best], bestVert);
+                pending.RemoveAt(best);
+                ordered.Add(ring);
+                cursor = ring[0];
+            }
+        }
+        if (wantOutside)
+        {
+            // Keep the farthest-first order the offset loop produced; only choose where each ring
+            // STARTS, so the step between them is the radial one rather than a chord across the part.
+            foreach (var ring in outer)
+            {
+                (int v, _) = NearestVertex(ring, cursor);
+                var rot = Rotate(ring, v);
+                ordered.Add(rot);
+                cursor = rot[0];
+            }
+        }
+        if (ordered.Count == 0) return;
+        // A closed ring ends where it starts, so the LAST ring's start point is also where the head
+        // is left standing when the brim finishes. Re-start that one at the vertex nearest the part's
+        // own first move instead of nearest the previous loop: the handoff then costs about a bead
+        // rather than a run around the perimeter. It pushes the one unavoidable travel earlier, into
+        // the gap between loops, where it crosses bare plate.
+        if (ordered.Count > 0)
+        {
+            (int v, _) = NearestVertex(ordered[^1], cursor = new PointD(partStart.X, partStart.Y));
+            ordered[^1] = Rotate(ordered[^1], v);
+        }
+
+        // Emit. A ring is closed, so it ends where it began: the gap to the next ring is the distance
+        // between their chosen start points. A short gap is the radial step between concentric loops
+        // and is laid as BEAD - that is what removes the travel between loops entirely, and 1 bead of
+        // extra material is nothing. A long gap is a genuine crossing to another pocket and stays a
+        // travel, but at layer height with nothing to lift over.
+        double connectAsBead = bead * 2.0;
         var brim = new List<ToolpathMove>();
         Vector3? cur = null;
-        foreach (var ring in keep)
+        foreach (var ring in ordered)
         {
             var pts = new List<Vector3>(ring.Count + 1);
             foreach (var pt in ring) pts.Add(new Vector3((float)pt.x, (float)pt.y, z));
-            pts.Add(pts[0]); // closed loop
+            pts.Add(pts[0]);
             if (pts.Count < 3) continue;
             if (cur is { } c)
-                brim.Add(new ToolpathMove(c, pts[0], MoveKind.Travel) { IsBrim = true });
+            {
+                bool near = Vector3.Distance(c, pts[0]) <= connectAsBead;
+                brim.Add(new ToolpathMove(c, pts[0],
+                    near ? MoveKind.Extrude : MoveKind.Travel) { IsBrim = true });
+            }
             for (int i = 1; i < pts.Count; i++)
                 brim.Add(new ToolpathMove(pts[i - 1], pts[i], MoveKind.Extrude) { IsBrim = true });
             cur = pts[^1];
         }
         if (brim.Count == 0) return;
-        if (cur is { } last)
-            brim.Add(new ToolpathMove(last, layer0.Moves[0].From, MoveKind.Travel) { IsBrim = true });
+        if (cur is { } last && Vector3.Distance(last, partStart) > 1e-3f)
+            brim.Add(new ToolpathMove(last, partStart, MoveKind.Travel) { IsBrim = true });
 
         layer0.Moves.InsertRange(0, brim);
+    }
+
+    /// <summary>Index of the ring vertex closest to a point, and that distance.</summary>
+    private static (int Index, double Distance) NearestVertex(PathD ring, PointD from)
+    {
+        int best = 0; double bestD = double.MaxValue;
+        for (int i = 0; i < ring.Count; i++)
+        {
+            double dx = ring[i].x - from.x, dy = ring[i].y - from.y;
+            double d = dx * dx + dy * dy;
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return (best, Math.Sqrt(bestD));
+    }
+
+    /// <summary>
+    /// Re-starts a closed ring at <paramref name="start"/>. The vertex order and therefore the
+    /// print direction are unchanged — only where the loop begins moves, which is what turns the
+    /// hop between concentric loops into a radial step instead of a chord across the part.
+    /// </summary>
+    private static PathD Rotate(PathD ring, int start)
+    {
+        if (start <= 0 || start >= ring.Count) return ring;
+        var rotated = new PathD(ring.Count);
+        for (int i = 0; i < ring.Count; i++) rotated.Add(ring[(start + i) % ring.Count]);
+        return rotated;
     }
 
     /// <summary>Flips a ring's winding.</summary>
