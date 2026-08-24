@@ -317,8 +317,8 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "brim",
-            Description = "Bed-adhesion brim: report or set enable / direction / loops / speed / RPM",
-            Usage = "brim | brim report | brim on|off | brim out|in|both | brim loops <n> | brim speed <mm/s> | brim rpm <%>",
+            Description = "Bed-adhesion brim: report or set enable / direction / loops",
+            Usage = "brim | brim report | brim on|off | brim out|in|both | brim loops <n>",
             Execute = (ctx, args) =>
             {
                 var add = ctx.Main.RightPanel.Additive;
@@ -326,8 +326,7 @@ public sealed class ConsoleCommandRegistry
 
                 void Report() => ctx.Log(
                     $"[brim] {(add.BrimEnabled ? "on" : "off")} · {add.BrimDirectionDisplay} · " +
-                    $"{add.BrimLoops} loop(s) · {add.BrimSpeed:0.#} mm/s · " +
-                    $"RPM {(add.BrimRpmPercent > 0 ? $"{add.BrimRpmPercent:0.#}%" : "follows speed")}");
+                    $"{add.BrimLoops} loop(s)");
 
                 if (parts.Length == 0) { Report(); return; }
 
@@ -398,19 +397,9 @@ public sealed class ConsoleCommandRegistry
                         { ctx.LogError("[brim] usage: brim loops <n>"); return; }
                         add.BrimLoops = n;
                         break;
-                    case "speed":
-                        if (parts.Length < 2 || !double.TryParse(parts[1], out double mmS))
-                        { ctx.LogError("[brim] usage: brim speed <mm/s>"); return; }
-                        add.BrimSpeed = mmS;
-                        break;
-                    case "rpm":
-                        if (parts.Length < 2 || !double.TryParse(parts[1], out double rpm))
-                        { ctx.LogError("[brim] usage: brim rpm <%>"); return; }
-                        add.BrimRpmPercent = rpm;
-                        break;
                     default:
                         ctx.LogError($"[brim] unknown '{parts[0]}'. " +
-                                     "Try: on, off, out, in, both, loops <n>, speed <mm/s>, rpm <%>");
+                                     "Try: report, on, off, out, in, both, loops <n>");
                         return;
                 }
                 Report();
