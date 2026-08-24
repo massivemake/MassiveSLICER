@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-24** (approach PTP is joints, not PTP {X Y Z})
+Last updated: **2026-08-24** (LFAM 3 homes: only LFAM 3 Start)
 
 ---
 
@@ -516,6 +516,12 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-24 — LFAM 3 home list is only LFAM 3 Start
+
+- Symptom: ROBOT / PRINT home dropdown still had Home, Service, Home Target 4–6, Start.
+- Cause: SAVE wrote the live `bin/Release/net8.0-windows` cell JSON. Source `lfam3.json` never got those names.
+- Fix: cell `homePositions` is just **LFAM 3 Start** (`A2 −90 / A5 0 / A6 15 / E1 0`). That name is `defaultHomePosition`. Dropped Home / Service / Target 4–6 / Start. Same in all three source copies + test asset + the shop Release file the app is reading. Reload the cell or restart Slicer to see the dropdown.
 
 ### 2026-08-24 — Cartesian PTP {X Y Z} was not the same pose as the LIN
 
