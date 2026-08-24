@@ -32,7 +32,17 @@ public static class BrimPlanner
     /// <summary>A stretch of one offset ring that stays on a single side of the path.</summary>
     private readonly record struct Run(List<PointD> Points, bool WholeRing, int Side, double Length);
 
-    public static void Apply(Toolpath toolpath, SliceSettings settings)
+    /// <param name="meshContours">
+    /// Layer 0's MESH cross-section (closed contours only). This defines the footprint TOPOLOGY.
+    /// Deriving it from the toolpath instead drags in every gap between wall passes and every
+    /// infill void: measured on a real capital, the toolpath footprint had 300 interior holes
+    /// where the mesh had 0, and brim offset into all of them - 50 m of bead scattered through
+    /// the part. Null falls back to the toolpath, for callers that have no mesh.
+    /// </param>
+    public static void Apply(
+        Toolpath toolpath,
+        SliceSettings settings,
+        IReadOnlyList<IReadOnlyList<Vector2>>? meshContours = null)
     {
         if (!settings.BrimEnabled || settings.BrimLoops <= 0) return;
         if (toolpath.Layers.Count == 0) return;
@@ -55,9 +65,33 @@ public static class BrimPlanner
             if (float.IsNaN(z)) z = m.To.Z;
         }
         if (segs.Count == 0) return;
-        var footprint = Clipper.Union(
+        var toolpathRegion = Clipper.Union(
             Clipper.InflatePaths(segs, bead * 0.5, JoinType.Round, EndType.Round),
             FillRule.NonZero);
+        if (toolpathRegion.Count == 0) return;
+
+        // The mesh decides the topology; the toolpath only widens the outer extent.
+        //
+        // Union the two so a pattern bulge or X-bracing detour poking outside the silhouette is still
+        // enclosed, then FILL every hole the mesh does not itself have. That one step removes the
+        // slicer's own internal structure - wall gaps, infill voids, seams, connecting paths - none of
+        // which are part of the shape and none of which want a brim offset into them.
+        var meshRegion = MeshRegion(meshContours);
+        var footprint = toolpathRegion;
+        if (meshRegion.Count > 0)
+        {
+            var combined = Clipper.Union(toolpathRegion, meshRegion, FillRule.NonZero);
+            // Keep only positive (outer) rings: unioning them fills every hole at once.
+            var outers = new PathsD();
+            foreach (var r in combined) if (Clipper.Area(r) > 0) outers.Add(r);
+            var filled = Clipper.Union(outers, FillRule.NonZero);
+            // Put back only the mesh's OWN holes - a real bore keeps its inside brim.
+            var meshHoles = new PathsD();
+            foreach (var r in meshRegion) if (Clipper.Area(r) < 0) meshHoles.Add(Reversed(r));
+            footprint = meshHoles.Count > 0
+                ? Clipper.Difference(filled, meshHoles, FillRule.NonZero)
+                : filled;
+        }
         if (footprint.Count == 0) return;
 
         var index = new SegmentGrid(centre);
@@ -124,6 +158,29 @@ public static class BrimPlanner
 
         layer0.Moves.InsertRange(0, brim);
     }
+    /// <summary>Closed mesh contours as a Clipper region. Open contours enclose nothing.</summary>
+    private static PathsD MeshRegion(IReadOnlyList<IReadOnlyList<Vector2>>? contours)
+    {
+        var paths = new PathsD();
+        if (contours is null) return paths;
+        foreach (var c in contours)
+        {
+            if (c.Count < 3) continue;
+            var path = new PathD(c.Count);
+            foreach (var v in c) path.Add(new PointD(v.X, v.Y));
+            paths.Add(path);
+        }
+        return paths.Count == 0 ? paths : Clipper.Union(paths, FillRule.NonZero);
+    }
+
+    /// <summary>Flips a ring's winding.</summary>
+    private static PathD Reversed(PathD ring)
+    {
+        var flipped = new PathD(ring.Count);
+        for (int i = ring.Count - 1; i >= 0; i--) flipped.Add(ring[i]);
+        return flipped;
+    }
+
 
     /// <summary>
     /// Walks a closed ring and cuts it into maximal stretches that stay on one side of the
