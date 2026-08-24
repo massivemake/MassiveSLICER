@@ -15,31 +15,16 @@ namespace MassiveSlicer.Core.Slicing;
 /// loop k's centreline sits (k − ½) bead widths from the footprint edge (adjacent beads
 /// touching).
 ///
-/// <para><b>Topology comes from the MESH cross-section, not the toolpath.</b> A toolpath
-/// footprint carries the slicer's own internal structure: on a real capital it had 300
-/// interior holes where the mesh had none, and every one got a brim offset into it. The mesh
-/// silhouette is unioned with the toolpath (so pattern bulges outside it are still enclosed)
-/// and every hole the mesh does not itself have is filled.</para>
-///
-/// <para><see cref="BrimDirection"/> then selects by ring SIGN: positive rings are outer
-/// boundaries, negative rings are hole boundaries pushed into their void. Mesh cross-sections
-/// are always closed, so the sign is sufficient — note a hole can be created by the offset
-/// itself closing over a concavity, which is a real enclosed pocket and belongs to Inside.</para>
+/// <para><b>What "inside" means.</b> Air in a 2D slice, flood-filled from infinity: it wraps
+/// the whole exterior and pushes in through every gap that connects, including down a seam
+/// into an open arm — so that arm is OUTSIDE. What air cannot reach is INSIDE, and
+/// topologically that is exactly the HOLES of the bead region, which is what the ring sign
+/// tests. Sub-bead slivers close under the offset and drop out on their own.</para>
 /// </summary>
 public static class BrimPlanner
 {
 
-    /// <param name="meshContours">
-    /// Layer 0's MESH cross-section (closed contours only). This defines the footprint TOPOLOGY.
-    /// Deriving it from the toolpath instead drags in every gap between wall passes and every
-    /// infill void: measured on a real capital, the toolpath footprint had 300 interior holes
-    /// where the mesh had 0, and brim offset into all of them - 50 m of bead scattered through
-    /// the part. Null falls back to the toolpath, for callers that have no mesh.
-    /// </param>
-    public static void Apply(
-        Toolpath toolpath,
-        SliceSettings settings,
-        IReadOnlyList<IReadOnlyList<Vector2>>? meshContours = null)
+    public static void Apply(Toolpath toolpath, SliceSettings settings)
     {
         if (!settings.BrimEnabled || settings.BrimLoops <= 0) return;
         if (toolpath.Layers.Count == 0) return;
@@ -63,28 +48,18 @@ public static class BrimPlanner
             FillRule.NonZero);
         if (toolpathRegion.Count == 0) return;
 
-        // The mesh decides the topology; the toolpath only widens the outer extent.
+        // The footprint IS the toolpath bead region. "Inside" means the air in a 2D slice cannot
+        // reach it: flood-filling from infinity wraps the whole exterior and pushes in through every
+        // gap that connects, including down a seam into an open arm - so that arm reads as OUTSIDE.
+        // Topologically the unreachable air is exactly this region's HOLES, which is what the ring
+        // sign below tests.
         //
-        // Union the two so a pattern bulge or X-bracing detour poking outside the silhouette is still
-        // enclosed, then FILL every hole the mesh does not itself have. That one step removes the
-        // slicer's own internal structure - wall gaps, infill voids, seams, connecting paths - none of
-        // which are part of the shape and none of which want a brim offset into them.
-        var meshRegion = MeshRegion(meshContours);
+        // Measured on a real capital: 300 holes, of which the top 5 hold 99.9% of the sealed area
+        // (four interiors around 420,000 mm2 each) and 287 are smaller than one bead square, many of
+        // them zero - numerical slivers where beads meet. Those cannot hold a loop, so inflating the
+        // material closes them and Clipper drops them without any size test here. Do NOT "clean up"
+        // the hole count: the big ones are the real interiors and they are the whole point.
         var footprint = toolpathRegion;
-        if (meshRegion.Count > 0)
-        {
-            var combined = Clipper.Union(toolpathRegion, meshRegion, FillRule.NonZero);
-            // Keep only positive (outer) rings: unioning them fills every hole at once.
-            var outers = new PathsD();
-            foreach (var r in combined) if (Clipper.Area(r) > 0) outers.Add(r);
-            var filled = Clipper.Union(outers, FillRule.NonZero);
-            // Put back only the mesh's OWN holes - a real bore keeps its inside brim.
-            var meshHoles = new PathsD();
-            foreach (var r in meshRegion) if (Clipper.Area(r) < 0) meshHoles.Add(Reversed(r));
-            footprint = meshHoles.Count > 0
-                ? Clipper.Difference(filled, meshHoles, FillRule.NonZero)
-                : filled;
-        }
         if (footprint.Count == 0) return;
 
         // 2) Offset rings, farthest first. Round offset joins tessellate corners into many
@@ -150,29 +125,6 @@ public static class BrimPlanner
             brim.Add(new ToolpathMove(last, layer0.Moves[0].From, MoveKind.Travel) { IsBrim = true });
 
         layer0.Moves.InsertRange(0, brim);
-    }
-
-    /// <summary>Closed mesh contours as a Clipper region. Open contours enclose nothing.</summary>
-    private static PathsD MeshRegion(IReadOnlyList<IReadOnlyList<Vector2>>? contours)
-    {
-        var paths = new PathsD();
-        if (contours is null) return paths;
-        foreach (var c in contours)
-        {
-            if (c.Count < 3) continue;
-            var path = new PathD(c.Count);
-            foreach (var v in c) path.Add(new PointD(v.X, v.Y));
-            // A contour that encloses nothing (a hairline or a doubled-back sliver) contributes
-            // no region and would only add noise to the union.
-            if (Math.Abs(Clipper.Area(path)) < 1e-6) continue;
-            paths.Add(path);
-        }
-        if (paths.Count == 0) return paths;
-        // Union with EvenOdd, not NonZero: the raw contours arrive with whatever winding the mesh
-        // gave them, and EvenOdd resolves nesting into outer/hole by containment instead of
-        // trusting that direction. A bore wound the same way as its outer wall would otherwise
-        // fill in and lose its inside brim.
-        return Clipper.Union(paths, FillRule.EvenOdd);
     }
 
     /// <summary>Flips a ring's winding.</summary>

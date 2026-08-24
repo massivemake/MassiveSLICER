@@ -264,13 +264,7 @@ public static class PlanarSlicer
         // Structural supports first — brim then wraps the final wall footprint.
         StructuralSupportPlanner.Apply(toolpath, settings);
         DumpBrimFootprint(meshes, zPositions, settings);
-        // Brim topology comes from the MESH cross-section, not the toolpath: the toolpath carries
-        // the slicer's own wall gaps and infill voids as holes (300 of them on a real capital, where
-        // the mesh had none) and brim would offset into every one.
-        var brimContours = zPositions.Length > 0
-            ? ComputeRawBrimContours(meshes, zPositions[0], settings)
-            : null;
-        BrimPlanner.Apply(toolpath, settings, brimContours);
+        BrimPlanner.Apply(toolpath, settings);
 
         // Last, so brim and support moves are covered too: flow must follow the REAL layer
         // thickness. Adaptive layer height changes Z spacing and nothing was adjusting RPM
@@ -421,29 +415,6 @@ public static class PlanarSlicer
         {
             System.Console.WriteLine($"[brim-dump] failed: {ex.Message}");
         }
-    }
-    /// <summary>
-    /// Raw mesh-plane contours for the BRIM footprint: chained, unprintably-small ones dropped,
-    /// and nothing else.
-    ///
-    /// <para><see cref="ComputeInsetContours"/> is the wrong source. In Surface mode it
-    /// deliberately OPENS the contours into single-skin cladding paths, and an open path encloses
-    /// no region - so the brim footprint collapsed and Both came back equal to Outside. It also
-    /// insets by the wall offset, which is not where the silhouette is. This returns the closed
-    /// mesh cross-section that the brim actually wants, in every slicing mode.</para>
-    /// </summary>
-    private static List<List<Vector2>> ComputeRawBrimContours(
-        IReadOnlyList<Vector3[]> meshes, float z, SliceSettings settings)
-    {
-        var raw = new List<List<Vector2>>();
-        foreach (var verts in meshes)
-        {
-            var segs = new List<(Vector2, Vector2)>(64);
-            CollectSegments(verts, z, segs, null, false);
-            if (segs.Count > 0) raw.AddRange(ChainByProximity(segs));
-        }
-        DropUnprintableContours(raw, z, settings.BeadWidth);
-        return raw;
     }
 
 

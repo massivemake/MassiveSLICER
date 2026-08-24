@@ -218,43 +218,42 @@ public class BrimPlannerTest
         Assert.Equal(1, crossings);
     }
 
-    /// <summary>A 200x200 thin closed ring — what a wall's MESH cross-section looks like.</summary>
-    private static IReadOnlyList<IReadOnlyList<Vector2>> RingMeshContours()
+    /// <summary>
+    /// A 300x300 square wall with a second wall inside it, leaving a sealed gap between them —
+    /// the shape of a real first layer, where the trapped air between wall passes is "inside".
+    /// </summary>
+    private static Toolpath TwoWallToolpath()
     {
-        List<Vector2> Square(float lo, float hi) =>
-            [new(lo, lo), new(hi, lo), new(hi, hi), new(lo, hi)];
-        // outer face CCW, inner face CW so it reads as a ring with a hollow.
-        var inner = Square(30f, 170f);
-        inner.Reverse();
-        return [Square(0f, 200f), inner];
+        var layer = new ToolpathLayer(0, 3f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        void Loop(float lo, float hi)
+        {
+            Vector3 P(float x, float y) => new(x, y, 3f);
+            layer.Moves.Add(new ToolpathMove(P(lo, lo), P(hi, lo), MoveKind.Extrude));
+            layer.Moves.Add(new ToolpathMove(P(hi, lo), P(hi, hi), MoveKind.Extrude));
+            layer.Moves.Add(new ToolpathMove(P(hi, hi), P(lo, hi), MoveKind.Extrude));
+            layer.Moves.Add(new ToolpathMove(P(lo, hi), P(lo, lo), MoveKind.Extrude));
+        }
+        Loop(0f, 300f);
+        Loop(100f, 200f);
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+        return tp;
     }
 
     [Fact]
-    public void Mesh_contours_put_inside_loops_in_the_hollow()
+    public void Sealed_air_between_wall_passes_is_inside()
     {
-        // The real path: the slicer hands over layer 0's mesh cross-section. A wall ring has a
-        // genuine hollow, so Inside has somewhere to go — this is the "hugging the inner wall"
-        // case that the toolpath-derived footprint could never express.
-        var tp = SolidLineToolpath();
-        BrimPlanner.Apply(tp, Settings(loops: 2, direction: BrimDirection.Inside), RingMeshContours());
-        var brim = BrimMoves(tp, 1).Where(m => m.Kind == MoveKind.Extrude).ToList();
+        // Air flood-filling from infinity reaches the outside of the 300-square and the middle of
+        // the 100..200 square, but NOT the ring of trapped space between them. That trapped ring
+        // is what Inside means.
+        var tp = TwoWallToolpath();
+        BrimPlanner.Apply(tp, Settings(loops: 1, direction: BrimDirection.Inside));
+        var brim = BrimMoves(tp, 8).Where(m => m.Kind == MoveKind.Extrude).ToList();
         Assert.NotEmpty(brim);
-        // Hollow is 30..170; loops must land inside it, not out beyond the ring.
+        // Nothing may sit outside the outer wall — that is air-reachable, hence Outside.
         Assert.All(brim, m => Assert.True(
-            m.To.X > 25f && m.To.X < 175f && m.To.Y > 25f && m.To.Y < 175f,
-            $"inside loop at {m.To} is not in the hollow"));
-    }
-
-    [Fact]
-    public void Mesh_contours_keep_outside_loops_beyond_the_ring()
-    {
-        var tp = SolidLineToolpath();
-        BrimPlanner.Apply(tp, Settings(loops: 2, direction: BrimDirection.Outside), RingMeshContours());
-        var brim = BrimMoves(tp, 1).Where(m => m.Kind == MoveKind.Extrude).ToList();
-        Assert.NotEmpty(brim);
-        Assert.Contains(brim, m => m.To.X < 0f || m.To.X > 200f || m.To.Y < 0f || m.To.Y > 200f);
-        Assert.DoesNotContain(brim, m =>
-            m.To.X > 35f && m.To.X < 165f && m.To.Y > 35f && m.To.Y < 165f);
+            m.To.X > -1f && m.To.X < 301f && m.To.Y > -1f && m.To.Y < 301f,
+            $"inside loop at {m.To} escaped to air-reachable space"));
     }
 
     [Fact]
@@ -262,28 +261,35 @@ public class BrimPlannerTest
     {
         int Count(BrimDirection d)
         {
-            var tp = SolidLineToolpath();
-            BrimPlanner.Apply(tp, Settings(loops: 2, direction: d), RingMeshContours());
-            return BrimMoves(tp, 1).Count(m => m.Kind == MoveKind.Extrude);
+            var tp = TwoWallToolpath();
+            BrimPlanner.Apply(tp, Settings(loops: 2, direction: d));
+            return BrimMoves(tp, 8).Count(m => m.Kind == MoveKind.Extrude);
         }
         int outside = Count(BrimDirection.Outside);
         int inside  = Count(BrimDirection.Inside);
         int both    = Count(BrimDirection.Both);
         Assert.True(outside > 0 && inside > 0, $"outside={outside} inside={inside}");
-        // The bug this pins: Both came back byte-identical to Outside on a real capital because
-        // the ring classifier put the hole rings in the outer family, leaving Inside empty.
+        // The bug this pins: Both came back byte-identical to Outside on a real capital.
         Assert.Equal(outside + inside, both);
     }
 
     [Fact]
-    public void An_open_footprint_with_no_mesh_contours_has_no_inside()
+    public void Slivers_too_small_to_hold_a_bead_produce_no_loop()
     {
-        // The fallback path (no mesh handed over). An open toolpath encloses nothing, so there is
-        // no hole and nothing for Inside — the real slicer always passes contours, so this only
-        // documents the degenerate case rather than endorsing it.
-        var tp = SolidLineToolpath();
-        BrimPlanner.Apply(tp, Settings(loops: 2, direction: BrimDirection.Inside));
-        Assert.Single(tp.Layers[0].Moves);
+        // A real first layer throws off hundreds of near-zero pockets where beads meet — 287 of
+        // 300 on the capital were under one bead square. Inflating the material closes them, so
+        // they drop out with no size test. This pins that no size test is NEEDED.
+        var layer = new ToolpathLayer(0, 3f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        Vector3 P(float x, float y) => new(x, y, 3f);
+        // Two beads a hair apart: the gap between them seals but is far thinner than a bead.
+        layer.Moves.Add(new ToolpathMove(P(0, 0),   P(200, 0),   MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(P(200, 0), P(200, 2),   MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(P(200, 2), P(0, 2),     MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(P(0, 2),   P(0, 0),     MoveKind.Extrude));
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+        BrimPlanner.Apply(tp, Settings(loops: 1, direction: BrimDirection.Inside));
+        Assert.Equal(4, tp.Layers[0].Moves.Count);   // nothing added
     }
 
     [Fact]
