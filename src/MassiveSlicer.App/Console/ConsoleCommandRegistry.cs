@@ -728,6 +728,205 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "support",
+            Aliases = ["struct"],
+            Description = "Structural Supports: list, select/rename, move/rotate/resize, delete "
+                + "— drives the same fields as the panel and the viewport gizmo",
+            Usage = "support add <x> <y> [layer] | "
+                + "support list | support select <name|#> | support rename <name> | "
+                + "support move <x> <y> | support nudge <dx> <dy> | support rotate <deg> | "
+                + "support size <width> [depth] | support layers <up> <down> | "
+                + "support shape <rect|circle> | support enable <on|off> | support neck | "
+                + "support where | support trace | support delete",
+            Execute = (ctx, args) =>
+            {
+                var add = ctx.Main.RightPanel.Additive;
+                var vp = ctx.Main.Viewport;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                var specs = add.StructuralSupports;
+
+                bool HasSelection()
+                {
+                    if (add.SelectedSupportIndex >= 0 && add.SelectedSupportIndex < specs.Count)
+                        return true;
+                    ctx.LogError("[support] no support selected — 'support list' then 'support select <name|#>'");
+                    return false;
+                }
+
+                void LogSelected(string what)
+                {
+                    int i = add.SelectedSupportIndex;
+                    var s = specs[i];
+                    ctx.Log($"[support] {add.SupportNameAt(i)} {what} → {s.Shape} centre "
+                        + $"({s.CenterX:0.#}, {s.CenterY:0.#}) · {s.WidthMm:0}×{s.DepthMm:0} mm · "
+                        + $"{s.RotationDeg:0}° · anchor ({s.AnchorX:0.#}, {s.AnchorY:0.#}) L{s.AnchorLayer} · "
+                        + $"layers +{s.LayersUp}/-{s.LayersDown} · {(s.Enabled ? "enabled" : "disabled")}");
+                }
+
+                switch (parts.FirstOrDefault()?.ToLowerInvariant())
+                {
+                    case "select" when parts.Length >= 2:
+                    {
+                        // Accept a name ("Support 2", or just "2"/"support2") or a 1-based index.
+                        string want = string.Join(' ', parts.Skip(1));
+                        int found = -1;
+                        for (int i = 0; i < specs.Count; i++)
+                            if (add.SupportNameAt(i).Replace(" ", "")
+                                    .Equals(want.Replace(" ", ""), StringComparison.OrdinalIgnoreCase))
+                            { found = i; break; }
+                        if (found < 0 && int.TryParse(want, out int oneBased)
+                            && oneBased >= 1 && oneBased <= specs.Count)
+                            found = oneBased - 1;
+                        if (found < 0) { ctx.LogError($"[support] no support matching '{want}'"); return; }
+                        add.SelectedSupportIndex = found;
+                        LogSelected("selected");
+                        break;
+                    }
+                    case "rename" when parts.Length >= 2:
+                        if (!HasSelection()) return;
+                        add.SelectedSupportName = string.Join(' ', parts.Skip(1));
+                        ctx.Log($"[support] renamed to {add.SelectedSupportName}");
+                        break;
+                    case "move" when parts.Length >= 3:
+                        if (!HasSelection()) return;
+                        add.SupportCenterX = double.Parse(parts[1]);
+                        add.SupportCenterY = double.Parse(parts[2]);
+                        LogSelected("moved");
+                        break;
+                    case "nudge" when parts.Length >= 3:
+                        if (!HasSelection()) return;
+                        add.SupportCenterX += double.Parse(parts[1]);
+                        add.SupportCenterY += double.Parse(parts[2]);
+                        LogSelected("nudged");
+                        break;
+                    case "rotate" when parts.Length >= 2:
+                        if (!HasSelection()) return;
+                        add.SupportRotationDeg = double.Parse(parts[1]);
+                        LogSelected("rotated");
+                        break;
+                    case "size" when parts.Length >= 2:
+                        if (!HasSelection()) return;
+                        add.SupportWidthMm = double.Parse(parts[1]);
+                        if (parts.Length >= 3) add.SupportDepthMm = double.Parse(parts[2]);
+                        LogSelected("resized");
+                        break;
+                    case "layers" when parts.Length >= 3:
+                        if (!HasSelection()) return;
+                        add.SupportLayersUp = int.Parse(parts[1]);
+                        add.SupportLayersDown = int.Parse(parts[2]);
+                        LogSelected("layer range set");
+                        break;
+                    case "shape" when parts.Length >= 2:
+                        if (!HasSelection()) return;
+                        add.SupportShape = parts[1].StartsWith("c", StringComparison.OrdinalIgnoreCase)
+                            ? "Circle" : "Rectangle";
+                        LogSelected($"shape={add.SupportShape}");
+                        break;
+                    case "enable" when parts.Length >= 2:
+                        if (!HasSelection()) return;
+                        add.SupportEnabled = parts[1] is "on" or "true" or "1" or "yes";
+                        LogSelected("toggled");
+                        break;
+                    case "add" when parts.Length >= 3:
+                    {
+                        // Mirrors AddStructuralSupportFromSelection's geometry choices so
+                        // verifying through this path actually means something: snap the
+                        // anchor to the nearest bead, put the pocket one bead-pair inboard.
+                        if (vp.ActiveScrubToolpath is not { Layers.Count: > 0 } atp)
+                        {
+                            ctx.LogError("[support add] no active toolpath — slice, then select "
+                                + "the toolpath so a scrub is armed");
+                            return;
+                        }
+                        float wx = float.Parse(parts[1]), wy = float.Parse(parts[2]);
+                        int layerIdx = parts.Length >= 4
+                            ? Math.Clamp(int.Parse(parts[3]) - 1, 0, atp.Layers.Count - 1)
+                            : Math.Clamp(vp.CurrentScrubLayerIndex, 0, atp.Layers.Count - 1);
+
+                        var layer = atp.Layers[layerIdx];
+                        float bestD2 = float.MaxValue;
+                        System.Numerics.Vector3 mid = default, dirFrom = default, dirTo = default;
+                        foreach (var mv in layer.Moves)
+                        {
+                            if (mv.Kind != MoveKind.Extrude) continue;
+                            var m = (mv.From + mv.To) * 0.5f;
+                            float d2 = (m.X - wx) * (m.X - wx) + (m.Y - wy) * (m.Y - wy);
+                            if (d2 >= bestD2) continue;
+                            bestD2 = d2; mid = m; dirFrom = mv.From; dirTo = mv.To;
+                        }
+                        if (bestD2 == float.MaxValue)
+                        {
+                            ctx.LogError($"[support add] no extrude moves on layer {layerIdx + 1}");
+                            return;
+                        }
+
+                        var dir = new System.Numerics.Vector2(dirTo.X - dirFrom.X, dirTo.Y - dirFrom.Y);
+                        if (dir.LengthSquared() < 1e-6f) dir = new(1, 0);
+                        dir = System.Numerics.Vector2.Normalize(dir);
+                        var left = new System.Numerics.Vector2(-dir.Y, dir.X);
+                        const float depth = 42f;
+                        var centre = new System.Numerics.Vector2(mid.X, mid.Y)
+                            + left * (depth * 0.5f + (float)add.BeadWidth * 2f);
+
+                        add.AddStructuralSupport(new StructuralSupportSpec
+                        {
+                            AnchorX = mid.X, AnchorY = mid.Y, AnchorLayer = layerIdx,
+                            CenterX = centre.X, CenterY = centre.Y,
+                            WidthMm = 92f, DepthMm = depth,
+                            LayersUp = 9999, LayersDown = 0,
+                        });
+                        LogSelected($"added (snapped {MathF.Sqrt(bestD2):0.#} mm to nearest bead "
+                            + $"on L{layerIdx + 1})");
+                        ctx.Log("[support add] press Update Slice (or run `slice`) to bake it.");
+                        break;
+                    }
+                    case "neck":
+                        EvalSupportNeck(ctx);
+                        break;
+                    case "where":
+                        foreach (var line in (vp.DescribeSupportPick?.Invoke()
+                                ?? "[support where] viewport not wired").Split('\n'))
+                            ctx.Log(line);
+                        break;
+                    case "trace":
+                        if (!HasSelection()) return;
+                        EvalSupportTrace(ctx, specs[add.SelectedSupportIndex],
+                            add.SupportNameAt(add.SelectedSupportIndex));
+                        break;
+                    case "delete" or "remove":
+                    {
+                        if (!HasSelection()) return;
+                        string gone = add.SupportNameAt(add.SelectedSupportIndex);
+                        // Same path as the panel's trash icon: repairs card links + re-slices.
+                        vp.DeleteSelectedStructuralSupportCommand.Execute(null);
+                        ctx.Log($"[support] deleted {gone} ({specs.Count} left)");
+                        break;
+                    }
+                    default:
+                        if (specs.Count == 0)
+                        {
+                            ctx.Log("[support] no structural supports "
+                                + "(edit mode → click a bead → type 'Structural Support')");
+                            return;
+                        }
+                        for (int i = 0; i < specs.Count; i++)
+                        {
+                            var s = specs[i];
+                            ctx.Log($"[support] {(i == add.SelectedSupportIndex ? "*" : " ")}"
+                                + $"{i + 1}. {add.SupportNameAt(i)} · {s.Shape} "
+                                + $"{s.WidthMm:0}×{s.DepthMm:0} mm @ ({s.CenterX:0.#}, {s.CenterY:0.#}) "
+                                + $"{s.RotationDeg:0}° · anchor ({s.AnchorX:0.#}, {s.AnchorY:0.#}) "
+                                + $"L{s.AnchorLayer} · layers +{s.LayersUp}/-{s.LayersDown}"
+                                + $"{(s.Enabled ? "" : " · DISABLED")}");
+                        }
+                        ctx.Log($"[support] {specs.Count} support(s) · * = live (panel + gizmo target)");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "mill",
             Description = "Milling SELECT AREA / brush / operation (SPSM mill workflow)",
             Usage = "mill status | mill area <whole|face|box|lasso|brush|clear> | mill brush size <mm> | mill brush falloff <0-1> | mill op <name>",
@@ -968,6 +1167,173 @@ public sealed class ConsoleCommandRegistry
                         ctx.LogError("[mill] unknown — try: mill help");
                         break;
                 }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "tpcheck",
+            Description = "Printability audit of the active toolpath: position jumps between "
+                + "consecutive moves, extrude runs, travels and seam start/stop events per layer",
+            Usage = "tpcheck",
+            Execute = (ctx, _) =>
+            {
+                var vp = ctx.Main.Viewport;
+                if (vp.ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+                {
+                    ctx.LogError("[tpcheck] no active toolpath — slice, then select the toolpath");
+                    return;
+                }
+
+                // A JUMP is the thing that actually ruins a print: consecutive moves where the
+                // head teleports with no travel between them. The machine draws a straight
+                // line through it while extruding. Seam DOTS are only a display of run
+                // start/stops — their absence is cosmetic; a jump is not.
+                const float tol = 0.05f;
+                int jumps = 0, runs = 0, travels = 0, seamEvents = 0, extrudes = 0;
+                float worstJump = 0f;
+                string worstWhere = "";
+                var badLayers = new List<string>();
+
+                for (int li = 0; li < tp.Layers.Count; li++)
+                {
+                    var moves = tp.Layers[li].Moves;
+                    int layerJumps = 0;
+                    bool inRun = false;
+
+                    for (int i = 0; i < moves.Count; i++)
+                    {
+                        var mv = moves[i];
+                        if (mv.Kind == MoveKind.Extrude) { extrudes++; if (!inRun) { inRun = true; runs++; seamEvents += 2; } }
+                        else { if (mv.Kind == MoveKind.Travel) travels++; inRun = false; }
+
+                        if (i == 0) continue;
+                        float gap = System.Numerics.Vector3.Distance(moves[i - 1].To, mv.From);
+                        if (gap <= tol) continue;
+                        jumps++; layerJumps++;
+                        if (gap > worstJump)
+                        {
+                            worstJump = gap;
+                            worstWhere = $"L{li + 1} m{i - 1}->m{i} "
+                                + $"({moves[i - 1].To.X:0.#},{moves[i - 1].To.Y:0.#}) -> "
+                                + $"({mv.From.X:0.#},{mv.From.Y:0.#})";
+                        }
+                    }
+                    if (layerJumps > 0 && badLayers.Count < 6)
+                        badLayers.Add($"L{li + 1}x{layerJumps}");
+                }
+
+                // Layer-to-layer transitions, checked the way the EXPORTER sees them.
+                // KrlExporter emits move.From exactly once (the first point) and thereafter
+                // only each move's To — so every move's From is ASSUMED to equal the previous
+                // move's To, across layer boundaries included. A discontinuity therefore does
+                // not stop the print: the head simply drives straight from the previous
+                // endpoint to the next one. Whether that matters depends entirely on whether
+                // the move after the gap extrudes.
+                //
+                // So the boundary test must consider ALL moves, not just extrudes: a travel
+                // sitting between two layers is exactly how a legitimate step-up is expressed,
+                // and ignoring it reports a dead end that isn't one.
+                int deadEnds = 0, benignSteps = 0;
+                float worstStep = 0f;
+                string worstStepWhere = "";
+                var stepBad = new List<string>();
+                float stepTol = MathF.Max(1f, (float)ctx.Main.RightPanel.Additive.BeadWidth);
+
+                for (int li = 0; li + 1 < tp.Layers.Count; li++)
+                {
+                    if (tp.Layers[li].Moves.Count == 0 || tp.Layers[li + 1].Moves.Count == 0) continue;
+                    var a = tp.Layers[li].Moves[^1];
+                    var b = tp.Layers[li + 1].Moves[0];
+                    float dxy = MathF.Sqrt(
+                        (b.From.X - a.To.X) * (b.From.X - a.To.X)
+                        + (b.From.Y - a.To.Y) * (b.From.Y - a.To.Y));
+                    if (dxy <= stepTol) continue;
+
+                    // Non-extruding move after the gap = the head repositions dry. Fine.
+                    if (b.Kind != MoveKind.Extrude) { benignSteps++; continue; }
+
+                    deadEnds++;
+                    if (dxy > worstStep)
+                    {
+                        worstStep = dxy;
+                        worstStepWhere = $"L{li + 1} ends ({a.To.X:0.#},{a.To.Y:0.#}) → "
+                            + $"L{li + 2} starts ({b.From.X:0.#},{b.From.Y:0.#})";
+                    }
+                    if (stepBad.Count < 6) stepBad.Add($"L{li + 1}→L{li + 2} {dxy:0.#}mm");
+                }
+
+                ctx.Log($"[tpcheck] {tp.Layers.Count} layer(s) · {extrudes} extrude · "
+                    + $"{travels} travel · {runs} run(s) · {seamEvents} seam start/stop event(s)");
+                ctx.Log($"[tpcheck] layer step-ups: {tp.Layers.Count - 1 - deadEnds - benignSteps}"
+                    + $"/{tp.Layers.Count - 1} land within {stepTol:0.#} mm XY · "
+                    + $"{benignSteps} repositioned dry (travel first — fine)"
+                    + (deadEnds > 0
+                        ? $" · {deadEnds} DRAGGED, worst {worstStep:0.#} mm — {worstStepWhere}"
+                          + (stepBad.Count > 0 ? $" · {string.Join(", ", stepBad)}" : "")
+                        : " · 0 dragged"));
+                if (jumps == 0 && deadEnds == 0)
+                {
+                    ctx.Log("[tpcheck] VERDICT: continuous within every layer AND from each "
+                        + "layer up to the next. Nothing teleports, nothing dead-ends.");
+                }
+                else if (jumps == 0)
+                {
+                    ctx.LogError($"[tpcheck] VERDICT: layers are internally continuous, but "
+                        + $"{deadEnds} layer transition(s) start EXTRUDING somewhere the head "
+                        + "isn't — the exporter drives straight there while depositing, so a "
+                        + "bead gets dragged across the gap.");
+                }
+                else
+                {
+                    ctx.LogError($"[tpcheck] VERDICT: {jumps} JUMP(S) — the head moves without a "
+                        + $"travel and will drag material. Worst {worstJump:0.##} mm at {worstWhere}"
+                        + (badLayers.Count > 0 ? $" · layers: {string.Join(", ", badLayers)}" : ""));
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "edit",
+            Description = "Toolpath edit mode (the pencil): open/close it, and toggle the 2D "
+                + "slice plane viewer — makes the edit-mode-only UI reachable without clicking",
+            Usage = "edit | edit on | edit off | edit 2d on | edit 2d off",
+            Execute = (ctx, args) =>
+            {
+                var vp = ctx.Main.Viewport;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                bool On(string s) => s is "on" or "true" or "1" or "yes";
+
+                if (parts.Length >= 2 && parts[0].Equals("2d", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!vp.IsPaintEditOpen)
+                    {
+                        ctx.LogError("[edit] open edit mode first ('edit on') — "
+                            + "the 2D viewer only exists inside it");
+                        return;
+                    }
+                    vp.IsSlicePlaneViewerActive = On(parts[1].ToLowerInvariant());
+                    ctx.Log($"[edit] 2D slice plane viewer {(vp.IsSlicePlaneViewerActive ? "on" : "off")}");
+                    return;
+                }
+
+                if (parts.Length >= 1)
+                {
+                    // Edit mode only exists in Preview — take the user there rather than
+                    // silently doing nothing (the pencil button is Preview-only too).
+                    bool want = On(parts[0].ToLowerInvariant());
+                    if (want && vp.ViewMode != "Preview")
+                    {
+                        vp.ViewMode = "Preview";
+                        ctx.Log("[edit] switched to Preview (edit mode is Preview-only)");
+                    }
+                    vp.IsPaintEditOpen = want;
+                }
+
+                ctx.Log($"[edit] edit mode {(vp.IsPaintEditOpen ? "OPEN" : "closed")} · "
+                    + $"2D viewer {(vp.IsSlicePlaneViewerActive ? "on" : "off")} · "
+                    + $"view={vp.ViewMode} · granularity={vp.PaintSelectGranularity}");
             },
         });
 
@@ -3036,6 +3402,287 @@ public sealed class ConsoleCommandRegistry
             Description = command.Description,
             Usage = string.IsNullOrWhiteSpace(command.Usage) ? command.Name : command.Usage,
         };
+
+    /// <summary>
+    /// Traces one support's baked pocket layer by layer: where the wrap actually landed,
+    /// and how long the neck is. Answers "is the pocket staying put as the wall builds?"
+    /// with numbers — the pocket footprint is fixed data, so the wrap centroid should be
+    /// identical on every affected layer while only the NECK length varies to reach a
+    /// wandering wall. Any drift in the centroid is a real bug, not a perception.
+    /// </summary>
+    private static void EvalSupportTrace(
+        ConsoleCommandContext ctx, StructuralSupportSpec spec, string name)
+    {
+        var vp = ctx.Main.Viewport;
+        if (vp.ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+        {
+            ctx.LogError("[support trace] no active toolpath — slice, then select the toolpath");
+            return;
+        }
+
+        var outline = spec.BuildOutline();
+        if (outline.Length < 3) { ctx.LogError("[support trace] degenerate outline"); return; }
+        // Match tolerance against the pocket size, not an absolute — a circle's facets sit
+        // slightly inside the ideal outline.
+        float tol = MathF.Max(1.0f, MathF.Min(spec.WidthMm, spec.DepthMm) * 0.05f);
+
+        bool NearOutline(System.Numerics.Vector3 p)
+        {
+            foreach (var v in outline)
+            {
+                float dx = p.X - v.X, dy = p.Y - v.Y;
+                if (dx * dx + dy * dy <= tol * tol) return true;
+            }
+            return false;
+        }
+
+        int lo = Math.Max(0, spec.AnchorLayer - Math.Max(0, spec.LayersDown));
+        int hi = Math.Min(tp.Layers.Count - 1, spec.AnchorLayer + Math.Max(0, spec.LayersUp));
+        ctx.Log($"[support trace] {name} · expected on layers L{lo + 1}..L{hi + 1} "
+            + $"({hi - lo + 1} layer(s)) · pocket centre ({spec.CenterX:0.#}, {spec.CenterY:0.#}) "
+            + $"· vertex match tol {tol:0.#} mm");
+
+        // Distance from a point to the NEAREST outline vertex. This is the honest test of
+        // "is the pocket where the spec says": the outline is fixed data, so every wrap
+        // corner must sit on it. An earlier version averaged the matched corners into a
+        // centroid and reported its spread as "drift" — but the wrap is an ARC, and which
+        // corners it visits alternates with the side the wall run enters from. Averaging a
+        // changing subset of a stationary rectangle moves the average, so it reported a
+        // rock-steady pocket as drifting by exactly width/3 on every support.
+        float VertexDev(System.Numerics.Vector3 p)
+        {
+            float best = float.MaxValue;
+            foreach (var v in outline)
+            {
+                float dx = p.X - v.X, dy = p.Y - v.Y;
+                best = MathF.Min(best, dx * dx + dy * dy);
+            }
+            return MathF.Sqrt(best);
+        }
+
+        int layersHit = 0, shown = 0;
+        float maxDev = 0f;
+        int nMin = int.MaxValue, nMax = 0;
+        float neckMin = float.MaxValue, neckMax = float.MinValue;
+
+        for (int li = lo; li <= hi; li++)
+        {
+            var moves = tp.Layers[li].Moves;
+            float layerDev = 0f;
+            int n = 0;
+            float neck = -1f;
+            foreach (var mv in moves)
+            {
+                if (mv.Kind != MoveKind.Extrude) continue;
+                bool a = NearOutline(mv.From), b = NearOutline(mv.To);
+                if (a && b)
+                {
+                    layerDev = MathF.Max(layerDev,
+                        MathF.Max(VertexDev(mv.From), VertexDev(mv.To)));
+                    n++;
+                }
+                // Neck: exactly one end on the outline, the other out on the wall.
+                else if (a ^ b)
+                {
+                    float len = System.Numerics.Vector3.Distance(mv.From, mv.To);
+                    if (len > neck) neck = len;
+                }
+            }
+            if (n == 0) continue;
+
+            layersHit++;
+            maxDev = MathF.Max(maxDev, layerDev);
+            nMin = Math.Min(nMin, n); nMax = Math.Max(nMax, n);
+            if (neck > 0f) { neckMin = MathF.Min(neckMin, neck); neckMax = MathF.Max(neckMax, neck); }
+
+            if (shown < 8)
+            {
+                shown++;
+                ctx.Log($"  L{li + 1}: {n} wrap move(s) · off-outline {layerDev:0.##} mm · "
+                    + (neck > 0f ? $"arm {neck:0.#} mm" : "no arm move found"));
+            }
+        }
+
+        if (layersHit == 0)
+        {
+            ctx.Log("[support trace] pocket NOT FOUND in the baked toolpath on any expected "
+                + "layer — either the slice predates this support (press Update Slice) or the "
+                + "planner never spliced it.");
+            return;
+        }
+
+        ctx.Log($"[support trace] {layersHit}/{hi - lo + 1} layer(s) carry the pocket · "
+            + $"worst corner off its outline {maxDev:0.###} mm · "
+            + $"{nMin}..{nMax} wrap move(s) per layer");
+        if (nMin != nMax)
+            ctx.Log("[support trace] the wrap move count varies by layer. That is EXPECTED — "
+                + "the arc runs whichever way round the pocket the wall run enters from, so "
+                + "its extent alternates. It is not the pocket moving.");
+        if (neckMin <= neckMax)
+            ctx.Log($"[support trace] arm length range {neckMin:0.#}..{neckMax:0.#} mm "
+                + $"(varies by {neckMax - neckMin:0.#} mm — expected to vary only as much as "
+                + "the wall's cross-section moves; constant is correct for a vertical wall)");
+        ctx.Log(maxDev <= tol * 0.5f
+            ? $"[support trace] VERDICT: pocket sits on its own outline to within "
+              + $"{maxDev:0.##} mm on every layer — the footprint is not moving."
+            : $"[support trace] VERDICT: pocket corners sit up to {maxDev:0.##} mm off the "
+              + "spec outline — the footprint is fixed data and should land on it exactly.");
+    }
+
+    /// <summary>
+    /// Measures the Structural Support neck in the LIVE toolpath: finds each pair of
+    /// extrude moves that run exactly back along each other (the neck out / neck back)
+    /// and reports their centreline separation against the bead width. Answers "do the
+    /// two neck passes overlap?" numerically instead of by eye — the bead is drawn
+    /// centred on the centreline (half the bead width each side), so a separation below
+    /// one bead width means the passes overlap by the difference.
+    /// </summary>
+    /// <summary>Shortest distance from (x,y) to a closed outline polygon's edges.</summary>
+    private static float DistToOutline(System.Numerics.Vector2[] poly, float x, float y)
+    {
+        float best = float.MaxValue;
+        for (int i = 0, j = poly.Length - 1; i < poly.Length; j = i++)
+        {
+            var a = poly[j];
+            var b = poly[i];
+            float abx = b.X - a.X, aby = b.Y - a.Y;
+            float len2 = abx * abx + aby * aby;
+            float t = len2 < 1e-12f
+                ? 0f
+                : Math.Clamp(((x - a.X) * abx + (y - a.Y) * aby) / len2, 0f, 1f);
+            float cx = a.X + t * abx, cy = a.Y + t * aby;
+            float d = MathF.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+            if (d < best) best = d;
+        }
+        return best;
+    }
+
+    private static void EvalSupportNeck(ConsoleCommandContext ctx)
+    {
+        var vp = ctx.Main.Viewport;
+        var add = ctx.Main.RightPanel.Additive;
+
+        if (add.StructuralSupports.Count == 0)
+        {
+            ctx.LogError("[support neck] no structural supports to measure");
+            return;
+        }
+        if (vp.ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+        {
+            ctx.LogError("[support neck] no active toolpath — slice, then select the toolpath "
+                + "(or enter edit mode) so a scrub is armed");
+            return;
+        }
+
+        float bead = (float)add.BeadWidth;
+        if (bead < 0.5f) bead = 6f;
+        int specIdx = add.SelectedSupportIndex;
+        if (specIdx < 0 || specIdx >= add.StructuralSupports.Count) specIdx = 0;
+        var spec = add.StructuralSupports[specIdx];
+        var outline = spec.BuildOutline();
+
+        ctx.Log($"[support neck] {add.SupportNameAt(specIdx)} · bead={bead:0.#} mm, deposited "
+            + $"centred on the path (±{bead * 0.5f:0.#} mm). Touching-but-not-overlapping "
+            + $"means centrelines {bead:0.#} mm apart.");
+
+        // A retraced pair (one move run exactly backwards by another) is the signature of
+        // the old fully-overlapping arm. Scan ahead, not just adjacent — the wrap sits
+        // between the two legs.
+        const float tol = 0.01f;
+        int retraced = 0;
+        int layersChecked = 0, wallOk = 0, armOk = 0, pocketOk = 0;
+        int shownBad = 0, shownGood = 0;
+
+        int lo = Math.Max(0, spec.AnchorLayer - Math.Max(0, spec.LayersDown));
+        int hi = Math.Min(tp.Layers.Count - 1, spec.AnchorLayer + Math.Max(0, spec.LayersUp));
+
+        for (int li = lo; li <= hi; li++)
+        {
+            var moves = tp.Layers[li].Moves;
+            var ex = moves.Where(m => m.Kind == MoveKind.Extrude).ToList();
+            if (ex.Count == 0) continue;
+
+            // Classify by PROXIMITY to the outline, not point-in-polygon: every wrap vertex
+            // sits exactly ON the boundary, which a containment test excludes — that made
+            // this report zero wrap moves and an "arm gap" that was really the pocket
+            // diagonal. Same approach `support trace` already uses.
+            float onTol = MathF.Max(0.5f, bead * 0.3f);
+            bool OnPocket(System.Numerics.Vector3 p) => DistToOutline(outline, p.X, p.Y) <= onTol;
+            var legs = ex.Where(m => OnPocket(m.From) ^ OnPocket(m.To)).ToList();
+            if (legs.Count == 0) continue;
+            layersChecked++;
+
+            for (int i = 0; i < ex.Count; i++)
+                for (int j = i + 1; j < Math.Min(ex.Count, i + 64); j++)
+                    if (System.Numerics.Vector3.Distance(ex[i].From, ex[j].To) <= tol
+                        && System.Numerics.Vector3.Distance(ex[i].To, ex[j].From) <= tol
+                        && System.Numerics.Vector3.Distance(ex[i].From, ex[i].To) > 1f)
+                        retraced++;
+
+            // Gap 2 — arm: two legs, one bead apart at their outboard (wall-side) ends.
+            float armGap = -1f;
+            if (legs.Count == 2)
+            {
+                var e0 = OnPocket(legs[0].From) ? legs[0].To : legs[0].From;
+                var e1 = OnPocket(legs[1].From) ? legs[1].To : legs[1].From;
+                armGap = System.Numerics.Vector3.Distance(e0, e1);
+                if (MathF.Abs(armGap - bead) < bead * 0.35f) armOk++;
+            }
+
+            // Gap 1 — wall: the two leg roots should NOT be bridged by another extrude.
+            if (legs.Count == 2 && armGap > 0f) wallOk++;
+
+            // Gap 3 — pocket: the wrap must be an open loop (its ends separated).
+            var wrap = ex.Where(m => OnPocket(m.From) && OnPocket(m.To)).ToList();
+            float pocketGap = wrap.Count > 0
+                ? System.Numerics.Vector3.Distance(wrap[0].From, wrap[^1].To)
+                : -1f;
+            if (pocketGap > 0.5f) pocketOk++;
+
+            // Report FAILING layers by preference — a sample of passing ones proves nothing
+            // about the ones that don't.
+            bool layerOk = legs.Count == 2 && MathF.Abs(armGap - bead) < bead * 0.35f
+                && pocketGap > 0.5f;
+            if (!layerOk && shownBad < 6)
+            {
+                shownBad++;
+                float wallMoveLen = legs.Count == 2
+                    ? ex.Where(m => !OnPocket(m.From) && !OnPocket(m.To))
+                        .Select(m => System.Numerics.Vector3.Distance(m.From, m.To))
+                        .DefaultIfEmpty(-1f).Min()
+                    : -1f;
+                ctx.Log($"  FAIL L{li + 1}: legs={legs.Count} · arm/wall mouth {armGap:0.##} mm "
+                    + $"(want {bead:0.#}) · pocket mouth {pocketGap:0.##} mm · shortest wall "
+                    + $"move here {wallMoveLen:0.##} mm");
+            }
+            else if (layerOk && shownGood < 2)
+            {
+                shownGood++;
+                ctx.Log($"  ok   L{li + 1}: legs={legs.Count} · arm/wall mouth {armGap:0.##} mm · "
+                    + $"pocket mouth {pocketGap:0.##} mm");
+            }
+        }
+
+        if (layersChecked == 0)
+        {
+            ctx.Log("[support neck] no support geometry found in the baked toolpath — "
+                + "press Update Slice first.");
+            return;
+        }
+
+        ctx.Log($"[support neck] {layersChecked} layer(s) checked · "
+            + $"wall break {wallOk}/{layersChecked} · arm gap {armOk}/{layersChecked} · "
+            + $"pocket break {pocketOk}/{layersChecked} · retraced pairs {retraced}");
+        bool allGood = retraced == 0 && wallOk == layersChecked
+            && armOk == layersChecked && pocketOk == layersChecked;
+        ctx.Log(allGood
+            ? "[support neck] VERDICT: all three gaps present on every layer, nothing "
+              + "self-overlapping. This is what you asked for."
+            : "[support neck] VERDICT: NOT clean — "
+              + (retraced > 0 ? $"{retraced} retraced (fully overlapping) pair(s); " : "")
+              + $"arm gap wrong on {layersChecked - armOk} layer(s), pocket still closed on "
+              + $"{layersChecked - pocketOk} layer(s).");
+    }
 
     /// <summary>
     /// Report support coverage for edit selection (or every island on the current scrub

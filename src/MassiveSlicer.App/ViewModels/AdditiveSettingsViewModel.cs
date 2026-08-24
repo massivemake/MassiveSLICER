@@ -419,8 +419,56 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     public bool HasStructuralSupports => StructuralSupports.Count > 0;
-    public string StructuralSupportsLabel =>
-        StructuralSupports.Count == 1 ? "1 support" : $"{StructuralSupports.Count} supports";
+
+    /// <summary>
+    /// Name of the support at <paramref name="index"/>, falling back to a positional
+    /// label for specs saved before names existed (so nothing ever reads as blank).
+    /// </summary>
+    public string SupportNameAt(int index) =>
+        index < 0 || index >= StructuralSupports.Count
+            ? ""
+            : string.IsNullOrWhiteSpace(StructuralSupports[index].Name)
+                ? $"Support {index + 1}"
+                : StructuralSupports[index].Name;
+
+    /// <summary>Next free "Support N" — N is one past the highest existing number, so
+    /// deleting Support 2 of 3 doesn't hand out a name that's still in use.</summary>
+    public string NextStructuralSupportName()
+    {
+        int highest = 0;
+        foreach (var s in StructuralSupports)
+        {
+            if (string.IsNullOrWhiteSpace(s.Name)) continue;
+            var digits = s.Name.AsSpan()[(s.Name.LastIndexOf(' ') + 1)..];
+            if (int.TryParse(digits, out int n) && n > highest) highest = n;
+        }
+        return $"Support {Math.Max(highest + 1, StructuralSupports.Count + 1)}";
+    }
+
+    /// <summary>Selected support's name, e.g. "Support 2" — editable (rename in place).</summary>
+    public string SelectedSupportName
+    {
+        get => SupportNameAt(_selectedSupportIndex);
+        set
+        {
+            if (SelectedSupport is not { } s) return;
+            var trimmed = (value ?? "").Trim();
+            if (trimmed.Length == 0 || string.Equals(trimmed, s.Name, StringComparison.Ordinal)) return;
+            ReplaceSelected(s with { Name = trimmed });
+        }
+    }
+
+    /// <summary>"Support 2 · 2/3" — names the support you're editing, not just a count.</summary>
+    public string StructuralSupportsLabel
+    {
+        get
+        {
+            if (StructuralSupports.Count == 0) return "no supports";
+            if (_selectedSupportIndex < 0) return $"{StructuralSupports.Count} supports · none selected";
+            return $"{SupportNameAt(_selectedSupportIndex)} · "
+                + $"{_selectedSupportIndex + 1}/{StructuralSupports.Count}";
+        }
+    }
 
     public string[] SupportShapeOptions { get; } = ["Rectangle", "Circle"];
 
@@ -437,6 +485,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     void NotifySelectedSupportChanged()
     {
+        OnPropertyChanged(nameof(SelectedSupportName));
         OnPropertyChanged(nameof(SupportShape));
         OnPropertyChanged(nameof(SupportCenterX));
         OnPropertyChanged(nameof(SupportCenterY));
@@ -519,6 +568,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     internal void AddStructuralSupport(Core.Models.StructuralSupportSpec spec)
     {
+        // Every support carries a unique name from birth — the panel, the outliner-style
+        // arrows and the console all identify supports by name, never by raw index.
+        if (string.IsNullOrWhiteSpace(spec.Name))
+            spec = spec with { Name = NextStructuralSupportName() };
         StructuralSupports.Add(spec);
         SelectedSupportIndex = StructuralSupports.Count - 1;
         NotifySelectedSupportChanged();

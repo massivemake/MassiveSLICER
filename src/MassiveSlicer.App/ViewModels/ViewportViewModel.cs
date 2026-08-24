@@ -2078,34 +2078,27 @@ public sealed partial class ViewportViewModel : ViewModelBase
             : $"{mm3:0} mm³";
 
     /// <summary>
-    /// Path granularity → centre-line only (no fat beads) unless
-    /// <see cref="PaintShowBeads"/> is on.
-    /// Point granularity → every bead midpoint as a point; lines grayed + thin.
+    /// Point granularity → every bead midpoint as a point, so the centre-lines
+    /// are dimmed to let them read.
     /// (SceneRenderer.ShowAllPathPoints is set from the viewport each frame.)
+    /// <para>
+    /// This deliberately no longer touches the display layers (bead / extrusion /
+    /// travel / wipe / seam). Those are per-view profile settings now — including
+    /// edit mode's own profile — so what you set in the eye menu is what you get
+    /// next time, and edit mode never reaches into the 3D view's settings.
+    /// </para>
     /// </summary>
     internal void ApplyPaintEditDisplayMode()
     {
         if (!IsPaintEditOpen || _viewMode != "Preview") return;
         if (PaintPointGranularityActive)
         {
-            // Points hierarchy: all bead points; centre-lines stay readable (thicker in
-            // the renderer when ShowAllPathPoints is on).
-            ShowBead = PaintShowBeads;
-            ShowExtrusionMoves = true;
-            ShowTravelMoves = false;
-            ShowWipeMoves = false;
-            // Seam-only overlay off — ShowAllPathPoints draws every extrude midpoint.
-            ShowSeam = false;
+            // Points hierarchy: centre-lines dim so the bead points read on top
+            // (the renderer thickens them when ShowAllPathPoints is on).
             ToolpathLineOpacity = 0.65f;
         }
         else
         {
-            // Line / path view: clean centre-lines only (beads optional via toggle).
-            ShowBead = PaintShowBeads;
-            ShowExtrusionMoves = true;
-            ShowTravelMoves = false;
-            ShowWipeMoves = false;
-            ShowSeam = false;
             ToolpathLineOpacity = 1f;
         }
     }
@@ -2409,6 +2402,19 @@ public sealed partial class ViewportViewModel : ViewModelBase
         OnPaintModificationsClearRequested?.Invoke());
     private RelayCommand? _clearPaintMods;
 
+    /// <summary>Diagnostic: describes the frame the Structural Support helpers are drawn
+    /// and picked in (set by the viewport; read by the `support where` console command).</summary>
+    internal Func<string>? DescribeSupportPick;
+
+    /// <summary>Deletes the live Structural Support (and its card, if it still has one).
+    /// Routed through the viewport so card ↔ spec index links are repaired on the way out.</summary>
+    internal Action? OnDeleteSelectedStructuralSupportRequested;
+
+    public RelayCommand DeleteSelectedStructuralSupportCommand =>
+        _deleteSelectedSupport ??= new RelayCommand(() =>
+            OnDeleteSelectedStructuralSupportRequested?.Invoke());
+    private RelayCommand? _deleteSelectedSupport;
+
     // ── Quick-add modifier (autocomplete in the MODIFICATIONS panel) ─────────
 
     /// <summary>Type-to-find modifier names — replaces the CREATE MODIFICATION card.</summary>
@@ -2452,6 +2458,18 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// <summary>Applies a modifier by catalog name to the current edit selection.</summary>
     internal void ApplyNamedModifier(string label)
     {
+        // Reject anything that isn't an exact catalog entry. PaintSupportStyleUtil.FromLabel
+        // falls back to Formbound Buttress for ANY unrecognised string, so a partial commit
+        // ("struct", a typo) silently produced a Buttress card instead of what was asked
+        // for — and then correcting it via the card's dropdown minted a brand new spec,
+        // which is how a handful of unwanted supports accumulate.
+        if (!ModifierQuickAddCatalog.Any(c => string.Equals(c, label, StringComparison.OrdinalIgnoreCase)))
+        {
+            OnDevLog?.Invoke($"[edit] '{label}' is not a modifier — pick one of: "
+                + string.Join(", ", ModifierQuickAddCatalog));
+            return;
+        }
+
         if (string.Equals(label, "Offset path", StringComparison.OrdinalIgnoreCase))
         {
             // Show the Offset path settings inline (Apply lives on that block).
@@ -4799,26 +4817,13 @@ public sealed partial class ViewportViewModel : ViewModelBase
         bool showBody = _viewMode == "Body";
         bool showPath = _viewMode != "Body";
 
-        // Per-mode toolpath render presets (users can still override in VISIBILITY):
-        // Preview = printed-part look (bead surface only); Speed/RPM = clean gradient
-        // lines; Toolpath = classic extrusion + travel lines.
-        switch (_viewMode)
-        {
-            case "Preview":
-                ShowBead = true;  ShowExtrusionMoves = false; ShowTravelMoves = false; ShowSeam = false;
-                ShowWipeMoves = false;
-                break;
-            case "Speed":
-            case "RPM":
-            case "Thermal":
-                ShowBead = false; ShowExtrusionMoves = true;  ShowTravelMoves = false;
-                ShowWipeMoves = true;
-                break;
-            case "Toolpath":
-                ShowBead = false; ShowExtrusionMoves = true;  ShowTravelMoves = true;
-                ShowWipeMoves = true;
-                break;
-        }
+        // The per-mode render presets (Preview = printed-part look, Speed/RPM =
+        // clean gradient lines, Toolpath = extrusion + travel) used to be stamped
+        // here on every switch, which threw away whatever the user had set in
+        // VISIBILITY. They now live in BuildDefaultProfiles as each mode's STARTING
+        // profile, so the first-run look is unchanged but your overrides survive.
+        // Re-stamping here would also overwrite the profile we are switching TO,
+        // since this runs after _viewMode has already changed.
         foreach (var item in EnumerateUserModelItems().ToList())
         {
             if (item.Visible != showBody) item.Visible = showBody;
@@ -4863,11 +4868,28 @@ public sealed partial class ViewportViewModel : ViewModelBase
         public float BackdropBlur { get; set; } = 2.5f;
         public float ToolpathLineOpacity { get; set; } = 1f;
 
+        // Toolpath display layers. Per-profile so each view — and edit mode —
+        // keeps its own, instead of one shared switch every mode fights over.
+        // Initialised to the Body/Preview-ish defaults: a profile saved before
+        // these existed deserialises with the properties absent, and must land
+        // on something sane rather than all-false (an empty viewport).
+        public bool ShowBead { get; set; } = true;
+        public bool ShowExtrusionMoves { get; set; } = true;
+        public bool ShowTravelMoves { get; set; } = true;
+        public bool ShowWipeMoves { get; set; } = true;
+        public bool ShowSeam { get; set; } = true;
+
         /// <summary>Null = never chosen for this view; falls back to the per-view default
         /// (on in RPM). Nullable so profiles saved before this setting existed don't
         /// deserialize to false and silently turn the highlight off.</summary>
         public bool? ShowRpmOverLimit { get; set; }
     }
+
+    /// <summary>
+    /// Profile key for toolpath edit mode. Its own key, not the Toolpath view's —
+    /// so changing seam dots while editing never follows you back out.
+    /// </summary>
+    internal const string EditProfileKey = "Edit";
 
     private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Thermal", "Preview"];
     private readonly Dictionary<string, ViewDisplayProfile> _viewProfiles = BuildDefaultProfiles();
@@ -4888,8 +4910,52 @@ public sealed partial class ViewportViewModel : ViewModelBase
                     BackdropOpacity = 0.15f,
                 }
                 : new ViewDisplayProfile();
+            ApplyDefaultDisplayLayers(d[m], m);
         }
+        // Edit mode: the line-view look, decluttered for path picking — beads and
+        // travel/wipe off so clicks land on real toolpath. Seam dots stay ON here;
+        // they are the one overlay you actually want while editing a toolpath.
+        d[EditProfileKey] = new ViewDisplayProfile
+        {
+            ShowGrid = false, ShowAxes = false, ShowBedGrid = false,
+            ShowContactShadows = false, CavityEnabled = false,
+            DarkBackground = true, ShaderMode = "MatteBlack",
+            BackdropOpacity = 0.15f,
+        };
+        ApplyDefaultDisplayLayers(d[EditProfileKey], EditProfileKey);
         return d;
+    }
+
+    /// <summary>
+    /// Seeds a profile's toolpath display layers to that view's long-standing
+    /// preset — the values <see cref="ApplyViewMode"/> used to stamp on every
+    /// switch. Keeps the out-of-the-box look identical now that they are
+    /// remembered per view instead of re-applied.
+    /// </summary>
+    private static void ApplyDefaultDisplayLayers(ViewDisplayProfile p, string mode)
+    {
+        switch (mode)
+        {
+            case "Preview":   // printed-part look: bead surface only
+                p.ShowBead = true;  p.ShowExtrusionMoves = false;
+                p.ShowTravelMoves = false; p.ShowWipeMoves = false; p.ShowSeam = false;
+                break;
+            case "Toolpath":  // classic extrusion + travel lines
+                p.ShowBead = false; p.ShowExtrusionMoves = true;
+                p.ShowTravelMoves = true;  p.ShowWipeMoves = true;  p.ShowSeam = true;
+                break;
+            case "Speed":
+            case "RPM":
+            case "Thermal":   // clean gradient lines, no travels
+                p.ShowBead = false; p.ShowExtrusionMoves = true;
+                p.ShowTravelMoves = false; p.ShowWipeMoves = true;  p.ShowSeam = true;
+                break;
+            case EditProfileKey:  // decluttered for path picking, seam dots kept
+                p.ShowBead = false; p.ShowExtrusionMoves = true;
+                p.ShowTravelMoves = false; p.ShowWipeMoves = false; p.ShowSeam = true;
+                break;
+            // Body hides toolpaths outright — leave the permissive defaults.
+        }
     }
 
     private bool _darkViewportBackground;
@@ -4906,14 +4972,17 @@ public sealed partial class ViewportViewModel : ViewModelBase
         nameof(ShowContactShadows), nameof(ShowTcpFrame), nameof(CavityEnabled),
         nameof(DarkViewportBackground), nameof(ActiveShaderMode),
         nameof(BackdropOpacity), nameof(BackdropBlur), nameof(ToolpathLineOpacity),
+        nameof(ShowBead), nameof(ShowExtrusionMoves), nameof(ShowTravelMoves),
+        nameof(ShowWipeMoves), nameof(ShowSeam),
         nameof(ShowRpmOverLimit),
     ];
 
     /// <summary>
-    /// Profile key currently driving the display: edit mode borrows the
-    /// Toolpath view's profile (dark line-view look) regardless of the pill.
+    /// Profile key currently driving the display. Edit mode gets a profile all
+    /// of its own — seeded to look like the Toolpath view, but separate from it,
+    /// so what you change while editing never follows you back out to the pills.
     /// </summary>
-    private string EffectiveProfileKey => IsPaintEditOpen ? "Toolpath" : _viewMode;
+    private string EffectiveProfileKey => IsPaintEditOpen ? EditProfileKey : _viewMode;
 
     /// <summary>Call once from the constructor: saves tracked changes into the active profile.</summary>
     private void WireViewProfileTracking()
@@ -4936,6 +5005,11 @@ public sealed partial class ViewportViewModel : ViewModelBase
             prof.BackdropOpacity    = BackdropOpacity;
             prof.BackdropBlur       = BackdropBlur;
             prof.ToolpathLineOpacity = ToolpathLineOpacity;
+            prof.ShowBead           = ShowBead;
+            prof.ShowExtrusionMoves = ShowExtrusionMoves;
+            prof.ShowTravelMoves    = ShowTravelMoves;
+            prof.ShowWipeMoves      = ShowWipeMoves;
+            prof.ShowSeam           = ShowSeam;
             prof.ShowRpmOverLimit   = ShowRpmOverLimit;
         };
     }
@@ -4957,8 +5031,21 @@ public sealed partial class ViewportViewModel : ViewModelBase
             BackdropOpacity    = prof.BackdropOpacity;
             BackdropBlur       = prof.BackdropBlur;
             ToolpathLineOpacity = prof.ToolpathLineOpacity;
+            ShowBead           = prof.ShowBead;
+            ShowExtrusionMoves = prof.ShowExtrusionMoves;
+            ShowTravelMoves    = prof.ShowTravelMoves;
+            ShowWipeMoves      = prof.ShowWipeMoves;
+            ShowSeam           = prof.ShowSeam;
+            // Keep the edit toolbar's "Bead mesh" box honest: it has its own
+            // property, and would otherwise show stale state against the profile.
+            if (_paintShowBeads != prof.ShowBead)
+            {
+                _paintShowBeads = prof.ShowBead;
+                OnPropertyChanged(nameof(PaintShowBeads));
+            }
             // The RPM view is where an over-limit stretch matters most, so it starts on
             // there and off elsewhere — until the operator ticks it for a view themselves.
+            // In edit mode the key is EditProfileKey, so it defaults off while path-editing.
             ShowRpmOverLimit   = prof.ShowRpmOverLimit ?? (EffectiveProfileKey == "RPM");
             if (Enum.TryParse<ShaderMode>(prof.ShaderMode, out var sm))
                 ActiveShaderMode = sm;
@@ -4979,8 +5066,23 @@ public sealed partial class ViewportViewModel : ViewModelBase
             var loaded = System.Text.Json.JsonSerializer
                 .Deserialize<Dictionary<string, ViewDisplayProfile>>(json);
             if (loaded is not null)
+            {
+                // Profiles saved before the display layers moved in here have no
+                // such properties, so they deserialise to the class defaults —
+                // everything on, which would clutter a Preview that has always
+                // been bead-only. Detect the absence and seed the mode's preset
+                // instead of silently changing what the user sees.
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
                 foreach (var (k, v) in loaded)
-                    if (_viewProfiles.ContainsKey(k)) _viewProfiles[k] = v;
+                {
+                    if (!_viewProfiles.ContainsKey(k)) continue;
+                    bool hasLayers =
+                        doc.RootElement.TryGetProperty(k, out var el) &&
+                        el.TryGetProperty(nameof(ViewDisplayProfile.ShowSeam), out _);
+                    if (!hasLayers) ApplyDefaultDisplayLayers(v, k);
+                    _viewProfiles[k] = v;
+                }
+            }
         }
         catch { /* corrupt prefs — keep defaults */ }
         ApplyViewDisplayProfile();
@@ -5980,9 +6082,31 @@ public sealed partial class ViewportViewModel : ViewModelBase
             IsSlicePlaneViewerActive = false;
         }
 
+        // Support pockets belong to the workspace. Restore BEFORE the cards, because a
+        // structural card carries an index into this list and resolving it needs the specs
+        // to already be there.
+        if (AdditiveSettings is { } addSet)
+        {
+            addSet.StructuralSupports.Clear();
+            foreach (var w in session.StructuralSupports)
+                addSet.StructuralSupports.Add(
+                    w.ToSpec($"Support {addSet.StructuralSupports.Count + 1}"));
+            addSet.SelectedSupportIndex = addSet.StructuralSupports.Count > 0 ? 0 : -1;
+        }
+
         // MODIFICATIONS list — after toolpath is armed (caller may re-invoke with layers ready).
         if (session.PaintModifications is { Count: > 0 } mods)
+        {
+            // A workspace written before support specs moved in here has cards whose
+            // StructuralIndex points into the old app-preferences list, which no longer
+            // exists. Drop the dangling reference so the card opens as a plain card rather
+            // than silently editing whichever pocket happens to occupy that slot.
+            int specCount = AdditiveSettings?.StructuralSupports.Count ?? 0;
+            foreach (var m in mods)
+                if (m.StructuralIndex >= specCount)
+                    m.StructuralIndex = -1;
             RestorePaintModifications?.Invoke(mods);
+        }
     }
 
     /// <summary>
@@ -8296,6 +8420,28 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 _rotaryGroupItem.RemoveChild(child);
                 QueueOutlinerSubtreeForRemoval(child);
             }
+        }
+
+        // Support pockets and the MODIFICATIONS cards are JOB data, not scenery, so a job
+        // reset has to take them with it. Both callers of this method are exactly that reset
+        // — File > New, and the workspace open path (which repopulates from the file
+        // straight after). Without this, File > New left the previous job's pockets and
+        // cards sitting in the panel, aimed at geometry that no longer existed, and they
+        // then applied themselves to whatever mesh was imported next. Opening a workspace
+        // that carries no supports of its own had the same effect.
+        // NOTE the two stores. The VIEW owns the authoritative card list
+        // (ViewportView._paintModifications); the collection on this VM is only what the
+        // panel renders. Clearing the display alone left the real list intact, so the next
+        // thing that resynced the panel — adding a single support, say — brought every old
+        // card straight back. Route through the view's own restore-with-nothing path, which
+        // clears its list and refreshes the panel from it. The local Clear() still runs so
+        // headless callers (and tests) with no view attached also end up empty.
+        PaintModifications.Clear();
+        RestorePaintModifications?.Invoke([]);
+        if (AdditiveSettings is { } jobSettings)
+        {
+            jobSettings.StructuralSupports.Clear();
+            jobSettings.SelectedSupportIndex = -1;
         }
 
         _armatureScanNode = null;
