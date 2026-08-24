@@ -22,13 +22,39 @@ public class BrimPlannerTest
         return tp;
     }
 
-    private static SliceSettings Settings(bool enabled = true, int loops = 3) => new()
+    private static SliceSettings Settings(
+        bool enabled = true,
+        int loops = 3,
+        BrimDirection direction = BrimDirection.Outward) => new()
     {
-        BeadWidth   = Bead,
-        LayerHeight = 3f,
-        BrimEnabled = enabled,
-        BrimLoops   = loops,
+        BeadWidth     = Bead,
+        LayerHeight   = 3f,
+        BrimEnabled   = enabled,
+        BrimLoops     = loops,
+        BrimDirection = direction,
     };
+
+    /// <summary>
+    /// A single straight bead — a footprint with no interior hole, so nothing for an inward
+    /// brim to offset into.
+    /// </summary>
+    private static Toolpath SolidLineToolpath()
+    {
+        var layer = new ToolpathLayer(0, 3f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        layer.Moves.Add(new ToolpathMove(
+            new Vector3(0, 50, 3f), new Vector3(100, 50, 3f), MoveKind.Extrude));
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+        return tp;
+    }
+
+    // The 100x100 square WALL leaves a void from 5..95 (the outer edge sits at -5..105).
+    // An inward loop k therefore lands (k - 1/2) beads inside 5..95: k=1 -> 10..90,
+    // k=2 -> 20..80, k=3 -> 30..70.
+    private const float HoleMin = 5f, HoleMax = 95f;
+
+    private static bool InsideHole(Vector3 v) =>
+        v.X > HoleMin + 1f && v.X < HoleMax - 1f && v.Y > HoleMin + 1f && v.Y < HoleMax - 1f;
 
     private static List<ToolpathMove> BrimMoves(Toolpath tp, int originalCount) =>
         tp.Layers[0].Moves.Take(tp.Layers[0].Moves.Count - originalCount).ToList();
@@ -114,5 +140,112 @@ public class BrimPlannerTest
         // The single loop must reach beyond the protrusion tip (160) plus its half-bead.
         float maxX = brim.Max(m => m.To.X);
         Assert.True(maxX > 160f + Bead * 0.4f, $"brim maxX {maxX} does not enclose the protrusion");
+    }
+
+    // ── Direction ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Default_direction_is_outward_and_puts_nothing_in_the_hole()
+    {
+        // Guards the pre-setting behaviour: a workspace or preset carrying no direction must
+        // slice exactly as it did before inward brim existed.
+        var tp = SquareToolpath();
+        BrimPlanner.Apply(tp, Settings(loops: 3));
+        var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
+        Assert.NotEmpty(brim);
+        Assert.DoesNotContain(brim, m => InsideHole(m.To));
+    }
+
+    [Fact]
+    public void Inward_puts_loops_in_the_hole_and_none_outside()
+    {
+        var tp = SquareToolpath();
+        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Inward));
+        var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
+        Assert.NotEmpty(brim);
+        Assert.All(brim, m => Assert.True(InsideHole(m.To), $"inward brim point {m.To} is not in the hole"));
+        Assert.All(brim, m => Assert.Equal(3f, m.To.Z, 3));
+    }
+
+    [Fact]
+    public void Inward_loops_sit_half_a_bead_off_the_hole_edge()
+    {
+        // One loop only: its centreline must be half a bead inside the hole edge, so the bead
+        // touches the part wall — the same rule the outward loops follow.
+        var tp = SquareToolpath();
+        BrimPlanner.Apply(tp, Settings(loops: 1, direction: BrimDirection.Inward));
+        var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
+        Assert.NotEmpty(brim);
+        Assert.Equal(HoleMin + Bead * 0.5f, brim.Min(m => m.To.X), 1);
+        Assert.Equal(HoleMax - Bead * 0.5f, brim.Max(m => m.To.X), 1);
+    }
+
+    [Fact]
+    public void Inward_loops_end_against_the_wall_so_the_last_one_fuses()
+    {
+        // Deepest first, working back out — mirroring outward's farthest-first ordering, so
+        // whichever loop prints last is the one adjacent to the part.
+        var tp = SquareToolpath();
+        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Inward));
+        var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
+        static float FromCentre(Vector3 v) => MathF.Max(MathF.Abs(v.X - 50f), MathF.Abs(v.Y - 50f));
+        Assert.True(FromCentre(brim[0].To) < FromCentre(brim[^1].To),
+            "inward brim should start deepest in the hole and finish against the wall");
+    }
+
+    [Fact]
+    public void Both_covers_outside_and_inside()
+    {
+        var tp = SquareToolpath();
+        BrimPlanner.Apply(tp, Settings(loops: 2, direction: BrimDirection.Both));
+        var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
+        Assert.Contains(brim, m => InsideHole(m.To));
+        Assert.Contains(brim, m => m.To.X < HoleMin - 1f || m.To.X > HoleMax + 1f);
+    }
+
+    [Fact]
+    public void Both_groups_the_two_families_instead_of_interleaving_them()
+    {
+        // Interleaving outward and inward per offset would drag the head over the part once
+        // per loop, and every within-layer travel is a dead stop the screw pumps through.
+        // Grouped, the run crosses the wall exactly once.
+        var tp = SquareToolpath();
+        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Both));
+        var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
+        int crossings = 0;
+        for (int i = 1; i < brim.Count; i++)
+            if (InsideHole(brim[i].To) != InsideHole(brim[i - 1].To)) crossings++;
+        Assert.Equal(1, crossings);
+    }
+
+    [Fact]
+    public void Inward_on_a_footprint_with_no_hole_adds_nothing()
+    {
+        var tp = SolidLineToolpath();
+        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Inward));
+        Assert.Single(tp.Layers[0].Moves);
+    }
+
+    [Fact]
+    public void Inward_loses_its_deeper_loops_in_a_hole_too_narrow_to_hold_them()
+    {
+        // A hole only ~30mm across cannot hold a loop 25mm in from both edges: Clipper closes
+        // that ring off and it simply is not emitted. No size test in the planner does this.
+        var layer = new ToolpathLayer(0, 3f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        Vector3 P(float x, float y) => new(x, y, 3f);
+        layer.Moves.Add(new ToolpathMove(P(0, 0),   P(40, 0),  MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(P(40, 0),  P(40, 40), MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(P(40, 40), P(0, 40),  MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(P(0, 40),  P(0, 0),   MoveKind.Extrude));
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+
+        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Inward));
+        var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
+        // The k=1 ring (5mm into a 5..35 void) fits; k=3 (25mm in) cannot.
+        static float FromCentre(Vector3 v) => MathF.Max(MathF.Abs(v.X - 20f), MathF.Abs(v.Y - 20f));
+        Assert.NotEmpty(brim);
+        Assert.All(brim, m => Assert.True(FromCentre(m.To) > 2f,
+            $"a loop at {m.To} is deeper than a 30mm void can hold"));
     }
 }

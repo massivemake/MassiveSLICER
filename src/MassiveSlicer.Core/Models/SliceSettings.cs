@@ -48,7 +48,7 @@ public sealed class SliceSettings
     public bool WipeSkipShortTravels { get; init; }
 
     /// <summary>
-    /// Brim: outward offset loops around the full first-layer footprint for bed adhesion.
+    /// Brim: offset loops around the first-layer footprint for bed adhesion.
     /// Applied as the LAST toolpath step so first-layer additions (X-bracing, patterns)
     /// are enclosed.
     /// </summary>
@@ -56,6 +56,13 @@ public sealed class SliceSettings
 
     /// <summary>Number of brim offset loops (spaced one bead width apart).</summary>
     public int BrimLoops { get; init; } = 3;
+
+    /// <summary>
+    /// Which side of the footprint the loops sit on. Defaults to <see cref="BrimDirection.Outward"/>,
+    /// which is what brim did before the setting existed — so old presets and workspaces that
+    /// carry no direction keep behaving exactly as they did.
+    /// </summary>
+    public BrimDirection BrimDirection { get; init; } = BrimDirection.Outward;
 
     /// <summary>
     /// Fixed brim print speed (mm/s), independent of print speed and of the Adaptive Speed

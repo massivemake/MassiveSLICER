@@ -257,11 +257,18 @@ public sealed class AppPreferences
     /// <summary>Multi-Planar: tilt about X instead of Y.</summary>
     public bool MultiPlanarAxisX { get; set; }
 
-    /// <summary>Brim: outward offset loops around the first layer for bed adhesion.</summary>
+    /// <summary>Brim: offset loops around the first layer for bed adhesion.</summary>
     public bool BrimEnabled { get; set; }
 
     /// <summary>Number of brim offset loops.</summary>
     public int BrimLoops { get; set; } = 3;
+
+    /// <summary>
+    /// Which side of the footprint the loops sit on: "Outward", "Inward" or "Both".
+    /// Stored as the display string, matching <see cref="WipeModeDisplay"/>. Defaults to
+    /// Outward, so a prefs file written before this existed keeps the old behaviour.
+    /// </summary>
+    public string BrimDirectionDisplay { get; set; } = "Outward";
 
     /// <summary>Fixed brim print speed (mm/s), independent of print speed and Adaptive Speed.</summary>
     public double BrimSpeedMmS { get; set; } = 60.0;

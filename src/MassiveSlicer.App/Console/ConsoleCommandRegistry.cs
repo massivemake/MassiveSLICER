@@ -316,6 +316,56 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "brim",
+            Description = "Bed-adhesion brim: report or set enable / direction / loops / speed / RPM",
+            Usage = "brim | brim on|off | brim out|in|both | brim loops <n> | brim speed <mm/s> | brim rpm <%>",
+            Execute = (ctx, args) =>
+            {
+                var add = ctx.Main.RightPanel.Additive;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+                void Report() => ctx.Log(
+                    $"[brim] {(add.BrimEnabled ? "on" : "off")} · {add.BrimDirectionDisplay} · " +
+                    $"{add.BrimLoops} loop(s) · {add.BrimSpeed:0.#} mm/s · " +
+                    $"RPM {(add.BrimRpmPercent > 0 ? $"{add.BrimRpmPercent:0.#}%" : "follows speed")}");
+
+                if (parts.Length == 0) { Report(); return; }
+
+                switch (parts[0].ToLowerInvariant())
+                {
+                    case "on":   add.BrimEnabled = true;  break;
+                    case "off":  add.BrimEnabled = false; break;
+                    // Direction words rather than the display strings, so the command reads the
+                    // way you'd say it. "outward"/"inward" spelled out are accepted too.
+                    case "out" or "outward": add.BrimDirectionDisplay = "Outward"; break;
+                    case "in"  or "inward":  add.BrimDirectionDisplay = "Inward";  break;
+                    case "both":             add.BrimDirectionDisplay = "Both";    break;
+                    case "loops":
+                        if (parts.Length < 2 || !int.TryParse(parts[1], out int n))
+                        { ctx.LogError("[brim] usage: brim loops <n>"); return; }
+                        add.BrimLoops = n;
+                        break;
+                    case "speed":
+                        if (parts.Length < 2 || !double.TryParse(parts[1], out double mmS))
+                        { ctx.LogError("[brim] usage: brim speed <mm/s>"); return; }
+                        add.BrimSpeed = mmS;
+                        break;
+                    case "rpm":
+                        if (parts.Length < 2 || !double.TryParse(parts[1], out double rpm))
+                        { ctx.LogError("[brim] usage: brim rpm <%>"); return; }
+                        add.BrimRpmPercent = rpm;
+                        break;
+                    default:
+                        ctx.LogError($"[brim] unknown '{parts[0]}'. " +
+                                     "Try: on, off, out, in, both, loops <n>, speed <mm/s>, rpm <%>");
+                        return;
+                }
+                Report();
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "tpdump",
             Description = "Debug: dump the active toolpath moves to a CSV file",
             Usage = "tpdump <path.csv>",

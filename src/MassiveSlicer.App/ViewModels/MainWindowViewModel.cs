@@ -4472,6 +4472,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
         live.BrimEnabled            = copy.BrimEnabled;
         live.BrimLoops              = copy.BrimLoops;
+        live.BrimDirectionDisplay   = copy.BrimDirectionDisplay;
         live.BrimSpeedMmS           = copy.BrimSpeedMmS;
         live.BrimRpmPercent         = copy.BrimRpmPercent;
         live.XBracingEnabled        = copy.XBracingEnabled;
@@ -4744,6 +4745,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.BumpMultiPlanarStamp();
         add.BrimEnabled         = p.BrimEnabled;
         add.BrimLoops           = p.BrimLoops;
+        add.BrimDirectionDisplay = p.BrimDirectionDisplay;
         add.BrimSpeed           = p.BrimSpeedMmS;
         add.BrimRpmPercent      = p.BrimRpmPercent;
         add.XBracingEnabled     = p.XBracingEnabled;
@@ -5087,6 +5089,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.MultiPlanarAxisX = add.MultiPlanarAxisX;
         p.BrimEnabled          = add.BrimEnabled;
         p.BrimLoops            = add.BrimLoops;
+        p.BrimDirectionDisplay = add.BrimDirectionDisplay;
         p.BrimSpeedMmS         = add.BrimSpeed;
         p.BrimRpmPercent       = add.BrimRpmPercent;
         p.XBracingEnabled      = add.XBracingEnabled;

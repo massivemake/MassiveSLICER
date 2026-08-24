@@ -1068,6 +1068,28 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _brimLoops, Math.Clamp(value, 1, 50));
     }
 
+    public string[] BrimDirectionOptions { get; } = ["Outward", "Inward", "Both"];
+
+    private string _brimDirectionDisplay = "Outward";
+    /// <summary>
+    /// Which edges get loops: Outward (outside the footprint), Inward (inside interior
+    /// holes), or Both. The loop count, speed and RPM are shared — direction only chooses
+    /// which edges are offset.
+    /// </summary>
+    public string BrimDirectionDisplay
+    {
+        get => _brimDirectionDisplay;
+        set => SetField(ref _brimDirectionDisplay, value);
+    }
+
+    /// <summary>Maps the display string onto the slicing enum. Anything unrecognised is Outward.</summary>
+    public static BrimDirection ParseBrimDirection(string? display) => display switch
+    {
+        "Inward" => BrimDirection.Inward,
+        "Both"   => BrimDirection.Both,
+        _        => BrimDirection.Outward,
+    };
+
     private double _brimSpeed = SliceSettings.MaxBrimSpeedMmS;
     /// <summary>
     /// Fixed brim speed (mm/s). Deliberately ignores print speed and the Adaptive Speed

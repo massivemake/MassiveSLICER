@@ -2193,7 +2193,7 @@
 
                             <!-- Brim (collapsible group under EFFECTS) -->
                             <Expander Classes="SectionExpander" Header="BRIM" IsExpanded="False"
-                                      ToolTip.Tip="Bed-adhesion brim: outward offset loops around the first layer. Generated as the last toolpath step, so it wraps X-bracing and any other first-layer additions.">
+                                      ToolTip.Tip="Bed-adhesion brim: offset loops around the first layer, outside the footprint and/or inside interior holes. Generated as the last toolpath step, so it wraps X-bracing and any other first-layer additions.">
                                 <StackPanel Margin="0,2,0,4">
                                     <CheckBox Margin="8,2,8,4"
                                               Content="Enable brim"
@@ -2202,6 +2202,17 @@
                                               ToolTip.Tip="Print offset loops around the first layer to secure the part to the bed. The footprint comes from the actual first-layer toolpath, so X-bracing and pattern bulges are enclosed."/>
 
                                     <StackPanel IsVisible="{Binding Additive.ShowBrimControls}">
+                                        <Grid Margin="8,2,8,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="110"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Direction" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Which edges get loops.&#x0a;&#x0a;Outward: loops around the outside of the footprint. Interior holes get nothing. This is what brim did before the setting existed.&#x0a;&#x0a;Inward: loops inside interior holes instead, hugging each hole wall from within the void. The outer boundary gets nothing.&#x0a;&#x0a;Both: outside and inside every hole.&#x0a;&#x0a;Loop count, speed and RPM are shared — direction only chooses which edges are offset. A hole too narrow to hold a loop simply does not get one."/>
+                                            <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
+                                                       ItemsSource="{Binding Additive.BrimDirectionOptions}"
+                                                       SelectedItem="{Binding Additive.BrimDirectionDisplay, Mode=TwoWay}"/>
+                                        </Grid>
                                         <Grid Margin="8,2,8,4">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
@@ -2230,7 +2241,7 @@
                                             <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BrimRpmPercent, Mode=TwoWay}"/>
                                         </Grid>
                                         <TextBlock Margin="10,0,10,4" FontSize="10" Opacity="0.6" TextWrapping="Wrap"
-                                                   Text="Loops are one bead width apart, printed outermost-in before the part so the innermost loop fuses to the first bead. Brim speed is fixed and independent of Adaptive Speed."/>
+                                                   Text="Loops are one bead width apart and print before the part, farthest edge first, so the last loop fuses to its first bead. Inward loops work the same way measured from each hole edge. Brim speed is fixed and independent of Adaptive Speed."/>
                                     </StackPanel>
                                 </StackPanel>
                             </Expander>
