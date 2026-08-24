@@ -8,6 +8,12 @@ namespace MassiveSlicer.Tests;
 /// <summary>Opportunistic regression check against the REAL 26-282 fuselage STL on
 /// the shop NAS — the part that produced every angled-lightning field bug. Skips
 /// silently when the share isn't mounted (CI, other machines).</summary>
+// Slicing publishes the shared diagnostic statics (AdaptiveLayerHeights.LastReasons,
+// SupportDrivenLayerHeights.LastDecisions, ProximityFlowPostProcessor.LastRuns) as a side
+// effect, even when this test never reads them. xUnit runs test CLASSES in parallel, so a
+// class that slices outside this collection clobbers whatever LayerLadderAgreementTest is
+// asserting on. Any test that runs the slicer belongs in this collection.
+[Collection("AdaptiveLayerHeights")]
 public class FuselageRealCheck(ITestOutputHelper o)
 {
     private const string Stl =

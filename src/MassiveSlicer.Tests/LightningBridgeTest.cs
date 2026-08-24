@@ -13,6 +13,12 @@ namespace MassiveSlicer.Tests;
 /// so fingers must grow beneath them; gradual shapes and prisms must stay
 /// perimeter-only. Continuity (zero travels) is the hard LFAM requirement.
 /// </summary>
+// Slicing publishes the shared diagnostic statics (AdaptiveLayerHeights.LastReasons,
+// SupportDrivenLayerHeights.LastDecisions, ProximityFlowPostProcessor.LastRuns) as a side
+// effect, even when this test never reads them. xUnit runs test CLASSES in parallel, so a
+// class that slices outside this collection clobbers whatever LayerLadderAgreementTest is
+// asserting on. Any test that runs the slicer belongs in this collection.
+[Collection("AdaptiveLayerHeights")]
 public sealed class LightningBridgeTest
 {
     private const float LayerH = 3f, Bead = 6f;

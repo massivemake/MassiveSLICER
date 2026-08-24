@@ -10,6 +10,12 @@ namespace MassiveSlicer.Tests;
 /// toolpath as its own path and forced a travel out to it and back — on the Dragon
 /// column that was a 1.6 m round trip on a single layer.
 /// </summary>
+// Slicing publishes the shared diagnostic statics (AdaptiveLayerHeights.LastReasons,
+// SupportDrivenLayerHeights.LastDecisions, ProximityFlowPostProcessor.LastRuns) as a side
+// effect, even when this test never reads them. xUnit runs test CLASSES in parallel, so a
+// class that slices outside this collection clobbers whatever LayerLadderAgreementTest is
+// asserting on. Any test that runs the slicer belongs in this collection.
+[Collection("AdaptiveLayerHeights")]
 public class DegenerateContourTest
 {
     // Box occupying X/Y 0..100, Z 0..10.

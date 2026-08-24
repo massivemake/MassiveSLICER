@@ -17,6 +17,12 @@ namespace MassiveSlicer.Tests;
 /// between the slicer and the effect.
 /// </para>
 /// </summary>
+// Slicing publishes the shared diagnostic statics (AdaptiveLayerHeights.LastReasons,
+// SupportDrivenLayerHeights.LastDecisions, ProximityFlowPostProcessor.LastRuns) as a side
+// effect, even when this test never reads them. xUnit runs test CLASSES in parallel, so a
+// class that slices outside this collection clobbers whatever LayerLadderAgreementTest is
+// asserting on. Any test that runs the slicer belongs in this collection.
+[Collection("AdaptiveLayerHeights")]
 public class PatternScopeSlicerFlagsTest
 {
     private static Vector3[] Box(float x0, float y0, float x1, float y1, float z0, float z1)

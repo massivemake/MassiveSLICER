@@ -13,6 +13,12 @@ namespace MassiveSlicer.Tests;
 /// uniform allowance) yields a blank that envelopes the raw part — taller and wider by the
 /// allowance — so the later mill always has material. Mirrors what RunSliceAsync feeds the slicer.
 /// </summary>
+// Slicing publishes the shared diagnostic statics (AdaptiveLayerHeights.LastReasons,
+// SupportDrivenLayerHeights.LastDecisions, ProximityFlowPostProcessor.LastRuns) as a side
+// effect, even when this test never reads them. xUnit runs test CLASSES in parallel, so a
+// class that slices outside this collection clobbers whatever LayerLadderAgreementTest is
+// asserting on. Any test that runs the slicer belongs in this collection.
+[Collection("AdaptiveLayerHeights")]
 public class AdditiveStockSliceTest(ITestOutputHelper output)
 {
     [Fact]

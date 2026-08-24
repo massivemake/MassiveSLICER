@@ -13,6 +13,12 @@ namespace MassiveSlicer.Tests;
 /// (full-width travels), the cell-boundary merge trap (legs pinned to boundaries),
 /// and the chord-projection fold under crests (march deadlocked at prev.S).
 /// </summary>
+// Slicing publishes the shared diagnostic statics (AdaptiveLayerHeights.LastReasons,
+// SupportDrivenLayerHeights.LastDecisions, ProximityFlowPostProcessor.LastRuns) as a side
+// effect, even when this test never reads them. xUnit runs test CLASSES in parallel, so a
+// class that slices outside this collection clobbers whatever LayerLadderAgreementTest is
+// asserting on. Any test that runs the slicer belongs in this collection.
+[Collection("AdaptiveLayerHeights")]
 public sealed class XBracingSurfaceReproTest
 {
     private const float Bead = 6f;

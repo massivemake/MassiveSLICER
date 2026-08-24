@@ -11,6 +11,12 @@ namespace MassiveSlicer.Tests;
 /// kept ONE island per layer, deleting the rest of the model. The guard keeps enclosed
 /// rings (mean width ≫ bead) closed and reports a warning.
 /// </summary>
+// Slicing publishes the shared diagnostic statics (AdaptiveLayerHeights.LastReasons,
+// SupportDrivenLayerHeights.LastDecisions, ProximityFlowPostProcessor.LastRuns) as a side
+// effect, even when this test never reads them. xUnit runs test CLASSES in parallel, so a
+// class that slices outside this collection clobbers whatever LayerLadderAgreementTest is
+// asserting on. Any test that runs the slicer belongs in this collection.
+[Collection("AdaptiveLayerHeights")]
 public class ZigZagEnclosedGuardTest
 {
     private const float Bead = 8f;
