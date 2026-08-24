@@ -19,6 +19,11 @@ public sealed class GltfNumericalIkSolver
     private readonly Matrix4   _tcpLocal;       // TCP offset as a local transform in GLTF space
     private Vector3   _robotWorldPos;  // ROBROOT origin in scene space (for ROBROOT ↔ scene conversion)
     private readonly float     _toolFrameRoll;  // rotation around flange outward axis (radians), matches SyncTcpReadout
+    // Taught TOOL_DATA ABC (T12). Orientation-only — never baked into _tcpLocal or the triad XYZ.
+    private readonly float     _tcpADeg;
+    private readonly float     _tcpBDeg;
+    private readonly float     _tcpCDeg;
+    private readonly bool      _hasTcpAbc;
 
     private readonly JointConfig[] _jcfg;
 
@@ -39,13 +44,18 @@ public sealed class GltfNumericalIkSolver
     public GltfNumericalIkSolver(IReadOnlyList<Matrix4> restPoses, Matrix4 chainRoot,
                                   Vector3 robotWorldPos, Matrix4 tcpLocal,
                                   IReadOnlyList<JointConfig> jointConfigs,
-                                  float toolFrameRoll = 0f)
+                                  float toolFrameRoll = 0f,
+                                  float tcpADeg = 0f, float tcpBDeg = 0f, float tcpCDeg = 0f)
     {
         _restPose      = restPoses.ToArray();
         _chainRoot     = chainRoot;
         _robotWorldPos = robotWorldPos;
         _tcpLocal      = tcpLocal;
         _toolFrameRoll = toolFrameRoll;
+        _tcpADeg       = tcpADeg;
+        _tcpBDeg       = tcpBDeg;
+        _tcpCDeg       = tcpCDeg;
+        _hasTcpAbc     = MathF.Abs(tcpADeg) + MathF.Abs(tcpBDeg) + MathF.Abs(tcpCDeg) > 1e-3f;
         _jcfg          = jointConfigs.ToArray();
         RecomputeWorkspaceMetrics();
     }
@@ -177,7 +187,39 @@ public sealed class GltfNumericalIkSolver
         var   wt  = ComputeJoint6Transform(krl);
         var   tcp = (_tcpLocal * wt).Row3.Xyz;
         float sc  = wt.Row0.Xyz.Length;
-        return (tcp, wt.Row0.Xyz / sc, wt.Row1.Xyz / sc, wt.Row2.Xyz / sc);
+        var r0 = wt.Row0.Xyz / sc;
+        var r1 = wt.Row1.Xyz / sc;
+        var r2 = wt.Row2.Xyz / sc;
+        if (_hasTcpAbc)
+            (r0, r1, r2) = ApplyTaughtAbcToFlangeRows(r0, r1, r2);
+        return (tcp, r0, r1, r2);
+    }
+
+    /// <summary>
+    /// Scene flange rows → T12 tool-frame rows. Same mapping as
+    /// <see cref="TargetRotFromKukaAbc"/> so mill ABC is matched to TOOL_DATA ABC,
+    /// not the flange. Position is untouched (cutter stays on SpindleBitTCP).
+    /// </summary>
+    (Vector3 r0, Vector3 r1, Vector3 r2) ApplyTaughtAbcToFlangeRows(Vector3 r0, Vector3 r1, Vector3 r2)
+    {
+        float cr = MathF.Cos(_toolFrameRoll), sr = MathF.Sin(_toolFrameRoll);
+        // Inverse of TargetRotFromKukaAbc: scene rows → KUKA flange axes
+        var kukaX = cr * r0 + sr * r2;
+        var kukaY = sr * r0 - cr * r2;
+        var kukaZ = r1;
+
+        var abc = KukaIkSolver.AbcToMatrix(_tcpADeg, _tcpBDeg, _tcpCDeg);
+        var kukaN = new System.Numerics.Matrix4x4(
+            kukaX.X, kukaX.Y, kukaX.Z, 0,
+            kukaY.X, kukaY.Y, kukaY.Z, 0,
+            kukaZ.X, kukaZ.Y, kukaZ.Z, 0,
+            0, 0, 0, 1);
+        var toolN = abc * kukaN;
+        var tX = new Vector3(toolN.M11, toolN.M12, toolN.M13);
+        var tY = new Vector3(toolN.M21, toolN.M22, toolN.M23);
+        var tZ = new Vector3(toolN.M31, toolN.M32, toolN.M33);
+
+        return (cr * tX + sr * tY, tZ, sr * tX - cr * tY);
     }
 
     /// <summary>
@@ -369,6 +411,20 @@ public sealed class GltfNumericalIkSolver
     ///   3. Mapped to scene-space IK rows via toolFrameRoll.
     /// Zero offset → nozzle perpendicular to surface. Non-zero → physically tilts/rolls.
     /// </summary>
+    /// <summary>
+    /// Mill / T12: align KUKA tool Z (cutter) with −<paramref name="surfaceNormal"/>
+    /// so the spindle TCP follows the surface, not the extruder X-approach frame.
+    /// </summary>
+    public (Vector3 r0, Vector3 r1, Vector3 r2) TargetRotFromMillNormal(
+        Vector3 surfaceNormal, float tcpYawDeg = 0f,
+        float offA = 0f, float offB = 0f, float offC = 0f)
+    {
+        var (a, b, c) = KukaOrientation.AbcFromMillNormal(
+            new System.Numerics.Vector3(surfaceNormal.X, surfaceNormal.Y, surfaceNormal.Z),
+            tcpYawDeg, offA, offB, offC);
+        return TargetRotFromKukaAbc(a, b, c);
+    }
+
     public (Vector3 r0, Vector3 r1, Vector3 r2) TargetRotFromGlobalOrientation(
         Vector3 normal, float offADeg, float offBDeg, float offCDeg)
     {
@@ -408,34 +464,6 @@ public sealed class GltfNumericalIkSolver
         // Step 3: map to scene-space IK rows via toolFrameRoll
         float cr = MathF.Cos(_toolFrameRoll), sr = MathF.Sin(_toolFrameRoll);
         return (cr * xF + sr * yF, zF, sr * xF - cr * yF);
-    }
-
-    /// <summary>
-    /// Mill T12: cutter along tool +Z into the work (−surfaceNormal). Do not reuse
-    /// <see cref="TargetRotFromGlobalOrientation"/> (extruder X-approach).
-    /// </summary>
-    public (Vector3 r0, Vector3 r1, Vector3 r2) TargetRotFromMillNormal(
-        Vector3 surfaceNormal, float yawDeg = 0f)
-    {
-        var n = surfaceNormal.LengthSquared > 1e-12f ? surfaceNormal.Normalized() : Vector3.UnitZ;
-        var z = -n;
-        var hint = MathF.Abs(z.Z) > 0.9f ? Vector3.UnitX : Vector3.UnitZ;
-        var x = Vector3.Cross(hint, z);
-        if (x.LengthSquared < 1e-12f)
-            x = Vector3.Cross(Vector3.UnitY, z);
-        x = x.Normalized();
-        var y = Vector3.Cross(z, x);
-        if (MathF.Abs(yawDeg) > 1e-4f)
-        {
-            float cy = MathF.Cos(yawDeg * MathF.PI / 180f);
-            float sy = MathF.Sin(yawDeg * MathF.PI / 180f);
-            var x2 = x * cy + y * sy;
-            var y2 = y * cy - x * sy;
-            x = x2;
-            y = y2;
-        }
-        float cr = MathF.Cos(_toolFrameRoll), sr = MathF.Sin(_toolFrameRoll);
-        return (cr * x + sr * y, z, sr * x - cr * y);
     }
 
     private static Vector3 Rod(Vector3 v, Vector3 axis, float sinT, float cosT)
@@ -524,7 +552,8 @@ public sealed class GltfNumericalIkSolver
 
     /// <summary>
     /// Position + orientation constrained IK. Solves for a TCP target in ROBROOT
-    /// frame (mm) while holding the flange orientation fixed.
+    /// frame (mm) while holding the <b>tool</b> orientation (T12 ABC when set,
+    /// otherwise flange) to <paramref name="targetRot"/>.
     /// <paramref name="targetRot"/> is the desired normalized rotation rows in scene
     /// space -- obtain it by calling <see cref="ComputeFlangeRotNorm"/> at the seed
     /// angles before solving.

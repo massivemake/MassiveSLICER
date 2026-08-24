@@ -248,12 +248,12 @@ public partial class ViewportOverlayView : UserControl
                 lift = Math.Max(lift, bar.Margin.Bottom + bar.Bounds.Height + 16);
 
         // Lfam3WorkflowBar's phase-detail cards and embedded Live I/O monitor float above
-        // the collapsed panel via negative-margin + ClipToBounds=False (a deliberate trick
-        // so expanding a card doesn't push the header row down) — so Bounds.Height only
-        // ever reports the COLLAPSED height and under-reports the true visual footprint
-        // whenever a card or Live I/O is open. That under-count is why the ERP / Live I/O
-        // corner docks used to sit low enough to overlap the timeline on LFAM 3. Use the
-        // analytically-computed max height (already modelled correctly) as a floor.
+                // the collapsed panel via negative-margin + ClipToBounds=False (a deliberate trick
+                // so expanding a card doesn't push the header row down) — so Bounds.Height only
+                // ever reports the COLLAPSED height and under-reports the true visual footprint
+                // whenever a card or Live I/O is open. That under-count is why the Live I/O
+                // corner dock used to sit low enough to overlap the timeline on LFAM 3. Use the
+                // analytically-computed max height (already modelled correctly) as a floor.
         if (Lfam3WorkflowBar.IsVisible)
         {
             double workflowHeight = Math.Max(Lfam3WorkflowBar.Bounds.Height, vm.Lfam3WorkflowMaxHeight);

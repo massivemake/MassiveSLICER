@@ -1,5 +1,4 @@
 using Avalonia.Controls;
-using Avalonia.Input;
 using Avalonia.Interactivity;
 
 namespace MassiveSlicer.App.Views;
@@ -9,6 +8,7 @@ public partial class PreferencesWindow : Window
     public PreferencesWindow()
     {
         InitializeComponent();
+        DialogWindowChrome.Apply(this);
         TitleBar.PointerPressed += (_, e) => BeginMoveDrag(e);
     }
 
@@ -25,6 +25,10 @@ public partial class PreferencesWindow : Window
 
     private void ShowSection(int index)
     {
+        // Keep-on-bed lives on the Navigation page. Leaving it visible on
+        // Connections ate the top of the scroller so LFAM 3 user/pass never
+        // came into view.
+        SectionKeepOnBed.IsVisible   = index == 0;
         SectionNavigation.IsVisible  = index == 0;
         SectionPerformance.IsVisible = index == 1;
         SectionAppearance.IsVisible  = index == 2;
@@ -33,5 +37,6 @@ public partial class PreferencesWindow : Window
         BtnPerformance.Classes.Set("Active", index == 1);
         BtnAppearance.Classes.Set("Active",  index == 2);
         BtnConnections.Classes.Set("Active", index == 3);
+        PrefsScroller.Offset = new Avalonia.Vector(0, 0);
     }
 }

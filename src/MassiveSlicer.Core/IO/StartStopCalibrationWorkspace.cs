@@ -307,6 +307,7 @@ public static class StartStopCalibrationWorkspace
         prefs.ExtrusionResumeWaitSec = request.ExtrusionResumeWaitSec;
         // Calibration series: Caracol URM body (MTruck travel start/end + RPM=).
         prefs.DigitalStartStopEnabled = true;
+        prefs.RobotModeEnabled = true;
         prefs.InfillPattern          = "None";
         prefs.SliceMethod            = "Planar";
         prefs.SlicingMode            = "Normal";

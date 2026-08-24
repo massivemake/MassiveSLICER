@@ -4,13 +4,14 @@
         x:Class="MassiveSlicer.App.Views.PreferencesWindow"
         x:CompileBindings="False"
         Title="Preferences"
-        Width="620" Height="640"
-        MinWidth="520" MinHeight="360" MaxHeight="1100"
+        Width="992" Height="700"
+        MinWidth="832" MinHeight="420" MaxHeight="1100"
         WindowStartupLocation="CenterOwner"
         WindowDecorations="None"
         CanResize="True"
         ShowInTaskbar="False"
-        Background="{DynamicResource Bg0}">
+        TransparencyLevelHint="Transparent"
+        Background="Transparent">
 
     <Window.Resources>
         <conv:EqualityConverter x:Key="EqualityConverter"/>
@@ -35,19 +36,39 @@
             <Setter Property="Foreground"  Value="{DynamicResource Accent}"/>
             <Setter Property="Background"  Value="{DynamicResource Bg3}"/>
         </Style>
+        <Style Selector="Border.PrefCard">
+            <Setter Property="Background"     Value="{DynamicResource Bg3}"/>
+            <Setter Property="CornerRadius"   Value="8"/>
+            <Setter Property="Padding"        Value="16,14"/>
+            <Setter Property="Margin"         Value="0,0,0,14"/>
+            <Setter Property="BorderBrush"    Value="{DynamicResource Border1}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style Selector="TextBlock.FieldLabel">
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+            <Setter Property="FontSize"   Value="10"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin"     Value="0,0,0,4"/>
+        </Style>
     </Window.Styles>
 
-    <Border BorderBrush="{DynamicResource Border2}" BorderThickness="1">
+    <Border Classes="DialogChrome"
+            Background="{DynamicResource Bg0}"
+            BorderBrush="{DynamicResource Border2}"
+            BorderThickness="1"
+            CornerRadius="12"
+            ClipToBounds="True">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="40"/>
-                <RowDefinition Height="*"/>
                 <RowDefinition Height="44"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="52"/>
             </Grid.RowDefinitions>
 
             <!-- Title bar (draggable) -->
             <Border Grid.Row="0" x:Name="TitleBar"
                     Background="{DynamicResource Bg1}"
+                    CornerRadius="12,12,0,0"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,0,0,1"
                     Cursor="SizeAll">
@@ -66,9 +87,9 @@
             </Border>
 
             <!-- Body -->
-            <Grid Grid.Row="1">
+            <Grid Grid.Row="1" ClipToBounds="True">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="160"/>
+                    <ColumnDefinition Width="188"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
@@ -76,20 +97,24 @@
                 <Border Grid.Column="0"
                         Background="{DynamicResource Bg1}"
                         BorderBrush="{DynamicResource Border1}"
-                        BorderThickness="0,0,1,0">
-                    <StackPanel Margin="0,8">
-                        <Button x:Name="BtnNavigation"  Content="⊙  Navigation"  Classes="NavBtn Active" Click="NavNavigation_Click"/>
-                        <Button x:Name="BtnPerformance" Content="▫  Performance" Classes="NavBtn"        Click="NavPerformance_Click"/>
-                        <Button x:Name="BtnAppearance"  Content="◈  Appearance"  Classes="NavBtn"        Click="NavAppearance_Click"/>
-                        <Button x:Name="BtnConnections" Content="⇄  Connections" Classes="NavBtn"        Click="NavConnections_Click"/>
+                        BorderThickness="0,0,1,0"
+                        CornerRadius="0">
+                    <StackPanel Margin="8,12,8,8" Spacing="2">
+                        <Button x:Name="BtnNavigation"  Content="Navigation"  Classes="NavBtn Active" Click="NavNavigation_Click"/>
+                        <Button x:Name="BtnPerformance" Content="Performance" Classes="NavBtn"        Click="NavPerformance_Click"/>
+                        <Button x:Name="BtnAppearance"  Content="Appearance"  Classes="NavBtn"        Click="NavAppearance_Click"/>
+                        <Button x:Name="BtnConnections" Content="Connections" Classes="NavBtn"        Click="NavConnections_Click"/>
                     </StackPanel>
                 </Border>
 
                 <!-- Content -->
-                <ScrollViewer Grid.Column="1"
-                              VerticalScrollBarVisibility="Auto"
+                <ScrollViewer x:Name="PrefsScroller"
+                              Grid.Column="1"
+                              Classes="Floating"
+                              VerticalScrollBarVisibility="Visible"
+                              HorizontalScrollBarVisibility="Disabled"
                               Background="{DynamicResource Bg2}"
-                              Padding="24,20,24,20">
+                              Padding="28,22,28,40">
                     <StackPanel>
 
                         <!-- KEEP ON BED section -->
@@ -315,90 +340,138 @@
 
 
                         <!-- CONNECTIONS section -->
-                        <StackPanel x:Name="SectionConnections" IsVisible="False">
-                            <TextBlock Text="ERP CONNECTION" Classes="SectionHeader" Margin="0,0,0,6"/>
-                            <TextBlock Text="Email + password signs in at launch and fetches a slicer token. The token field is optional fallback (ERP Settings -> Slicer Access). Credentials stay in local preferences, never in shared .mass files."
-                                       Classes="LabelMuted" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                            <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
-                                <TextBlock Grid.Column="0" Text="ERP URL" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
-                                           Watermark="https://lab.massivemake.com/api/slicer/v1"
-                                           Text="{Binding Erp.BaseUrl, Mode=TwoWay}"/>
-                            </Grid>
-                            <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
-                                <TextBlock Grid.Column="0" Text="Email" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
-                                           Watermark="you@massivemake.com"
-                                           Text="{Binding Erp.Email, Mode=TwoWay}"/>
-                            </Grid>
-                            <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
-                                <TextBlock Grid.Column="0" Text="Password" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" PasswordChar="•"
-                                           Watermark="Lab password"
-                                           Text="{Binding Erp.Password, Mode=TwoWay}"/>
-                            </Grid>
-                            <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
-                                <TextBlock Grid.Column="0" Text="API Token" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" PasswordChar="•"
-                                           Watermark="optional - fetched on sign-in"
-                                           Text="{Binding Erp.ApiToken, Mode=TwoWay}"
-                                           ToolTip.Tip="Filled automatically after a successful email/password login. Paste a token here only if Lab has no login route yet."/>
-                            </Grid>
-                            <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
-                                <TextBlock Grid.Column="0" Text="Projects Root" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
-                                           Watermark="/Volumes/MassiveFILES/Projects"
-                                           Text="{Binding UnasProjectsRoot, Mode=TwoWay}"
-                                           ToolTip.Tip="ERP-linked workspaces save straight into &lt;root&gt;/&lt;project number&gt; - …/06-Production Documents"/>
-                            </Grid>
-                            <Grid Margin="0,0,0,4" ColumnDefinitions="90,*">
-                                <Button Grid.Column="1" Content="Connect Now" HorizontalAlignment="Left"
-                                        Command="{Binding Erp.ConnectCommand}"/>
-                            </Grid>
-                            <Grid Margin="0,0,0,10" ColumnDefinitions="90,*">
-                                <TextBlock Grid.Column="1" Text="{Binding Erp.Status}"
-                                           Classes="LabelMuted" FontSize="11" TextWrapping="Wrap"/>
-                            </Grid>
+                        <StackPanel x:Name="SectionConnections" IsVisible="False" Spacing="0">
 
-                            <Border Height="1" Background="{DynamicResource Border1}" Margin="0,8,0,14"/>
+                            <Border Classes="PrefCard">
+                                <StackPanel Spacing="12">
+                                    <Grid ColumnDefinitions="*,Auto" VerticalAlignment="Center">
+                                        <StackPanel Grid.Column="0" Spacing="2">
+                                            <TextBlock Text="LAB ERP" FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextPrimary}"/>
+                                            <TextBlock Text="Sign in with your Lab account. A slicer token is fetched automatically and stays on this PC only."
+                                                       Classes="LabelMuted" FontSize="11" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="16,0,0,0">
+                                            <Border CornerRadius="12" Padding="10,4"
+                                                    Background="#3340b840"
+                                                    IsVisible="{Binding Erp.IsConnected}">
+                                                <TextBlock Text="Connected" FontSize="11" FontWeight="SemiBold"
+                                                           Foreground="#40b840" HorizontalAlignment="Center"/>
+                                            </Border>
+                                            <Border CornerRadius="12" Padding="10,4"
+                                                    Background="#333a3a3a"
+                                                    IsVisible="{Binding Erp.IsConnecting}">
+                                                <TextBlock Text="Signing in" FontSize="11" FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource TextSecondary}" HorizontalAlignment="Center"/>
+                                            </Border>
+                                        </StackPanel>
+                                    </Grid>
 
-                            <TextBlock Text="ROBOT SMB (EXPORT TO ROBOT)" Classes="SectionHeader" Margin="0,0,0,6"/>
-                            <TextBlock Text="Per-cell credentials for writing .src programs straight onto the robot controller's share. Passwords stay in local preferences only."
-                                       Classes="LabelMuted" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <Grid ColumnDefinitions="*,14,*" RowDefinitions="Auto,12,Auto,12,Auto">
+                                        <StackPanel Grid.Row="0" Grid.Column="0">
+                                            <TextBlock Text="EMAIL" Classes="FieldLabel"/>
+                                            <TextBox Classes="PanelTextBox"
+                                                     Watermark="you@massivemake.com"
+                                                     Text="{Binding Erp.Email, Mode=TwoWay}"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="0" Grid.Column="2">
+                                            <TextBlock Text="PASSWORD" Classes="FieldLabel"/>
+                                            <TextBox Classes="PanelTextBox" PasswordChar="*"
+                                                     Watermark="Lab password"
+                                                     Text="{Binding Erp.Password, Mode=TwoWay}"/>
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3">
+                                            <TextBlock Text="ERP URL" Classes="FieldLabel"/>
+                                            <TextBox Classes="PanelTextBox"
+                                                     Watermark="https://lab.massivemake.com/api/slicer/v1"
+                                                     Text="{Binding Erp.BaseUrl, Mode=TwoWay}"/>
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3">
+                                            <TextBlock Text="PROJECTS ROOT" Classes="FieldLabel"/>
+                                            <TextBox Classes="PanelTextBox"
+                                                     Watermark="/Volumes/MassiveFILES/Projects"
+                                                     Text="{Binding UnasProjectsRoot, Mode=TwoWay}"
+                                                     ToolTip.Tip="ERP-linked workspaces save into &lt;root&gt;/&lt;project number&gt; - .../06-Production Documents"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Expander Margin="0,2,0,0">
+                                        <Expander.Header>
+                                            <TextBlock Text="Advanced: API token fallback"
+                                                       Classes="LabelMuted" FontSize="11"/>
+                                        </Expander.Header>
+                                        <StackPanel Margin="0,8,0,0" Spacing="4">
+                                            <TextBlock Text="Only needed until Lab ships POST /api/slicer/v1/login. Filled automatically after a successful sign-in."
+                                                       Classes="LabelMuted" FontSize="11" TextWrapping="Wrap"/>
+                                            <TextBox Classes="PanelTextBox" PasswordChar="*"
+                                                     Watermark="optional - fetched on sign-in"
+                                                     Text="{Binding Erp.ApiToken, Mode=TwoWay}"/>
+                                        </StackPanel>
+                                    </Expander>
+
+                                    <Grid ColumnDefinitions="Auto,*" Margin="0,2,0,0">
+                                        <Button Grid.Column="0" Content="Sign in"
+                                                Classes="PrimaryButton"
+                                                Padding="18,7"
+                                                Command="{Binding Erp.ConnectCommand}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Erp.Status}"
+                                                   Classes="LabelMuted" FontSize="11" TextWrapping="Wrap"
+                                                   VerticalAlignment="Center" Margin="14,0,0,0"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="ROBOT SMB" Classes="SectionHeader" Margin="2,4,0,4"/>
+                            <TextBlock Text="Per-cell credentials for writing .src files onto the controller share. Passwords stay in local preferences only."
+                                       Classes="LabelMuted" FontSize="11" TextWrapping="Wrap" Margin="2,0,0,10"/>
+
                             <ItemsControl ItemsSource="{Binding SmbRows}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Background="{DynamicResource Bg3}" CornerRadius="6"
-                                                Padding="12,10" Margin="0,0,0,10">
-                                            <StackPanel>
+                                        <Border Classes="PrefCard" Padding="16,12">
+                                            <StackPanel Spacing="10">
                                                 <TextBlock Text="{Binding CellName}" FontWeight="SemiBold"
-                                                           FontSize="12" Margin="0,0,0,8"/>
-                                                <Grid ColumnDefinitions="80,*,10,80,*" Margin="0,0,0,6">
-                                                    <TextBlock Grid.Column="0" Text="Robot IP" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Host, Mode=TwoWay}"/>
-                                                    <TextBlock Grid.Column="3" Text="Share" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                                    <TextBox   Grid.Column="4" Classes="PanelTextBox" Text="{Binding Share, Mode=TwoWay}" Watermark="d"/>
+                                                           FontSize="13" Foreground="{DynamicResource TextPrimary}"/>
+                                                <Grid ColumnDefinitions="*,12,*,12,*" RowDefinitions="Auto,10,Auto">
+                                                    <StackPanel Grid.Row="0" Grid.Column="0">
+                                                        <TextBlock Text="ROBOT IP" Classes="FieldLabel"/>
+                                                        <TextBox Classes="PanelTextBox" Text="{Binding Host, Mode=TwoWay}"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Row="0" Grid.Column="2">
+                                                        <TextBlock Text="SHARE" Classes="FieldLabel"/>
+                                                        <TextBox Classes="PanelTextBox" Text="{Binding Share, Mode=TwoWay}" Watermark="d"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Row="0" Grid.Column="4">
+                                                        <TextBlock Text="FOLDER" Classes="FieldLabel"/>
+                                                        <TextBox Classes="PanelTextBox" Text="{Binding Folder, Mode=TwoWay}" Watermark="(share root)"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Row="2" Grid.Column="0">
+                                                        <TextBlock Text="USERNAME" Classes="FieldLabel"/>
+                                                        <TextBox Classes="PanelTextBox" Text="{Binding Username, Mode=TwoWay}"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Row="2" Grid.Column="2">
+                                                        <TextBlock Text="PASSWORD" Classes="FieldLabel"/>
+                                                        <TextBox Classes="PanelTextBox" PasswordChar="*" Text="{Binding Password, Mode=TwoWay}"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Row="2" Grid.Column="4" VerticalAlignment="Bottom">
+                                                        <Button Content="Test connection"
+                                                                Classes="SecondaryButton"
+                                                                HorizontalAlignment="Stretch"
+                                                                Command="{Binding TestCommand}"/>
+                                                    </StackPanel>
                                                 </Grid>
-                                                <Grid ColumnDefinitions="80,*,10,80,*" Margin="0,0,0,6">
-                                                    <TextBlock Grid.Column="0" Text="Folder" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Folder, Mode=TwoWay}" Watermark="(share root)"/>
-                                                </Grid>
-                                                <Grid ColumnDefinitions="80,*,10,80,*" Margin="0,0,0,6">
-                                                    <TextBlock Grid.Column="0" Text="Username" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Username, Mode=TwoWay}"/>
-                                                    <TextBlock Grid.Column="3" Text="Password" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                                    <TextBox   Grid.Column="4" Classes="PanelTextBox" PasswordChar="•" Text="{Binding Password, Mode=TwoWay}"/>
-                                                </Grid>
-                                                <Grid ColumnDefinitions="Auto,12,*">
-                                                    <Button Grid.Column="0" Content="Test Connection" Command="{Binding TestCommand}"/>
-                                                    <TextBlock Grid.Column="2" Text="{Binding Status}" Classes="LabelMuted"
-                                                               FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center"/>
-                                                </Grid>
+                                                <TextBlock Text="{Binding Status}" Classes="LabelMuted"
+                                                           FontSize="11" TextWrapping="Wrap"
+                                                           IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
                                             </StackPanel>
                                         </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            <!-- Last card (LFAM 3 user/pass) cannot reach the viewport without pad. -->
+                            <Border Height="120" Background="Transparent" IsHitTestVisible="False"/>
                         </StackPanel>
 
                     </StackPanel>
@@ -409,7 +482,8 @@
             <Border Grid.Row="2"
                     Background="{DynamicResource Bg1}"
                     BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="0,1,0,0">
+                    BorderThickness="0,1,0,0"
+                    CornerRadius="0,0,12,12">
                 <Button Content="Done"
                         Classes="PrimaryButton"
                         Padding="16,6"

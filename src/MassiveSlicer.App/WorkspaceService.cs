@@ -124,6 +124,7 @@ internal static class WorkspaceService
                     LocalTransform = ToArray(child.Node.LocalTransform),
                     BeadWidth      = snap.BeadWidth,
                     LayerHeight    = snap.LayerHeight,
+                    Kind           = MassiveSlicer.App.Enums.OutlinerToolpathKinds.ToWorkspaceValue(child.ToolpathKind),
                     MaterialColor  =
                     [
                         snap.MaterialColor.X,
@@ -271,6 +272,11 @@ internal static class WorkspaceService
             RobotJoints              = viewport.Robot is { } robot
                 ? [robot.A1, robot.A2, robot.A3, robot.A4, robot.A5, robot.A6, robot.E1]
                 : null,
+            KrlToolIndex             = viewport.Robot is { KrlToolIndex: > 0 } rt ? rt.KrlToolIndex : null,
+            KrlBaseIndex             = viewport.Robot is { KrlBaseIndex: > 0 } rb ? rb.KrlBaseIndex : null,
+            Lfam3WorkflowPhase       = viewport.CaptureLfam3WorkflowPhaseName(),
+            HasPrePrintScanStep      = viewport.ShowLfam3ToolPicker ? viewport.HasPrePrintScanStep : null,
+            MountedToolName          = viewport.HasFlangeMountedTool ? viewport.MountedToolName : null,
             SimCameraKeyframes       = viewport.CaptureSimCameraKeyframes(),
         };
     }
@@ -299,50 +305,50 @@ internal static class WorkspaceService
         int restored = 0;
         foreach (var entry in doc.Models)
         {
-            // Resolve the mesh via a sequential fallback so a portable embedded copy is
-            // used even when an absolute SourcePath is present but missing on this machine.
-            string? loadPath = null;
-            if (entry.SourcePath is { } src && File.Exists(src))
-                loadPath = src;
-            if (loadPath is null && entry.SourcePath is { } missingSrc)
-                loadPath = TryResolveModelBesideWorkspace(workspacePath, missingSrc);
-            if (loadPath is null && entry.EmbeddedMeshPath is { } rel)
-            {
-                string embedded = WorkspaceLoader.ResolveMeshPath(workspacePath, rel);
-                if (File.Exists(embedded))
-                    loadPath = embedded;
-            }
-
             bool isScan = entry.IsScan
                           || OutlinerModelOps.IsScan(new SceneNode { Name = entry.Name });
 
-            // Prefer mesh paths ImportHelper understands; remember ZDF for re-mesh fallback.
-            string? zdfPath = null;
-            if (loadPath is not null && loadPath.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase))
-            {
-                zdfPath = loadPath;
-                loadPath = null;
-            }
-            if (zdfPath is null && entry.ScanZdfPath is { } zdfRel)
-            {
-                string zdfAbs = Path.IsPathRooted(zdfRel)
-                    ? zdfRel
-                    : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(workspacePath)!, zdfRel));
-                if (File.Exists(zdfAbs))
-                    zdfPath = zdfAbs;
-            }
-            if (zdfPath is null && entry.SourcePath is { } srcZ
-                && srcZ.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase)
-                && File.Exists(srcZ))
-                zdfPath = srcZ;
+            // Mesh first (embedded scan STLs / CAD files). A SourcePath that is only a
+            // .zdf used to win this race, wipe the load path, then fail Zivid remesh
+            // and drop every scan (Rock V10.mass: 10 scans with sidecars, none shown).
+            string? loadPath = ResolveRestoreMeshPath(entry, workspacePath, out string? zdfPath);
 
             SceneNode? node = null;
             ViewModels.OutlinerItemViewModel? parentItem = null;
             var transform = FromArray(entry.LocalTransform);
 
-            if (loadPath is not null)
+            // Scans: remesh the .zdf first so the camera color map is restored.
+            // Fake/corrupt ZDFs throw and we fall through to the embedded STL.
+            if (isScan && zdfPath is not null && File.Exists(zdfPath))
             {
-                node = ImportHelper.LoadAtTransform(loadPath, transform);
+                try
+                {
+                    var cap = Core.Scanning.ZividScanService.LoadFromZdf(zdfPath);
+                    var name = string.IsNullOrEmpty(entry.Name)
+                        ? Path.GetFileNameWithoutExtension(zdfPath)
+                        : entry.Name;
+                    node = PointCloudMesher.Build(cap, name);
+                    if (node is not null)
+                        node.LocalTransform = transform;
+                }
+                catch (Exception ex)
+                {
+                    viewport.OnDevLog?.Invoke(
+                        $"[workspace] ZDF color remesh failed for '{entry.Name}': {ex.Message}");
+                }
+            }
+
+            if (node is null && loadPath is not null)
+            {
+                try
+                {
+                    node = ImportHelper.LoadAtTransform(loadPath, transform);
+                }
+                catch (Exception ex)
+                {
+                    viewport.OnDevLog?.Invoke(
+                        $"[workspace] Failed to load '{entry.Name}' from {loadPath}: {ex.Message}");
+                }
 
                 // Pivot + import scale, restored only on the mesh-loaded path — which is where this
                 // has always run. RestorePlacement measures the node's bounding box, so it needs real
@@ -362,8 +368,7 @@ internal static class WorkspaceService
                     var name = string.IsNullOrEmpty(entry.Name)
                         ? Path.GetFileNameWithoutExtension(zdfPath)
                         : entry.Name;
-                    node = PointCloudMesher.Build(
-                        cap.PointsXYZ, cap.Width, cap.Height, name);
+                    node = PointCloudMesher.Build(cap, name);
                     if (node is not null)
                         node.LocalTransform = transform;
                 }
@@ -410,7 +415,10 @@ internal static class WorkspaceService
             // (the old behaviour skipped the whole entry, losing every toolpath with it).
             if (node is null)
             {
-                if (entry.SourcePath is { Length: > 0 } miss)
+                if (isScan)
+                    viewport.OnDevLog?.Invoke(
+                        $"[workspace] Scan '{entry.Name}' did not load (mesh missing and ZDF remesh failed).");
+                else if (entry.SourcePath is { Length: > 0 } miss)
                     viewport.OnDevLog?.Invoke($"[workspace] Mesh not found for '{entry.Name}': {miss}");
 
                 if (entry.Toolpaths.Count == 0)
@@ -461,7 +469,10 @@ internal static class WorkspaceService
                 };
                 tpNode.Visible = tpEntry.Visible;
 
-                viewport.RegisterToolpathInOutliner(tpNode, parentItem);
+                var kind = !string.IsNullOrWhiteSpace(tpEntry.Kind)
+                    ? MassiveSlicer.App.Enums.OutlinerToolpathKinds.Parse(tpEntry.Kind)
+                    : MassiveSlicer.App.Enums.OutlinerToolpathKinds.Infer(tpEntry.Name, raw);
+                viewport.RegisterToolpathInOutliner(tpNode, parentItem, kind);
                 viewport.PendingToolpath.Enqueue(new ViewModels.PendingToolpathEntry
                 {
                     Toolpath               = smoothed,
@@ -522,6 +533,54 @@ internal static class WorkspaceService
             if (n.Mesh?.PickingData is { } gpu) return gpu;
         }
         return null;
+    }
+
+    internal static bool IsZdfPath(string path)
+        => path.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Picks an ImportHelper-loadable mesh for a workspace entry, plus an optional
+    /// ZDF remesh fallback. A <c>SourcePath</c> that is only a <c>.zdf</c> must not
+    /// hide the embedded scan STL — those sidecars are how scans reopen without Zivid.
+    /// </summary>
+    internal static string? ResolveRestoreMeshPath(
+        WorkspaceModelEntry entry,
+        string workspacePath,
+        out string? zdfPath)
+    {
+        string? foundZdf = null;
+        string? mesh = null;
+
+        void NoteZdf(string? p)
+        {
+            if (string.IsNullOrWhiteSpace(p) || !IsZdfPath(p) || !File.Exists(p)) return;
+            foundZdf ??= p;
+        }
+
+        void NoteMesh(string? p)
+        {
+            if (mesh is not null || string.IsNullOrWhiteSpace(p) || !File.Exists(p)) return;
+            if (IsZdfPath(p)) { NoteZdf(p); return; }
+            if (ImportHelper.IsSupported(p)) mesh = p;
+        }
+
+        NoteMesh(entry.SourcePath);
+        if (mesh is null && entry.SourcePath is { } missingSrc)
+            NoteMesh(TryResolveModelBesideWorkspace(workspacePath, missingSrc));
+        if (mesh is null && entry.EmbeddedMeshPath is { } rel)
+            NoteMesh(WorkspaceLoader.ResolveMeshPath(workspacePath, rel));
+
+        if (entry.ScanZdfPath is { } zdfRel)
+        {
+            string zdfAbs = Path.IsPathRooted(zdfRel)
+                ? zdfRel
+                : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(workspacePath)!, zdfRel));
+            NoteZdf(zdfAbs);
+        }
+        NoteZdf(entry.SourcePath);
+
+        zdfPath = foundZdf;
+        return mesh;
     }
 
     /// <summary>

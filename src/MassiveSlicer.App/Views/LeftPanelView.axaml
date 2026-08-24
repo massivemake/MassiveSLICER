@@ -56,52 +56,6 @@
                                               RelativeSource={RelativeSource AncestorType={x:Type Window}},
                                               Mode=TwoWay}"
                               ToolTip.Tip="KRL tool number ($TOOL_DATA index) for live sync / export"/>
-                    <TextBlock Text="NOZZLE SIZE" Classes="LabelMuted" Margin="0,8,0,2"/>
-                    <ComboBox Margin="0,0,0,6" HorizontalAlignment="Stretch"
-                              ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.NozzleSizeOptions,
-                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                              SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.NozzleSizeSelectedIndex,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                              Mode=TwoWay}"
-                              ToolTip.Tip="Nozzle / bead diameter for this tool head — sets the slicer's bead width"/>
-
-                    <!-- Material preset (moved from MATERIAL section, right panel) -->
-                    <TextBlock Text="MATERIAL" Classes="LabelMuted" Margin="0,8,0,2"/>
-                    <Grid Margin="0,0,0,6" ColumnDefinitions="*,Auto,Auto">
-                        <ComboBox Grid.Column="0"
-                                  HorizontalAlignment="Stretch"
-                                  Margin="0,0,4,0"
-                                  PlaceholderText="No preset selected"
-                                  ItemsSource="{Binding DataContext.RightPanel.Additive.MaterialPresets,
-                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                  SelectedIndex="{Binding DataContext.RightPanel.Additive.SelectedPresetIndex,
-                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                  Mode=TwoWay}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding Name}"/>
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <Button Grid.Column="1"
-                                Classes="ToolbarButton"
-                                Padding="8,2"
-                                Margin="0,0,2,0"
-                                Click="OnEditMaterialClicked"
-                                IsEnabled="{Binding DataContext.RightPanel.Additive.HasSelectedPreset,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                ToolTip.Tip="Edit selected material preset">
-                            <ia:Icon Value="mdi-pencil" FontSize="14"/>
-                        </Button>
-                        <Button Grid.Column="2"
-                                Classes="ToolbarButton"
-                                Padding="8,2"
-                                Click="OnAddMaterialClicked"
-                                ToolTip.Tip="Add new material preset">
-                            <ia:Icon Value="mdi-plus" FontSize="16"/>
-                        </Button>
-                    </Grid>
-
                     <TextBlock Text="BASE #" Classes="LabelMuted" Margin="0,0,0,2"/>
                     <ComboBox Margin="0,0,0,0" HorizontalAlignment="Stretch"
                               ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseOptions,
@@ -121,10 +75,7 @@
         </Expander.Header>
         <StackPanel Margin="10,2,10,10">
 <Border x:Name="ImportDropZone"
-                            Background="{DynamicResource Bg3}"
-                            BorderBrush="{DynamicResource Border2}"
-                            BorderThickness="1"
-                            CornerRadius="6"
+                            Classes="GlassInset"
                             Padding="8,12"
                             Cursor="Hand"
                             DragDrop.AllowDrop="True"
@@ -471,7 +422,7 @@
                                 HorizontalAlignment="Stretch"
                                 Margin="8,0,8,8"/>
 
-                        <Expander Classes="SectionExpander" Header="LIMITS" IsExpanded="False" Margin="0,4,0,0">
+                        <Expander Classes="SectionExpander" Header="LIMITS" IsExpanded="False">
                           <StackPanel>
                             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.65" Margin="8,2,8,6"
                                        Text="KUKA software end-switches ($SOFTN_END / $SOFTP_END). Simulation, IK, and export stay 5% of travel inside these stops. Edits write to the connected robot. A KUKA cold reboot is required before they take effect."/>
@@ -560,7 +511,7 @@
                         </Expander>
 
                         <!-- Per-cell SMB credentials for direct Export-to-Robot uploads -->
-                        <Expander Classes="SectionExpander" Header="ROBOT NETWORK" IsExpanded="False" Margin="0,4,0,0">
+                        <Expander Classes="SectionExpander" Header="ROBOT NETWORK" IsExpanded="False">
                           <StackPanel>
                             <TextBlock Text="SMB credentials for this cell's controller — Export to Robot writes the .src straight onto the robot's D drive. The password stays in local preferences only."
                                        TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
@@ -610,7 +561,7 @@
                         </Expander>
 
                         <!-- All bed settings (manual adjust + calibration) grouped, collapsed by default. -->
-                        <Expander Classes="SectionExpander" Header="BED SETTINGS" IsExpanded="False" Margin="0,4,0,0">
+                        <Expander Classes="SectionExpander" Header="BED SETTINGS" IsExpanded="False">
                           <StackPanel>
 
                         <!-- Rotary bed manual adjust (rotary cells only) -->
@@ -851,6 +802,37 @@
                     </StackPanel>
         </StackPanel>
     </Expander>
+
+    <!-- MassiveLAB (ERP) — own left menu between ROBOT and VIEWPORT -->
+    <Expander Classes="StepCard" IsExpanded="False"
+              IsVisible="{Binding !DataContext.Viewport.IsPaintEditOpen,
+                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+        <Expander.Header>
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Grid.Column="0" Text="MASSIVELAB" FontSize="11"
+                           LetterSpacing="1.5" VerticalAlignment="Center"/>
+                <Border Grid.Column="1"
+                        Background="#4071a72a"
+                        BorderBrush="#6671a72a"
+                        BorderThickness="1"
+                        CornerRadius="10"
+                        Padding="10,3"
+                        Margin="8,0,4,0"
+                        VerticalAlignment="Center">
+                    <TextBlock Text="{Binding DataContext.Viewport.Erp.HeaderBadge,
+                                     RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                               FontSize="9"
+                               FontWeight="SemiBold"
+                               Foreground="#8bc43a"
+                               VerticalAlignment="Center"/>
+                </Border>
+            </Grid>
+        </Expander.Header>
+        <views:ErpDockPanelView Margin="6,2,6,6"
+                                DataContext="{Binding DataContext.Viewport.Erp,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+    </Expander>
+
     <Expander Classes="StepCard" IsExpanded="False"
               IsVisible="{Binding !DataContext.Viewport.IsPaintEditOpen,
                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}">

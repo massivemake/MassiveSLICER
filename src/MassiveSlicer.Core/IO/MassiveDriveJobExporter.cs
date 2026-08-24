@@ -26,6 +26,26 @@ public sealed record MassiveDriveExportSettings
     public float ReversePercent { get; init; } = 40f;
     /// <summary>When true, travel segments request suck-back reverse on Drive.</summary>
     public bool TravelReverse { get; init; } = true;
+    /// <summary>ATV setpoint for mill jobs. Drive rejects mill packages at 0.</summary>
+    public float SpindleRpm { get; init; }
+    /// <summary>When true, ABC uses mill/T12 convention (cutter Z into the work).</summary>
+    public bool MillOrientation { get; init; }
+    /// <summary>
+    /// Package XYZ is print-bed BASE (same as SRC). Drive adds <see cref="BedOrigin"/>
+    /// for RSI / $POS_ACT. Do not store world Z (~919) in the job file.
+    /// </summary>
+    public bool AbsolutePath { get; init; } = true;
+    /// <summary>Safe-Z clearance (mm) above first mill pose for the sync lead-in.</summary>
+    public float ApproachClearanceMm { get; init; } = 80f;
+    /// <summary>Same as KRL: stored toolpath → current world.</summary>
+    public System.Numerics.Matrix4x4 NodeWorldTransform { get; init; } = System.Numerics.Matrix4x4.Identity;
+    public System.Numerics.Vector3 NodeOrigin { get; init; }
+    public System.Numerics.Vector3 RobrootWorldPos { get; init; }
+    public System.Numerics.Vector3 BaseDataOffset { get; init; }
+    /// <summary>Scene bed Z (mm). Same lift as <see cref="KrlExporter.WorldToBase"/>.</summary>
+    public float SliceBedWorldZ { get; init; } = float.NaN;
+    /// <summary>Print-bed 0,0,0 in scene mm (Drive adds this to BASE XYZ at run).</summary>
+    public Vector3 BedOrigin { get; init; }
     /// <summary>
     /// Toolhead orientation offsets (deg) applied in the approach frame — same as KRL export
     /// <see cref="KrlExportSettings.ToolheadOffsetA"/> / B / C (from additive settings / cell default).
@@ -72,13 +92,11 @@ public static class MassiveDriveJobExporter
                     _ => "print",
                 };
 
-                // Skip pure mill packages for pellet Drive unless caller wants them
-                if (kind == "mill")
-                    continue;
-
                 float speed = kind == "travel"
                     ? (move.TravelSpeedMps is { } tsm ? tsm * 1000f : s.TravelSpeedMmS)
-                    : s.PrintSpeedMmS * Math.Max(0.05f, move.PrintSpeedScale);
+                    : kind == "mill"
+                        ? s.PrintSpeedMmS
+                        : s.PrintSpeedMmS * Math.Max(0.05f, move.PrintSpeedScale);
 
                 if (move.IsWipe)
                     speed = Math.Max(speed * Math.Max(0.05f, move.WipeRpmScale), 1f);
@@ -89,8 +107,8 @@ public static class MassiveDriveJobExporter
                 prevLayer = layer.Index;
 
                 // Pose: XYZ + KUKA ABC from surface normal (same math as KRL export / viewport)
-                var from = PoseArray(move.From, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
-                var to = PoseArray(move.To, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
+                var from = PoseDict(move.From, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
+                var to = PoseDict(move.To, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
 
                 var seg = new Dictionary<string, object?>
                 {
@@ -107,7 +125,7 @@ public static class MassiveDriveJobExporter
                         4),
                 };
                 if (kind == "travel")
-                    seg["reverse"] = s.TravelReverse && !move.IsZHop;
+                    seg["reverse"] = s.TravelReverse && !s.MillOrientation && !move.IsZHop;
                 if (layerChange)
                     seg["layer_change"] = true;
                 if (move.IsWipe)
@@ -137,7 +155,46 @@ public static class MassiveDriveJobExporter
         if (!string.IsNullOrWhiteSpace(s.SourceNote))
             source["note"] = s.SourceNote;
 
-        return new Dictionary<string, object?>
+        var defaults = new Dictionary<string, object?>
+        {
+            ["print_speed_mm_s"] = s.PrintSpeedMmS,
+            ["travel_speed_mm_s"] = s.TravelSpeedMmS,
+            ["reverse_ms"] = s.ReverseMs,
+            ["reverse_percent"] = s.ReversePercent,
+        };
+        Dictionary<string, object?> meta = new()
+        {
+            ["absolute"] = true,
+            ["ipo_frame"] = "#BASE",
+            ["frame"] = "base",
+            ["tool"] = s.Tool,
+            ["base"] = s.Base,
+        };
+        var bed = BedOriginOrComputed(s);
+        if (bed.LengthSquared() > 1f)
+        {
+            meta["bed_origin"] = new Dictionary<string, double>
+            {
+                ["x"] = Math.Round(bed.X, 3),
+                ["y"] = Math.Round(bed.Y, 3),
+                ["z"] = Math.Round(bed.Z, 3),
+            };
+        }
+        if (s.MillOrientation || s.SpindleRpm > 0)
+        {
+            defaults["milling_speed_mm_s"] = s.PrintSpeedMmS;
+            defaults["spindle_rpm"] = s.SpindleRpm;
+            meta["spindle"] = true;
+            meta["spindle_rpm"] = s.SpindleRpm;
+            meta["tool"] = "spindle";
+            meta["approach_clearance_mm"] = s.ApproachClearanceMm;
+            meta["approach_waypoint"] = "Milling Start";
+            defaults["approach_clearance_mm"] = s.ApproachClearanceMm;
+        }
+        if (!s.AbsolutePath)
+            meta["absolute"] = false;
+
+        var dict = new Dictionary<string, object?>
         {
             ["format"] = "massivedrive.job/v1",
             ["cell_id"] = s.CellId,
@@ -155,15 +212,11 @@ public static class MassiveDriveJobExporter
                 ["tool"] = s.Tool,
                 ["base"] = s.Base,
             },
-            ["defaults"] = new Dictionary<string, object?>
-            {
-                ["print_speed_mm_s"] = s.PrintSpeedMmS,
-                ["travel_speed_mm_s"] = s.TravelSpeedMmS,
-                ["reverse_ms"] = s.ReverseMs,
-                ["reverse_percent"] = s.ReversePercent,
-            },
+            ["defaults"] = defaults,
             ["segments"] = segments,
+            ["meta"] = meta,
         };
+        return dict;
     }
 
     public static string ExportJson(Toolpath toolpath, MassiveDriveExportSettings s)
@@ -177,10 +230,10 @@ public static class MassiveDriveJobExporter
     }
 
     /// <summary>
-    /// Pose as [x,y,z,a,b,c] with ABC from <see cref="KukaOrientation.AbcFromNormal"/>.
-    /// Uses per-move normal when set, else layer plane normal (same priority as KRL export).
+    /// Pose as {x,y,z,a,b,c} in print-bed BASE (same <see cref="KrlExporter.WorldToBase"/> as SRC).
+    /// Drive adds meta.bed_origin for RSI / $POS_ACT. File Z is layer height (~3), not bed world (~919).
     /// </summary>
-    static float[] PoseArray(
+    static Dictionary<string, double> PoseDict(
         Vector3 p,
         Vector3 layerNormal,
         Vector3 moveNormal,
@@ -191,17 +244,36 @@ public static class MassiveDriveJobExporter
         if (n.LengthSquared() < 1e-12f)
             n = Vector3.UnitZ;
 
-        var (a, b, c) = KukaOrientation.AbcFromNormal(
-            n,
-            s.ToolheadOffsetA,
-            s.ToolheadOffsetB,
-            s.ToolheadOffsetC,
-            tcpYawDeg);
+        var (a, b, c) = s.MillOrientation
+            ? KukaOrientation.AbcFromMillNormal(
+                n, tcpYawDeg, s.ToolheadOffsetA, s.ToolheadOffsetB, s.ToolheadOffsetC)
+            : KukaOrientation.AbcFromNormal(
+                n, s.ToolheadOffsetA, s.ToolheadOffsetB, s.ToolheadOffsetC, tcpYawDeg);
 
-        return
-        [
-            p.X, p.Y, p.Z,
-            a, b, c,
-        ];
+        var basePt = ToBase(p, s);
+        return new Dictionary<string, double>
+        {
+            ["x"] = Math.Round(basePt.X, 3),
+            ["y"] = Math.Round(basePt.Y, 3),
+            ["z"] = Math.Round(basePt.Z, 3),
+            ["a"] = Math.Round(a, 3),
+            ["b"] = Math.Round(b, 3),
+            ["c"] = Math.Round(c, 3),
+        };
+    }
+
+    static Vector3 ToBase(Vector3 stored, MassiveDriveExportSettings s)
+    {
+        var world = stored;
+        if (!(s.NodeWorldTransform.IsIdentity && s.NodeOrigin == default))
+            world = Vector3.Transform(stored - s.NodeOrigin, s.NodeWorldTransform);
+        return KrlExporter.WorldToBase(world, s.RobrootWorldPos, s.BaseDataOffset, s.SliceBedWorldZ);
+    }
+
+    static Vector3 BedOriginOrComputed(MassiveDriveExportSettings s)
+    {
+        if (s.BedOrigin.LengthSquared() > 1f)
+            return s.BedOrigin;
+        return KrlExporter.BaseToWorld(Vector3.Zero, s.RobrootWorldPos, s.BaseDataOffset, s.SliceBedWorldZ);
     }
 }

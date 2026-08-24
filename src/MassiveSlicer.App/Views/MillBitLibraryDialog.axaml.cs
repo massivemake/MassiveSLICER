@@ -9,6 +9,7 @@ public partial class MillBitLibraryDialog : Window
     public MillBitLibraryDialog()
     {
         InitializeComponent();
+        DialogWindowChrome.Apply(this);
         TitleBar.PointerPressed += (_, e) => BeginMoveDrag(e);
     }
 

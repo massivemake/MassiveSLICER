@@ -324,6 +324,9 @@ public sealed class ErpClient : IDisposable
     public Task<ErpResult<IReadOnlyList<ErpPresetEntry>>> ListMaterialPresetsAsync(CancellationToken ct)
         => ListPresetCollectionAsync("api/slicer/v1/material-presets", ct);
 
+    public Task<ErpResult<IReadOnlyList<ErpPresetEntry>>> ListMillToolsAsync(CancellationToken ct)
+        => ListPresetCollectionAsync("api/slicer/v1/mill-tools", ct);
+
     public Task<ErpResult<ErpPresetEntry>> CreatePrintPresetAsync(object payload, CancellationToken ct)
         => CreatePresetAsync("api/slicer/v1/print-presets", payload, ct);
 
@@ -342,6 +345,40 @@ public sealed class ErpClient : IDisposable
     public Task<ErpResult<bool>> DeleteMaterialPresetAsync(string id, CancellationToken ct)
         => DeleteJsonAsync($"api/slicer/v1/material-presets/{Uri.EscapeDataString(id)}", ct);
 
+    public Task<ErpResult<ErpPresetEntry>> CreateMillToolAsync(object payload, CancellationToken ct)
+        => CreatePresetAsync("api/slicer/v1/mill-tools", payload, ct);
+
+    public Task<ErpResult<ErpPresetEntry>> UpdateMillToolAsync(string id, object payload, CancellationToken ct)
+        => UpdatePresetAsync($"api/slicer/v1/mill-tools/{Uri.EscapeDataString(id)}", payload, ct);
+
+    public Task<ErpResult<bool>> DeleteMillToolAsync(string id, CancellationToken ct)
+        => DeleteJsonAsync($"api/slicer/v1/mill-tools/{Uri.EscapeDataString(id)}", ct);
+
+    /// <summary>GET /krl-postprocess — team default recipe. 404 = none published yet.</summary>
+    public async Task<ErpResult<ErpPresetEntry>> GetKrlPostProcessAsync(CancellationToken ct)
+    {
+        var r = await GetJsonAsync("api/slicer/v1/krl-postprocess", ct);
+        if (r.Error is not null) return ErpResult<ErpPresetEntry>.Fail(r.Error);
+        using var doc = r.Value!;
+        return ParsePresetEntry(doc.RootElement) is { } entry
+            ? ErpResult<ErpPresetEntry>.Success(entry)
+            : ErpResult<ErpPresetEntry>.Fail(ErpErrorKind.BadResponse, "krl-postprocess missing payload");
+    }
+
+    /// <summary>PUT /krl-postprocess — publish the current recipe as the Lab default.</summary>
+    public async Task<ErpResult<ErpPresetEntry>> PutKrlPostProcessAsync(object payload, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?> { ["payload"] = payload };
+        var r = await PutJsonAsync("api/slicer/v1/krl-postprocess", body, ct);
+        if (r.Error is not null) return ErpResult<ErpPresetEntry>.Fail(r.Error);
+        if (r.Value is null)
+            return ErpResult<ErpPresetEntry>.Success(new ErpPresetEntry("default", DateTime.UtcNow, null, "{}"));
+        using var doc = r.Value;
+        return ParsePresetEntry(doc.RootElement) is { } entry
+            ? ErpResult<ErpPresetEntry>.Success(entry)
+            : ErpResult<ErpPresetEntry>.Success(new ErpPresetEntry("default", DateTime.UtcNow, null, "{}"));
+    }
+
     private async Task<ErpResult<IReadOnlyList<ErpPresetEntry>>> ListPresetCollectionAsync(
         string relative, CancellationToken ct)
     {
@@ -352,6 +389,7 @@ public sealed class ErpClient : IDisposable
         {
             var items = new List<ErpPresetEntry>();
             foreach (var el in EnumerateArray(doc.RootElement, "items", "printPresets", "materialPresets",
+                         "millTools", "cuttingTools", "millBits", "tools",
                          "presets", "results", "data"))
                 if (ParsePresetEntry(el) is { } entry)
                     items.Add(entry);
@@ -647,7 +685,7 @@ public sealed class ErpClient : IDisposable
     internal static ErpPresetsBundle ParsePresetsBundle(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object)
-            return new ErpPresetsBundle("", [], []);
+            return new ErpPresetsBundle("", [], [], []);
 
         string version = GetString(root, "version", "etag", "hash", "updatedAt") ?? "";
         var print = new List<ErpPresetEntry>();
@@ -675,7 +713,26 @@ public sealed class ErpClient : IDisposable
                 if (ParsePresetEntry(item) is { } parsed) mats.Add(parsed);
         }
 
-        return new ErpPresetsBundle(version, print, mats);
+        var mill = new List<ErpPresetEntry>();
+        foreach (var key in new[] { "millTools", "cuttingTools", "millBits", "bits" })
+        {
+            if (!TryGetPropertyCi(root, key, out var millArr) || millArr.ValueKind != JsonValueKind.Array)
+                continue;
+            foreach (var item in millArr.EnumerateArray())
+                if (ParsePresetEntry(item) is { } parsed) mill.Add(parsed);
+            break;
+        }
+
+        ErpPresetEntry? krlPost = null;
+        foreach (var key in new[] { "krlPostProcess", "krlPostprocess", "krlPost", "postProcess" })
+        {
+            if (!TryGetPropertyCi(root, key, out var krlEl) || krlEl.ValueKind != JsonValueKind.Object)
+                continue;
+            krlPost = ParsePresetEntry(krlEl);
+            break;
+        }
+
+        return new ErpPresetsBundle(version, print, mats, mill, krlPost);
     }
 
     /// <summary>

@@ -92,26 +92,54 @@ public static class KukaOrientation
     }
 
     /// <summary>
-    /// T12 mill ABC: tool +Z is the cutter axis into the work (−surfaceNormal).
-    /// Extruder <see cref="AbcFromNormal"/> uses X-approach and would point the spindle sideways.
+    /// Spindle / T12: KUKA tool <b>Z</b> (the cutter) points into the work = −surface normal.
+    /// Print/extruder uses <see cref="AbcFromNormal"/> (approach on tool X). Using that
+    /// for mill left T12's TCP pointing sideways along the path.
     /// </summary>
-    public static (float A, float B, float C) AbcFromMillNormal(Vector3 surfaceNormal)
+    public static (float A, float B, float C) AbcFromMillNormal(
+        Vector3 surfaceNormal,
+        float tcpYawDeg = 0f,
+        float toolheadOffsetA = 0f,
+        float toolheadOffsetB = 0f,
+        float toolheadOffsetC = 0f)
     {
-        var n = surfaceNormal.LengthSquared() > 1e-12f
-            ? Vector3.Normalize(surfaceNormal)
-            : Vector3.UnitZ;
-        var z = -n;
+        var n = Vector3.Normalize(surfaceNormal);
+        var z = -n; // bit into the material
         var hint = MathF.Abs(z.Z) > 0.9f ? Vector3.UnitX : Vector3.UnitZ;
         var x = Vector3.Cross(hint, z);
-        if (x.LengthSquared() < 1e-12f)
+        if (x.LengthSquared() < 1e-10f)
             x = Vector3.Cross(Vector3.UnitY, z);
         x = Vector3.Normalize(x);
         var y = Vector3.Cross(z, x);
+
+        if (MathF.Abs(tcpYawDeg) > 1e-4f)
+        {
+            float cy = MathF.Cos(tcpYawDeg * D2R), sy = MathF.Sin(tcpYawDeg * D2R);
+            var x2 = x * cy + y * sy;
+            var y2 = y * cy - x * sy;
+            x = x2;
+            y = y2;
+        }
+
+        // Same local ZYX as print (Y/X/Z sliders → B/C/A) in the mill tool frame.
+        if (MathF.Abs(toolheadOffsetA) + MathF.Abs(toolheadOffsetB) + MathF.Abs(toolheadOffsetC) > 1e-4f)
+        {
+            float ca = MathF.Cos(toolheadOffsetA * D2R), sa = MathF.Sin(toolheadOffsetA * D2R);
+            float cb = MathF.Cos(toolheadOffsetB * D2R), sb = MathF.Sin(toolheadOffsetB * D2R);
+            float cc = MathF.Cos(toolheadOffsetC * D2R), sc = MathF.Sin(toolheadOffsetC * D2R);
+            var xF = x * (ca * cb) + y * (sa * cb) + z * (-sb);
+            var yF = x * (ca * sb * sc - sa * cc) + y * (sa * sb * sc + ca * cc) + z * (cb * sc);
+            var zF = x * (ca * sb * cc + sa * sc) + y * (sa * sb * cc - ca * sc) + z * (cb * cc);
+            x = xF;
+            y = yF;
+            z = zF;
+        }
+
         var m = new Matrix4x4(
-            x.X, x.Y, x.Z, 0f,
-            y.X, y.Y, y.Z, 0f,
-            z.X, z.Y, z.Z, 0f,
-            0f, 0f, 0f, 1f);
+            x.X, x.Y, x.Z, 0,
+            y.X, y.Y, y.Z, 0,
+            z.X, z.Y, z.Z, 0,
+            0, 0, 0, 1);
         return KukaIkSolver.MatrixToAbc(m);
     }
 

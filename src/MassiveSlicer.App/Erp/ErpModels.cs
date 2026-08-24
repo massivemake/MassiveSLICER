@@ -143,11 +143,13 @@ public sealed record ErpPresetEntry(
     string? UpdatedBy,
     string PayloadJson);
 
-/// <summary>GET /presets-bundle — both libraries plus a version stamp for cheap re-sync.</summary>
+/// <summary>GET /presets-bundle — print, material, mill tools, optional KRL post-process default.</summary>
 public sealed record ErpPresetsBundle(
     string Version,
     IReadOnlyList<ErpPresetEntry> PrintPresets,
-    IReadOnlyList<ErpPresetEntry> MaterialPresets);
+    IReadOnlyList<ErpPresetEntry> MaterialPresets,
+    IReadOnlyList<ErpPresetEntry> MillTools,
+    ErpPresetEntry? KrlPostProcess = null);
 
 /// <summary>
 /// Result of POST /api/slicer/v1/login (email + password). The token is the same

@@ -71,7 +71,12 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double LayerHeight
     {
         get => _layerHeight;
-        set => SetField(ref _layerHeight, Math.Clamp(value, 0.5, 100.0));
+        set
+        {
+            if (!SetField(ref _layerHeight, Math.Clamp(value, 0.5, 100.0))) return;
+            if (_wipeRampFollowsLayerHeight)
+                WipeRampMm = DefaultWipeRampMm(_layerHeight);
+        }
     }
 
     private double _beadWidth = 6.0;
@@ -1086,7 +1091,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double PrintSpeed
     {
         get => _printSpeed;
-        set => SetField(ref _printSpeed, Math.Clamp(value, 1.0, 2000.0));
+        set
+        {
+            if (!SetField(ref _printSpeed, Math.Clamp(value, 1.0, 2000.0))) return;
+        }
     }
 
     private double _travelSpeed = 600.0;
@@ -1877,7 +1885,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (SetField(ref _smoothRotation, value))
+            {
                 OnPropertyChanged(nameof(ShowSmoothRotationRadius));
+                KrlPostProcess.NotifyOrientationSmoothingChanged();
+            }
         }
     }
 
@@ -1889,7 +1900,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public int SmoothRotationRadius
     {
         get => _smoothRotationRadius;
-        set => SetField(ref _smoothRotationRadius, Math.Clamp(value, 1, 50));
+        set
+        {
+            if (SetField(ref _smoothRotationRadius, Math.Clamp(value, 1, 50)))
+                KrlPostProcess.NotifyOrientationSmoothingChanged();
+        }
     }
 
     private double _smoothRotationMaxRateDegPerMm = 0.0;
@@ -1902,7 +1917,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double SmoothRotationMaxRateDegPerMm
     {
         get => _smoothRotationMaxRateDegPerMm;
-        set => SetField(ref _smoothRotationMaxRateDegPerMm, Math.Clamp(value, 0.0, 90.0));
+        set
+        {
+            if (SetField(ref _smoothRotationMaxRateDegPerMm, Math.Clamp(value, 0.0, 90.0)))
+                KrlPostProcess.NotifyOrientationSmoothingChanged();
+        }
     }
 
     private double _orientationLookAheadMm = 0.0;
@@ -1914,7 +1933,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double OrientationLookAheadMm
     {
         get => _orientationLookAheadMm;
-        set => SetField(ref _orientationLookAheadMm, Math.Clamp(value, 0.0, 500.0));
+        set
+        {
+            if (SetField(ref _orientationLookAheadMm, Math.Clamp(value, 0.0, 500.0)))
+                KrlPostProcess.NotifyOrientationSmoothingChanged();
+        }
     }
 
     private double _orientationSigmaMm = 30.0;
@@ -1926,7 +1949,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double OrientationSigmaMm
     {
         get => _orientationSigmaMm;
-        set => SetField(ref _orientationSigmaMm, Math.Clamp(value, 1.0, 200.0));
+        set
+        {
+            if (SetField(ref _orientationSigmaMm, Math.Clamp(value, 1.0, 200.0)))
+                KrlPostProcess.NotifyOrientationSmoothingChanged();
+        }
     }
 
     // -- Toolhead approach orientation -----------------------------------------
@@ -2233,7 +2260,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         get => _extrusionStartWaitSec;
         // Allow long purges for material calibration workspaces (was capped at 60 s).
-        set => SetField(ref _extrusionStartWaitSec, Math.Clamp(value, 0.0, 3600.0));
+        set
+        {
+            if (SetField(ref _extrusionStartWaitSec, Math.Clamp(value, 0.0, 3600.0)))
+                KrlPostProcess.NotifyStartStopTimingChanged();
+        }
     }
 
     private double _extrusionResumeWaitSec = 0.5;
@@ -2245,7 +2276,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 3600.0)))
+            {
                 OnPropertyChanged(nameof(PreResumePauseMs));
+                KrlPostProcess.NotifyStartStopTimingChanged();
+            }
         }
     }
 
@@ -2257,7 +2291,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 3_600_000.0) / 1000.0))
+            {
                 OnPropertyChanged(nameof(ExtrusionResumeWaitSec));
+                KrlPostProcess.NotifyStartStopTimingChanged();
+            }
         }
     }
 
@@ -2271,7 +2308,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (SetField(ref _preTravelPauseSec, Math.Clamp(value, 0.0, 3600.0)))
+            {
                 OnPropertyChanged(nameof(PreTravelPauseMs));
+                KrlPostProcess.NotifyStartStopTimingChanged();
+            }
         }
     }
 
@@ -2282,7 +2322,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (SetField(ref _preTravelPauseSec, Math.Clamp(value, 0.0, 3_600_000.0) / 1000.0))
+            {
                 OnPropertyChanged(nameof(SsPreTravelWaitSec));
+                KrlPostProcess.NotifyStartStopTimingChanged();
+            }
         }
     }
 
@@ -2295,14 +2338,19 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double SsResumePrimePercent
     {
         get => _ssResumePrimePercent;
-        set => SetField(ref _ssResumePrimePercent, Math.Clamp(value, 5.0, 100.0));
+        set
+        {
+            if (SetField(ref _ssResumePrimePercent, Math.Clamp(value, 5.0, 100.0)))
+                KrlPostProcess.NotifyStartStopTimingChanged();
+        }
     }
 
-    private bool _digitalStartStopEnabled;
+    private bool _digitalStartStopEnabled = true;
+    private bool _robotModeEnabled;
 
     /// <summary>
-    /// Digital Start/Stop (URM): Caracol Eidos / MTruck export — <c>T1/T2/T3/RPM</c>
-    /// globals, travel start/end framing, and Caracol safety header (not LFAM <c>$ANOUT</c>).
+    /// Travel Moves (Start/Stop): Caracol injector around travels / wipes / z-hops.
+    /// Independent of <see cref="RobotModeEnabled"/>.
     /// </summary>
     public bool DigitalStartStopEnabled
     {
@@ -2310,31 +2358,67 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (!SetField(ref _digitalStartStopEnabled, value)) return;
-            // Keep Export-to-Robot post-process header/footer in sync so the editor and
-            // export never keep an LFAM $ANOUT MAT block while URM is checked.
-            ApplyUrmPostProcessTemplates(value);
-            // The checkbox lives on the KRL dialog's Rules tab and proxies back to here.
             KrlPostProcess.NotifyDigitalStartStopChanged();
         }
     }
 
     /// <summary>
-    /// Swap KRL post-process header/footer between Caracol URM and LFAM ANOUT defaults.
-    /// Called when URM is toggled and after prefs/workspace load.
+    /// Robot Mode: Caracol <c>T1/T2/T3/RPM</c> MAT (temps + screw RPM), not LFAM
+    /// <c>$ANOUT[1–4]</c>. Does not emit travel start/stop.
+    /// Always available in the Rules tab (never disabled).
     /// </summary>
-    public void ApplyUrmPostProcessTemplates(bool urmEnabled)
+    public bool RobotModeEnabled
+    {
+        get => _robotModeEnabled;
+        set
+        {
+            if (!SetField(ref _robotModeEnabled, value)) return;
+            ApplyUrmPostProcessTemplates(value);
+            KrlPostProcess.NotifyRobotModeChanged();
+        }
+    }
+
+    /// <summary>Alias used by the Rules tab / console for travel start/stop.</summary>
+    public bool TravelStartStopEnabled
+    {
+        get => DigitalStartStopEnabled;
+        set => DigitalStartStopEnabled = value;
+    }
+
+    private bool _extruderAirEnabled;
+
+    /// <summary>
+    /// Extruder cooling air: <c>$OUT[5]</c> on in the SRC header, off in the footer.
+    /// </summary>
+    public bool ExtruderAirEnabled
+    {
+        get => _extruderAirEnabled;
+        set
+        {
+            if (!SetField(ref _extruderAirEnabled, value)) return;
+            KrlPostProcess.NotifyExtruderAirChanged();
+        }
+    }
+
+    /// <summary>
+    /// Swap KRL post-process header/footer between Caracol Robot Mode and LFAM ANOUT defaults.
+    /// Called when Robot Mode is toggled and after prefs/workspace load.
+    /// </summary>
+    public void ApplyUrmPostProcessTemplates(bool robotModeEnabled)
     {
         string h = KrlPostProcess.HeaderText ?? "";
         string f = KrlPostProcess.FooterText ?? "";
-        bool headerIsLfamAnout = h.Contains("$ANOUT[1]", StringComparison.Ordinal)
-            || (h.Contains(";FOLD MAT", StringComparison.Ordinal)
-                && !h.Contains("MAT out of INI", StringComparison.Ordinal));
-        bool headerIsUrm = h.Contains("CaracolSafety", StringComparison.Ordinal)
-            || h.Contains("MAT out of INI", StringComparison.Ordinal);
+        bool headerIsLfamAnout = KrlExporter.IsLfamAnoutHeader(h);
+        bool headerIsUrm = !headerIsLfamAnout
+            && (h.Contains("CaracolSafety", StringComparison.Ordinal)
+                || h.Contains("MAT out of INI", StringComparison.Ordinal)
+                || h.Contains(";FOLD Safety", StringComparison.Ordinal)
+                || h.Contains("T1 =", StringComparison.Ordinal)
+                || h.Contains("T1=", StringComparison.Ordinal));
         bool footerIsUrm = f.Contains(";AIR COMMAND", StringComparison.Ordinal)
             || f.Contains(";EXTRUDER MOTOR COMMAND", StringComparison.Ordinal);
 
-        if (urmEnabled)
+        if (robotModeEnabled)
         {
             if (headerIsLfamAnout || !headerIsUrm)
                 KrlPostProcess.HeaderText = KrlExporter.DefaultUrmHeaderTemplate;
@@ -2363,6 +2447,41 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public string[] WipeModeOptions { get; } = ["Off", "Retrace", "Same-Direction"];
 
+    public const string ShopWipeMode = "Same-Direction";
+    public const double ShopWipeLengthMm = 35.0;
+    public const double ShopWipeRampMm = 5.0;
+    public const double ShopWipeSpeedMmS = 600.0;
+
+    /// <summary>
+    /// Shop wipe used when a slice has travel hops. Returns true if a field changed
+    /// (so realtime slicing can rebuild with wipe in the path).
+    /// </summary>
+    public bool ApplyShopWipeForTravels()
+    {
+        bool changed = false;
+        if (!string.Equals(WipeModeDisplay, ShopWipeMode, StringComparison.Ordinal))
+        {
+            WipeModeDisplay = ShopWipeMode;
+            changed = true;
+        }
+        if (Math.Abs(WipeLengthMm - ShopWipeLengthMm) > 0.05)
+        {
+            WipeLengthMm = ShopWipeLengthMm;
+            changed = true;
+        }
+        if (Math.Abs(WipeRampMm - ShopWipeRampMm) > 0.05)
+        {
+            WipeRampMm = ShopWipeRampMm;
+            changed = true;
+        }
+        if (Math.Abs(WipeSpeed - ShopWipeSpeedMmS) > 0.05)
+        {
+            WipeSpeed = ShopWipeSpeedMmS;
+            changed = true;
+        }
+        return changed;
+    }
+
     private string _wipeModeDisplay = "Same-Direction";
 
     /// <summary>Wipe path before travel: Off, Retrace (back), or Same-Direction (forward past the point).</summary>
@@ -2372,7 +2491,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _wipeModeDisplay, value);
     }
 
-    private double _wipeLengthMm = 12.0;
+    private double _wipeLengthMm = 35.0;
 
     /// <summary>Total wipe distance in mm.</summary>
     public double WipeLengthMm
@@ -2381,16 +2500,29 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _wipeLengthMm, Math.Max(0.0, value));
     }
 
-    private double _wipeRampMm = 4.0;
+    /// <summary>Shop default: wipe ramp = layer height + 2 mm.</summary>
+    public const double WipeRampAboveLayerMm = 2.0;
+
+    public static double DefaultWipeRampMm(double layerHeightMm)
+        => layerHeightMm + WipeRampAboveLayerMm;
+
+    private double _wipeRampMm = 5.0;
+    private bool _wipeRampFollowsLayerHeight = true;
 
     /// <summary>
     /// Wipe ramp (mm). Positive = last N mm of wipe length ramps RPM down.
     /// Negative = extra |N| mm past wipe length with ramp-down squeeze.
+    /// Default follows layer height + 2 mm until the operator types a different value.
     /// </summary>
     public double WipeRampMm
     {
         get => _wipeRampMm;
-        set => SetField(ref _wipeRampMm, Math.Clamp(value, -500.0, 500.0));
+        set
+        {
+            double clamped = Math.Clamp(value, -500.0, 500.0);
+            if (!SetField(ref _wipeRampMm, clamped)) return;
+            _wipeRampFollowsLayerHeight = Math.Abs(clamped - DefaultWipeRampMm(LayerHeight)) < 0.05;
+        }
     }
 
     private double _wipeSpeed = 600.0;
@@ -2420,7 +2552,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public bool ResumeRampEnabled
     {
         get => _resumeRampEnabled;
-        set => SetField(ref _resumeRampEnabled, value);
+        set
+        {
+            if (SetField(ref _resumeRampEnabled, value))
+                KrlPostProcess.NotifyStartStopTimingChanged();
+        }
     }
 
     private double _resumeRampStartSpeed = 0.5;
@@ -2429,7 +2565,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double ResumeRampStartSpeed
     {
         get => _resumeRampStartSpeed;
-        set => SetField(ref _resumeRampStartSpeed, Math.Clamp(value, 0.01, 2000.0));
+        set
+        {
+            if (SetField(ref _resumeRampStartSpeed, Math.Clamp(value, 0.01, 2000.0)))
+                KrlPostProcess.NotifyStartStopTimingChanged();
+        }
     }
 
     private double _resumeRampStartRpmPercent = 1.0;
@@ -2438,7 +2578,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double ResumeRampStartRpmPercent
     {
         get => _resumeRampStartRpmPercent;
-        set => SetField(ref _resumeRampStartRpmPercent, Math.Clamp(value, 0.0, 100.0));
+        set
+        {
+            if (SetField(ref _resumeRampStartRpmPercent, Math.Clamp(value, 0.0, 100.0)))
+                KrlPostProcess.NotifyStartStopTimingChanged();
+        }
     }
 
     private double _resumeRampDistanceMm = 609.6;
@@ -2447,7 +2591,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double ResumeRampDistanceMm
     {
         get => _resumeRampDistanceMm;
-        set => SetField(ref _resumeRampDistanceMm, Math.Clamp(value, 1.0, 10000.0));
+        set
+        {
+            if (SetField(ref _resumeRampDistanceMm, Math.Clamp(value, 1.0, 10000.0)))
+                KrlPostProcess.NotifyStartStopTimingChanged();
+        }
     }
 
     private int _resumeRampSteps = 10;
@@ -2456,7 +2604,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public int ResumeRampSteps
     {
         get => _resumeRampSteps;
-        set => SetField(ref _resumeRampSteps, Math.Clamp(value, 1, 50));
+        set
+        {
+            if (SetField(ref _resumeRampSteps, Math.Clamp(value, 1, 50)))
+                KrlPostProcess.NotifyStartStopTimingChanged();
+        }
     }
 
     public IReadOnlyList<string> LayerSpeedBasisOptions { get; } = ["Cut length", "Layer time"];

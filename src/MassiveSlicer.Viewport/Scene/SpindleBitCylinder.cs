@@ -61,8 +61,9 @@ public static class SpindleBitCylinder
            || (n.Mesh?.PickingData?.Name.Contains(token, StringComparison.OrdinalIgnoreCase) == true);
 
     /// <summary>
-    /// Datum plane is authoring-only — hide it so the green bit / TCP sit on an
-    /// invisible face rather than a visible quad.
+    /// Datum plane is authoring-only — hide the quad. The preview cylinder must
+    /// NOT be a child of this node (<see cref="AttachPreview"/>), because
+    /// <c>Visible=false</c> skips the whole subtree.
     /// </summary>
     public static void HideTcpDatum(SceneNode toolRoot)
     {
@@ -389,7 +390,7 @@ public static class SpindleBitCylinder
         origin = world.Row3.Xyz;
         axisAway = SafeDir(world.Row2.Xyz);
 
-        foreach (var n in anchor.Children)
+        foreach (var n in toolRoot.SelfAndDescendants())
         {
             if (n.Name != NodeName) continue;
             var cw = n.WorldTransform;

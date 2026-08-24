@@ -153,6 +153,7 @@ public sealed class PrintPresetRecord
     public string? TemperatureOffset { get; set; }
     public string? ExtrusionSpeedOffset { get; set; }
     public bool? DigitalStartStopEnabled { get; set; }
+    public bool? RobotModeEnabled { get; set; }
     public double? ExtrusionStartWaitSec { get; set; }
     public double? ExtrusionResumeWaitSec { get; set; }
 

@@ -293,6 +293,27 @@ public sealed class RobotPanelViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Writes a KRL REAL / $ANOUT value (invariant text). Pauses streaming briefly.</summary>
+    public async Task<bool> TryWriteKukaRealAsync(string varName, string valueText)
+    {
+        if (!_sync.IsConnected) return false;
+        if (string.IsNullOrWhiteSpace(varName) || string.IsNullOrWhiteSpace(valueText)) return false;
+        PauseStreaming();
+        try
+        {
+            await _sync.WriteVarAsync(varName, valueText.Trim());
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            ResumeStreaming();
+        }
+    }
+
     /// <summary>Reads a KRL <c>$FLAG[idx]</c> (streaming must be paused).</summary>
     public Task<bool> ReadFlagAsync(int idx, CancellationToken ct = default) => _sync.ReadFlagAsync(idx, ct);
 
@@ -691,10 +712,21 @@ public sealed class RobotPanelViewModel : ViewModelBase
                     KrlToolIndex = krl;
                     OnPropertyChanged(nameof(KrlToolIndex));
                 }
-                OnToolSelected?.Invoke(_toolLibrary[value]);
-                LoadToolTcpEdit(_toolLibrary[value]);
+                ApplyCurrentToolSelection();
             }
         }
+    }
+
+    /// <summary>
+    /// Mount + load TOOL_DATA for the current library row even if the combo index
+    /// did not change (T1 is the cell default, so SelectedToolIndex is already 0).
+    /// </summary>
+    public void ApplyCurrentToolSelection()
+    {
+        if ((uint)_selectedToolIndex >= (uint)_toolLibrary.Count) return;
+        var t = _toolLibrary[_selectedToolIndex];
+        OnToolSelected?.Invoke(t);
+        LoadToolTcpEdit(t);
     }
 
     /// <summary>
@@ -717,8 +749,10 @@ public sealed class RobotPanelViewModel : ViewModelBase
         }
         _selectedToolIndex = def;
         OnPropertyChanged(nameof(SelectedToolIndex));
+        // Setter did not fire (backing field). Still mount TOOL_DATA — T1 is the
+        // cell default, so skipping this left the viewport triad on the flange.
         if (tools.Count > 0)
-            LoadToolTcpEdit(tools[def]);
+            ApplyCurrentToolSelection();
     }
 
     // -- TCP offset editing -------------------------------------------------------
@@ -838,14 +872,16 @@ public sealed class RobotPanelViewModel : ViewModelBase
                 KrlToolIndex = _krlToolIndices[value];
                 OnPropertyChanged(nameof(KrlToolIndex));
 
-                // Sync the viewport tool so the TCP gizmo updates to match the selected KRL tool.
+                // Always apply TOOL_DATA for this TOOL #. Skipping when the library
+                // index is already T1 left the triad at the flange (offset never mounted).
                 for (int i = 0; i < _toolLibrary.Count; i++)
                 {
-                    if (_toolLibrary[i].KrlIndex == KrlToolIndex && i != _selectedToolIndex)
-                    {
+                    if (_toolLibrary[i].KrlIndex != KrlToolIndex) continue;
+                    if (i != _selectedToolIndex)
                         SelectedToolIndex = i;
-                        break;
-                    }
+                    else
+                        ApplyCurrentToolSelection();
+                    break;
                 }
             }
         }
@@ -868,32 +904,6 @@ public sealed class RobotPanelViewModel : ViewModelBase
 
     public int KrlToolIndex { get; private set; }
     public int KrlBaseIndex { get; private set; }
-
-    // -- Nozzle sizing ----------------------------------------------------------
-    // Placeholder preset list -- Nick is supplying the real preset values once he's
-    // seen this in the app.
-
-    private static readonly double[] NozzleDiameterPresetsMm = [4.0, 6.0, 8.0, 10.0];
-
-    /// <summary>Preset nozzle/bead diameters shown between TOOL # and BASE #.</summary>
-    public ObservableCollection<string> NozzleSizeOptions { get; } =
-        new(NozzleDiameterPresetsMm.Select(mm => $"{mm:0.#} mm"));
-
-    private int _nozzleSizeSelectedIndex = 1; // 6 mm -- matches SliceSettings.BeadWidth's default
-
-    public int NozzleSizeSelectedIndex
-    {
-        get => _nozzleSizeSelectedIndex;
-        set
-        {
-            if ((uint)value >= (uint)NozzleDiameterPresetsMm.Length) return;
-            if (!SetField(ref _nozzleSizeSelectedIndex, value)) return;
-            OnPropertyChanged(nameof(NozzleDiameterMm));
-        }
-    }
-
-    /// <summary>Selected nozzle diameter in mm -- feeds the slicer's bead width.</summary>
-    public double NozzleDiameterMm => NozzleDiameterPresetsMm[_nozzleSizeSelectedIndex];
 
     /// <summary>Populates the KRL Tool and Base dropdowns from cell data.</summary>
     public void SetKrlFrameOptions(
@@ -918,29 +928,49 @@ public sealed class RobotPanelViewModel : ViewModelBase
             KrlBaseOptions.Add($"{b.Index}: {b.Name}");
         }
 
-        // Prefer the cell's designated default tool (e.g. LFAM 3 → HV Extruder / TOOL_NO 1)
-        // so each cell exports with its intended KRL tool. Falls back to the caller's current
-        // selection, then the lowest-index tool. Called only on cell swap, so honoring the
-        // cell default here is correct (it doesn't override a mid-session dropdown pick).
+        // Prefer the caller's current TOOL # (workspace restore, live picker).
+        // Fall back to the cell default (LFAM 3 Extruder) only when nothing is selected yet.
         int defaultKrlTool = tools.FirstOrDefault(t => t.Default && t.KrlIndex > 0)?.KrlIndex ?? 0;
-        int wantToolIndex  = defaultKrlTool > 0 ? defaultKrlTool : currentToolIndex;
-        var ti = _krlToolIndices.IndexOf(wantToolIndex);
-        _krlToolSelectedIndex = ti >= 0 ? ti : 0;
-        OnPropertyChanged(nameof(KrlToolSelectedIndex));
-        if (_krlToolIndices.Count > 0)
+        int wantToolIndex  = currentToolIndex > 0 ? currentToolIndex
+                           : defaultKrlTool > 0   ? defaultKrlTool
+                           : 0;
+        int wantBaseIndex  = currentBaseIndex > 0 ? currentBaseIndex : 0;
+
+        // Reset so SelectKrlFrames' SelectedIndex setters always fire (and remount).
+        _krlToolSelectedIndex = -1;
+        _krlBaseSelectedIndex = -1;
+        if (wantToolIndex > 0 || wantBaseIndex > 0)
+            SelectKrlFrames(wantToolIndex, wantBaseIndex);
+        else if (_krlToolIndices.Count > 0)
+            KrlToolSelectedIndex = 0;
+    }
+
+    /// <summary>
+    /// Restore ROBOT CELL TOOL # / BASE # after a workspace open. No-ops missing
+    /// indices so a stale saved number cannot blank the dropdowns.
+    /// </summary>
+    public void SelectKrlFrames(int toolIndex, int baseIndex)
+    {
+        if (toolIndex > 0)
         {
-            KrlToolIndex = _krlToolIndices[Math.Max(0, _krlToolSelectedIndex)];
-            OnPropertyChanged(nameof(KrlToolIndex));
+            int ti = _krlToolIndices.IndexOf(toolIndex);
+            if (ti >= 0)
+            {
+                if (ti == _krlToolSelectedIndex)
+                    _krlToolSelectedIndex = -1;
+                KrlToolSelectedIndex = ti;
+            }
         }
 
-        var bi = _krlBaseIndices.IndexOf(currentBaseIndex);
-        _krlBaseSelectedIndex = bi >= 0 ? bi : 0;
-        OnPropertyChanged(nameof(KrlBaseSelectedIndex));
-        if (_krlBaseIndices.Count > 0)
+        if (baseIndex > 0)
         {
-            KrlBaseIndex = _krlBaseIndices[Math.Max(0, _krlBaseSelectedIndex)];
-            OnPropertyChanged(nameof(KrlBaseIndex));
-            OnPropertyChanged(nameof(TcpActualTitle));
+            int bi = _krlBaseIndices.IndexOf(baseIndex);
+            if (bi >= 0)
+            {
+                if (bi == _krlBaseSelectedIndex)
+                    _krlBaseSelectedIndex = -1;
+                KrlBaseSelectedIndex = bi;
+            }
         }
     }
 

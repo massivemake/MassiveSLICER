@@ -80,6 +80,12 @@ public sealed class ScanCaptureResult
     /// <summary>Number of valid (non-NaN) points in the cloud.</summary>
     public required int ValidPointCount { get; init; }
 
+    /// <summary>
+    /// Organized sRGB colors, row-major RGBA8, length Width × Height × 4.
+    /// Null when the frame has no 2D color (or the SDK copy failed).
+    /// </summary>
+    public byte[]? ColorsRgba { get; init; }
+
     /// <summary>Full path of the saved .zdf file, or null when not saved.</summary>
     public string? SavedZdfPath { get; init; }
 
@@ -183,6 +189,8 @@ public static class ZividScanService
         for (int i = 0; i < flat.Length; i += 3)
             if (!float.IsNaN(flat[i])) valid++;
 
+        var colors = CopyColorsRgbaSrgb(pointCloud, width, height);
+
         string? zdfPath      = null;
         string? metadataPath = null;
         if (!string.IsNullOrWhiteSpace(saveDirectory))
@@ -218,6 +226,7 @@ public static class ZividScanService
             Height              = height,
             PointsXYZ           = flat,
             ValidPointCount     = valid,
+            ColorsRgba          = colors,
             SavedZdfPath        = zdfPath,
             SavedMetadataPath   = metadataPath,
             Metadata            = metadata,
@@ -247,6 +256,8 @@ public static class ZividScanService
             int valid = 0;
             for (int i = 0; i < flat.Length; i += 3)
                 if (!float.IsNaN(flat[i])) valid++;
+
+            var colors = CopyColorsRgbaSrgb(pointCloud, width, height);
 
             ScanMetadata? meta = null;
             string? metaPath = Path.ChangeExtension(zdfPath, ".json");
@@ -281,11 +292,76 @@ public static class ZividScanService
                 Height              = height,
                 PointsXYZ           = flat,
                 ValidPointCount     = valid,
+                ColorsRgba          = colors,
                 SavedZdfPath        = Path.GetFullPath(zdfPath),
                 SavedMetadataPath   = File.Exists(metaPath) ? metaPath : null,
                 Metadata            = meta,
             };
         }
+    }
+
+    /// <summary>
+    /// Copies organized sRGB RGBA8 from a Zivid point cloud. 2D+3D frames carry the
+    /// camera image; 3D-only frames still return a buffer (often a flat default).
+    /// </summary>
+    private static byte[]? CopyColorsRgbaSrgb(Zivid.NET.PointCloud pointCloud, int width, int height)
+    {
+        try
+        {
+            var grid = pointCloud.CopyColorsRGBA_SRGB();
+            return FlattenRgba(grid, width, height);
+        }
+        catch
+        {
+            try
+            {
+                var grid = pointCloud.CopyColorsSRGB();
+                return FlattenRgba(grid, width, height);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
+    private static byte[]? FlattenRgba(byte[,,] grid, int width, int height)
+    {
+        int d0 = grid.GetLength(0);
+        int d1 = grid.GetLength(1);
+        int d2 = grid.GetLength(2);
+        if (d2 < 3) return null;
+
+        var dest = new byte[checked(width * height * 4)];
+        if (d0 == height && d1 == width)
+        {
+            for (int r = 0; r < height; r++)
+            for (int c = 0; c < width; c++)
+            {
+                int o = (r * width + c) * 4;
+                dest[o]     = grid[r, c, 0];
+                dest[o + 1] = grid[r, c, 1];
+                dest[o + 2] = grid[r, c, 2];
+                dest[o + 3] = d2 > 3 ? grid[r, c, 3] : (byte)255;
+            }
+            return dest;
+        }
+
+        if (d0 == width && d1 == height)
+        {
+            for (int r = 0; r < height; r++)
+            for (int c = 0; c < width; c++)
+            {
+                int o = (r * width + c) * 4;
+                dest[o]     = grid[c, r, 0];
+                dest[o + 1] = grid[c, r, 1];
+                dest[o + 2] = grid[c, r, 2];
+                dest[o + 3] = d2 > 3 ? grid[c, r, 3] : (byte)255;
+            }
+            return dest;
+        }
+
+        return null;
     }
 
     /// <summary>

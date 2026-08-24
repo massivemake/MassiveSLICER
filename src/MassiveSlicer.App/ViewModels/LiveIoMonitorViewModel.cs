@@ -29,6 +29,31 @@ public sealed class LiveIoSectionViewModel : ViewModelBase
     /// <summary>Spindle section: Inputs | Outputs plus ATV RPM setpoint control.</summary>
     public bool ShowSpindleRpm { get; }
 
+    /// <summary>Robot KUKA section: Analog O1-O4 zero-all control.</summary>
+    public bool ShowZeroAnouts => ShowRobotPose;
+
+    private string _zeroAnoutStatus = "";
+    public string ZeroAnoutStatus
+    {
+        get => _zeroAnoutStatus;
+        set => SetField(ref _zeroAnoutStatus, value);
+    }
+
+    private bool _zeroAnoutBusy;
+    public bool ZeroAnoutBusy
+    {
+        get => _zeroAnoutBusy;
+        set
+        {
+            if (!SetField(ref _zeroAnoutBusy, value)) return;
+            OnPropertyChanged(nameof(CanZeroAnouts));
+        }
+    }
+
+    public bool CanZeroAnouts => ShowZeroAnouts && !ZeroAnoutBusy;
+
+    public ICommand? ZeroAllAnoutsCommand { get; internal set; }
+
     private bool _isRobotPoseLive;
     public bool IsRobotPoseLive
     {
@@ -206,8 +231,14 @@ public sealed class LiveIoSignalViewModel : ViewModelBase
     }
 
     public bool IsDigital => Config.Kind is LiveIoSignalKind.DigitalInput or LiveIoSignalKind.DigitalOutput;
+    public bool IsAnalog => Config.Kind is LiveIoSignalKind.AnalogInput or LiveIoSignalKind.AnalogOutput;
+    public bool IsWritableAnalog => IsWritable && Config.Kind == LiveIoSignalKind.AnalogOutput;
+    public bool IsWritableDigital => IsWritable && Config.Kind == LiveIoSignalKind.DigitalOutput;
     public bool IsWritable => Config.Writable && Config.Source is
         LiveIoSource.Kuka or LiveIoSource.ExtruderIo28 or LiveIoSource.ExtruderBridge;
+
+    /// <summary>Unit suffix for analog edit row (°C / %).</summary>
+    public string UnitLabel => Config.Unit ?? "";
 
     bool? _lastBool;
     internal bool? LastBool => _lastBool;
@@ -218,6 +249,35 @@ public sealed class LiveIoSignalViewModel : ViewModelBase
         get => _displayValue;
         set => SetField(ref _displayValue, value);
     }
+
+    private string _editText = "0";
+    /// <summary>Editable engineering value for writable analog outputs.</summary>
+    public string EditText
+    {
+        get => _editText;
+        set
+        {
+            if (!SetField(ref _editText, value)) return;
+            _editDirty = true;
+        }
+    }
+
+    bool _editDirty;
+    bool _writeBusy;
+
+    public bool IsWriteBusy
+    {
+        get => _writeBusy;
+        set
+        {
+            if (!SetField(ref _writeBusy, value)) return;
+            OnPropertyChanged(nameof(CanSetAnalog));
+            if (SetAnalogCommand is RelayCommand setCmd)
+                setCmd.RaiseCanExecuteChanged();
+        }
+    }
+
+    public bool CanSetAnalog => IsWritableAnalog && !IsWriteBusy;
 
     private bool _isActive;
     public bool IsActive
@@ -262,19 +322,21 @@ public sealed class LiveIoSignalViewModel : ViewModelBase
     public ICommand RequestToggleCommand { get; }
     public ICommand ConfirmToggleCommand  { get; }
     public ICommand CancelToggleCommand   { get; }
+    public ICommand SetAnalogCommand      { get; }
 
     internal LiveIoSignalViewModel(LiveIoSignalConfig config, LiveIoMonitorViewModel owner)
     {
         Config = config;
         _owner = owner;
-        RequestToggleCommand = new RelayCommand(RequestToggle, () => IsWritable && !IsConfirmPending);
+        RequestToggleCommand = new RelayCommand(RequestToggle, () => IsWritableDigital && !IsConfirmPending);
         ConfirmToggleCommand  = new RelayCommand(() => _ = owner.ConfirmToggleAsync(this), () => IsConfirmPending);
         CancelToggleCommand   = new RelayCommand(() => ConfirmMessage = null);
+        SetAnalogCommand      = new RelayCommand(() => _ = owner.SetAnalogAsync(this), () => CanSetAnalog);
     }
 
     void RequestToggle()
     {
-        if (!IsWritable) return;
+        if (!IsWritableDigital) return;
         bool next = !(_lastBool ?? false);
         ConfirmMessage = $"Force {Label} {(next ? "ON" : "OFF")}?";
     }
@@ -295,6 +357,12 @@ public sealed class LiveIoSignalViewModel : ViewModelBase
             IsActive = false;
             IsWarning = false;
             IsFault = false;
+            // Keep user edits while typing; refresh when idle and not dirty.
+            if (IsWritableAnalog && !_editDirty && !IsWriteBusy)
+                _editText = LiveIoValueFormatter.FormatEditValue(Config, raw);
+            else if (!IsWritableAnalog)
+                _editText = LiveIoValueFormatter.FormatEditValue(Config, raw);
+            OnPropertyChanged(nameof(EditText));
         }
     }
 
@@ -303,7 +371,14 @@ public sealed class LiveIoSignalViewModel : ViewModelBase
         DisplayValue = "—";
         _lastBool = null;
         IsActive = IsWarning = IsFault = false;
+        if (!_editDirty)
+        {
+            _editText = "0";
+            OnPropertyChanged(nameof(EditText));
+        }
     }
+
+    internal void ClearEditDirty() => _editDirty = false;
 }
 
 /// <summary>Collapsible LFAM 3 live I/O monitor below the workflow timeline.</summary>
@@ -462,6 +537,18 @@ public sealed class LiveIoMonitorViewModel : ViewModelBase
                     if (e.PropertyName is nameof(LiveIoSectionViewModel.SpindleRpmBusy)
                         or nameof(LiveIoSectionViewModel.SpindleRpmText))
                         setCmd.RaiseCanExecuteChanged();
+                };
+            }
+            if (vm.ShowZeroAnouts)
+            {
+                var zeroCmd = new RelayCommand(
+                    () => _ = ZeroAllAnoutsAsync(vm),
+                    () => vm.CanZeroAnouts);
+                vm.ZeroAllAnoutsCommand = zeroCmd;
+                vm.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName is nameof(LiveIoSectionViewModel.ZeroAnoutBusy))
+                        zeroCmd.RaiseCanExecuteChanged();
                 };
             }
             Sections.Add(vm);
@@ -908,5 +995,89 @@ public sealed class LiveIoMonitorViewModel : ViewModelBase
             return;
         }
         signal.ApplyRaw(next ? "TRUE" : "FALSE");
+    }
+
+    internal async Task SetAnalogAsync(LiveIoSignalViewModel signal)
+    {
+        if (!signal.IsWritableAnalog) return;
+        if (!LiveIoValueFormatter.TryParseAnalogWrite(signal.Config, signal.EditText, out string krl, out string err))
+        {
+            signal.DisplayValue = err;
+            return;
+        }
+
+        signal.IsWriteBusy = true;
+        try
+        {
+            bool ok = signal.Config.Source == LiveIoSource.Kuka && _robot is not null
+                && await _robot.TryWriteKukaRealAsync(signal.Config.Key, krl);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                signal.IsWriteBusy = false;
+                if (!ok)
+                {
+                    signal.DisplayValue = "Write failed";
+                    return;
+                }
+                signal.ClearEditDirty();
+                signal.ApplyRaw(krl);
+            });
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                signal.IsWriteBusy = false;
+                signal.DisplayValue = ex.Message;
+            });
+        }
+    }
+
+    async Task ZeroAllAnoutsAsync(LiveIoSectionViewModel section)
+    {
+        if (_robot is null || !_robot.IsConnected)
+        {
+            section.ZeroAnoutStatus = "Sync robot first";
+            return;
+        }
+
+        section.ZeroAnoutBusy = true;
+        section.ZeroAnoutStatus = "Zeroing O1-O4…";
+        try
+        {
+            string[] keys = ["$ANOUT[1]", "$ANOUT[2]", "$ANOUT[3]", "$ANOUT[4]"];
+            bool allOk = true;
+            foreach (var key in keys)
+            {
+                if (!await _robot.TryWriteKukaRealAsync(key, "0"))
+                {
+                    allOk = false;
+                    break;
+                }
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                section.ZeroAnoutBusy = false;
+                section.ZeroAnoutStatus = allOk ? "O1-O4 = 0" : "Write failed";
+                if (!allOk) return;
+                foreach (var row in section.Signals.Where(s =>
+                             s.Config.Kind == LiveIoSignalKind.AnalogOutput
+                             && s.Config.Source == LiveIoSource.Kuka
+                             && s.Config.Key.StartsWith("$ANOUT[", StringComparison.Ordinal)))
+                {
+                    row.ClearEditDirty();
+                    row.ApplyRaw("0");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                section.ZeroAnoutBusy = false;
+                section.ZeroAnoutStatus = ex.Message;
+            });
+        }
     }
 }

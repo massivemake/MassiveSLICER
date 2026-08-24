@@ -163,9 +163,32 @@ public sealed class SpindleBitCylinderTest
 
         var cylLocal = SpindleBitCylinder.ComputeLocalTransform(discMesh, bodyCentroidLocal: Vector3.Zero, flip: false);
         var cyl = SpindleBitCylinder.BuildNode(20f, 50f, cylLocal, discMesh);
-        disc.AddChild(cyl);
+        SpindleBitCylinder.AttachPreview(root, disc, cyl);
         Assert.True(SpindleBitCylinder.TryGetCutterWorld(root, out var tip, out _));
         Assert.True(tip.Z > origin.Z + 1f, $"cylinder tip should be past the disc ({origin.Z} -> {tip.Z})");
+    }
+
+    [Fact]
+    public void AttachPreview_survives_hiding_the_tcp_plane()
+    {
+        var root = new SceneNode { Name = "Spindle", LocalTransform = Matrix4.Identity };
+        var planeMesh = MakePlane(Vector3.UnitZ, 20f);
+        var plane = new SceneNode
+        {
+            Name = "Mesh_0.001__SpindleBitTCP",
+            PendingMesh = planeMesh,
+            LocalTransform = Matrix4.CreateTranslation(0f, 0f, 110f),
+        };
+        root.AddChild(plane);
+        var local = SpindleBitCylinder.ComputeLocalTransform(root, plane, planeMesh, flip: false);
+        var cyl = SpindleBitCylinder.BuildNode(20f, 50f, local, planeMesh);
+        SpindleBitCylinder.AttachPreview(root, plane, cyl);
+        SpindleBitCylinder.HideTcpDatum(root);
+
+        Assert.False(plane.Visible);
+        Assert.True(cyl.Visible);
+        Assert.Same(root, cyl.Parent);
+        Assert.DoesNotContain(cyl, plane.Children);
     }
 
     [Fact]

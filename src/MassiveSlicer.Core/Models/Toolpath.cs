@@ -17,4 +17,18 @@ public sealed class Toolpath
     /// pattern as <see cref="FormboundStats"/>).
     /// </summary>
     public List<string> Warnings { get; } = [];
+
+    /// <summary>True when any layer has a rapid <see cref="MoveKind.Travel"/> hop.</summary>
+    public bool HasTravelMoves()
+    {
+        foreach (var layer in Layers)
+        {
+            foreach (var move in layer.Moves)
+            {
+                if (move.Kind == MoveKind.Travel)
+                    return true;
+            }
+        }
+        return false;
+    }
 }

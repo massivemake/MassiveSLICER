@@ -201,7 +201,7 @@ public static class SurfaceFollowMillGenerator
                 float x = MathF.Min(minX + cc * sample, maxX);
                 // A covered cell (claimed by an earlier view) breaks the run, like a miss.
                 if (grid.QueryTop(x, y, out var hit) && (claim is null || claim(hit.Point)))
-                    rowHits.Add(hit);
+                    rowHits.Add(OffsetHit(hit, mill.OffsetDistanceMm));
                 else
                     FlushSegment(moves, rowHits, ref cursor, safeZ);
             }
@@ -210,6 +210,13 @@ public static class SurfaceFollowMillGenerator
         if (cursor is { } last)
             moves.Add(new ToolpathMove(last, new Vector3(last.X, last.Y, safeZ), MoveKind.Travel) { IsZHop = true });
         return moves;
+    }
+
+    static Hit OffsetHit(Hit hit, float offsetMm)
+    {
+        if (MathF.Abs(offsetMm) < 1e-6f) return hit;
+        var n = hit.Normal.LengthSquared() > 1e-12f ? Vector3.Normalize(hit.Normal) : Vector3.UnitZ;
+        return hit with { Point = hit.Point + n * offsetMm };
     }
 
     private static float TopZ(IReadOnlyList<Vector3> positions)

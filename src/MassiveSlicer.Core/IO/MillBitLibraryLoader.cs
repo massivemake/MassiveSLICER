@@ -85,15 +85,22 @@ public static class MillBitLibraryLoader
         }
     }
 
-    public static void Save(IEnumerable<MillBitTool> tools)
+    /// <param name="touchTimestamps">
+    /// When false, keep existing <see cref="MillBitTool.LastModifiedUtc"/> (ERP merge / ErpId stamp).
+    /// </param>
+    public static void Save(IEnumerable<MillBitTool> tools, bool touchTimestamps = true)
     {
         try
         {
             Directory.CreateDirectory(LibraryDir);
             var list = tools.ToList();
             NormalizeTools(list);
-            foreach (var t in list)
-                t.LastModifiedUtc = DateTime.UtcNow;
+            if (touchTimestamps)
+            {
+                var now = DateTime.UtcNow;
+                foreach (var t in list)
+                    t.LastModifiedUtc = now;
+            }
 
             var file = new LibraryFile
             {

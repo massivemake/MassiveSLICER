@@ -129,11 +129,34 @@ public partial class App : Application
         Sync("Highlight",                 B("Accent"));
         Sync("HighlightForeground",       B("TextPrimary"));
 
+        // Windows system accent (ComboBox/TextBox focus rings) — never leave OS purple
+        if (B("Accent") is { } sysAccent)
+        {
+            var sc = sysAccent.Color;
+            rd["SystemAccentColor"] = sc;
+            rd["SystemAccentColorDark1"] = sc;
+            rd["SystemAccentColorDark2"] = B("AccentMuted")?.Color ?? sc;
+            rd["SystemAccentColorDark3"] = Avalonia.Media.Color.FromRgb(
+                (byte)(sc.R / 2), (byte)(sc.G / 2), (byte)(sc.B / 2));
+            rd["SystemAccentColorLight1"] = B("AccentHover")?.Color ?? sc;
+            rd["SystemAccentBrush"] = new SolidColorBrush(sc);
+            rd["SystemControlHighlightAccentBrush"] = new SolidColorBrush(sc);
+        }
+
         // ── Neutral surfaces — slider track, scrollbar channel/thumb, borders ───
         Sync("ThemeBackground",      B("Bg1"));
         Sync("ThemeForeground",      B("TextPrimary"));
         Sync("ThemeForegroundLow",   B("TextSecondary"));
-        Sync("ThemeBorderHigh",      B("Border2"));
+        // Hover/focus field ring — Accent lime, never Border2 (Cosmic was purple).
+        Sync("ThemeBorderHigh",      B("Accent"));
+        // Also write the always-on (non-variant) keys so SimpleTheme Default lookup is lime.
+        if (B("Accent") is { } borderAccent)
+        {
+            Resources["ThemeBorderHighBrush"] = new SolidColorBrush(borderAccent.Color);
+            Resources["ThemeBorderHighColor"] = borderAccent.Color;
+            Resources["ThemeAccentBrush"] = new SolidColorBrush(borderAccent.Color);
+            Resources["ThemeAccentColor"] = borderAccent.Color;
+        }
         Sync("ThemeBorderMid",       B("Border1"));
         Sync("ThemeBorderLow",       B("Border0"));
         Sync("ThemeControlLow",      B("Bg2"));

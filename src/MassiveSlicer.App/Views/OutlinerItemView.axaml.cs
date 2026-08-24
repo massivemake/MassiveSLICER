@@ -164,9 +164,12 @@ public partial class OutlinerItemView : UserControl
         mvm.Viewport.MergeScansAsPointCloudCommand.RaiseCanExecuteChanged();
         mvm.Viewport.MergeScansAsMeshCommand.RaiseCanExecuteChanged();
 
+        bool mill = mvm.Viewport.IsMillStepActive;
+        CreateToolpathItem.Header = mill ? "Create Mill Toolpath" : "Create New Toolpath";
         CreateToolpathItem.IsVisible =
             DataContext is OutlinerItemViewModel modelRow
-            && mvm.Viewport.IsUserModelItem(modelRow);
+            && (mvm.Viewport.IsUserModelItem(modelRow)
+                || (mill && OutlinerModelOps.IsScanItem(modelRow)));
         CreateSequenceItem.IsVisible = mvm.Viewport.CanMergeToolpaths;
 
         foreach (var child in RowContextMenu.Items)

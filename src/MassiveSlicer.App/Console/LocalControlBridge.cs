@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Avalonia.Threading;
+using MassiveSlicer.Core.Models;
 using MassiveSlicer.ViewModels;
 
 namespace MassiveSlicer.App.Console;
@@ -46,14 +47,42 @@ public sealed class LocalControlBridge : IDisposable
         _preferredPort = preferredPort;
     }
 
-    /// <summary>Binds the first free port in [preferred, preferred+5] on 127.0.0.1. Returns the port, or 0 on failure.</summary>
+    /// <summary>
+    /// True when shop LAN clients (Hermes on another PC) may hit the bridge.
+    /// Opt-in: env <c>MASSIVESLICER_BRIDGE_LAN=1</c> or file
+    /// <c>%LOCALAPPDATA%/MassiveSlicer/bridge.lan</c> containing 1/true.
+    /// Default stays loopback — POST /command can move the robot.
+    /// </summary>
+    public static bool ListenOnLan()
+    {
+        string? env = Environment.GetEnvironmentVariable("MASSIVESLICER_BRIDGE_LAN");
+        if (!string.IsNullOrWhiteSpace(env))
+        {
+            env = env.Trim();
+            if (env is "0" or "false" or "no" or "off") return false;
+            if (env is "1" or "true" or "yes" or "on") return true;
+        }
+        try
+        {
+            string path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MassiveSlicer", "bridge.lan");
+            if (!File.Exists(path)) return false;
+            string raw = File.ReadAllText(path).Trim();
+            return raw is "" or "1" or "true" or "yes" or "on";
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Binds the first free port in [preferred, preferred+5]. Loopback unless ListenOnLan.</summary>
     public int Start()
     {
+        var bind = ListenOnLan() ? IPAddress.Any : IPAddress.Loopback;
         for (int p = _preferredPort; p <= _preferredPort + 5; p++)
         {
             try
             {
-                var listener = new TcpListener(IPAddress.Loopback, p);
+                var listener = new TcpListener(bind, p);
                 listener.Start();
                 _listener = listener;
                 Port = p;
@@ -200,6 +229,9 @@ public sealed class LocalControlBridge : IDisposable
                     tool = r.KrlToolIndex,
                     @base = r.KrlBaseIndex,
                     pose = new { x = r.TcpX, y = r.TcpY, z = r.TcpZ, a = r.TcpA, b = r.TcpB, c = r.TcpC },
+                    workspace = _main.AppPreferences.LastWorkspacePath,
+                    lan = ListenOnLan(),
+                    port = Port,
                 }, Json);
             });
 

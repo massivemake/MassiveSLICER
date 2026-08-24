@@ -7,67 +7,97 @@
 
     <UserControl.Resources>
         <DataTemplate x:Key="LiveIoSignalRowTemplate">
-            <StackPanel Spacing="2" Margin="0,0,0,2">
+            <StackPanel Spacing="2" Margin="0,0,0,1">
                 <Border Classes="Lfam3LiveIoRow">
-                    <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+                    <Grid ColumnDefinitions="42,12,*,48,18"
+                          ColumnSpacing="4">
                         <TextBlock Grid.Column="0"
                                    Text="{Binding KindLabel}"
-                                   Width="34"
-                                   Classes="LabelMuted"
-                                   FontSize="9"
+                                   Classes="Lfam3LiveIoPin"
                                    VerticalAlignment="Center"/>
                         <Grid Grid.Column="1"
-                              Width="12"
-                              Height="12"
-                              Margin="4,0,6,0"
-                              IsVisible="{Binding IsDigital}">
+                              Width="8"
+                              Height="8"
+                              VerticalAlignment="Center"
+                              HorizontalAlignment="Center">
                             <shapes:Ellipse Classes="Lfam3LiveIoDot"
                                             Classes.inactive="{Binding ShowInactive}"
                                             Classes.active="{Binding IsActive}"
                                             Classes.warning="{Binding IsWarning}"
-                                            Classes.fault="{Binding IsFault}"/>
+                                            Classes.fault="{Binding IsFault}"
+                                            IsVisible="{Binding IsDigital}"/>
                         </Grid>
                         <TextBlock Grid.Column="2"
                                    Text="{Binding Label}"
-                                   FontSize="10"
+                                   Classes="Lfam3LiveIoLabel"
                                    VerticalAlignment="Center"
-                                   TextWrapping="Wrap"/>
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding Label}"/>
+                        <!-- Read-only digital / non-writable analog value -->
                         <TextBlock Grid.Column="3"
                                    Text="{Binding DisplayValue}"
-                                   FontSize="10"
-                                   Classes="LabelMuted"
-                                   Margin="6,0,0,0"
+                                   Classes="Lfam3LiveIoValue"
                                    VerticalAlignment="Center"
-                                   MinWidth="44"
-                                   HorizontalAlignment="Right"/>
+                                   IsVisible="{Binding !IsWritableAnalog}"/>
+                        <!-- Writable analog: edit engineering value + Set -->
+                        <StackPanel Grid.Column="3"
+                                    Grid.ColumnSpan="2"
+                                    Orientation="Horizontal"
+                                    Spacing="2"
+                                    HorizontalAlignment="Right"
+                                    IsVisible="{Binding IsWritableAnalog}">
+                            <TextBox Text="{Binding EditText, Mode=TwoWay}"
+                                     Width="36"
+                                     FontSize="8"
+                                     FontFamily="Consolas,Courier New,monospace"
+                                     MinHeight="16"
+                                     Padding="3,1"
+                                     VerticalContentAlignment="Center"
+                                     IsEnabled="{Binding !IsWriteBusy}"
+                                     ToolTip.Tip="Engineering value: O1-O3 = C, O4 = % RPM"/>
+                            <TextBlock Text="{Binding UnitLabel}"
+                                       FontSize="8"
+                                       Classes="LabelMuted"
+                                       VerticalAlignment="Center"
+                                       MinWidth="12"/>
+                            <Button Content="Set"
+                                    FontSize="8"
+                                    Padding="4,1"
+                                    Classes="Lfam3LiveIoToggle"
+                                    Command="{Binding SetAnalogCommand}"
+                                    IsEnabled="{Binding CanSetAnalog}"
+                                    ToolTip.Tip="Write $ANOUT on the connected robot"/>
+                        </StackPanel>
                         <Button Grid.Column="4"
                                 Content="⇅"
-                                FontSize="10"
-                                Padding="4,2"
-                                Margin="4,0,0,0"
+                                FontSize="9"
+                                Padding="0"
+                                Width="16"
+                                Height="16"
+                                HorizontalAlignment="Right"
                                 Classes="Lfam3LiveIoToggle"
-                                IsVisible="{Binding IsWritable}"
+                                IsVisible="{Binding IsWritableDigital}"
                                 Command="{Binding RequestToggleCommand}"
                                 ToolTip.Tip="Force output (requires confirmation)"/>
                     </Grid>
                 </Border>
                 <StackPanel Orientation="Horizontal"
-                            Spacing="6"
-                            Margin="24,0,0,0"
+                            Spacing="4"
+                            Margin="58,0,0,1"
                             IsVisible="{Binding IsConfirmPending}">
                     <TextBlock Text="{Binding ConfirmMessage}"
-                               FontSize="9"
+                               FontSize="8"
                                Foreground="#f0c040"
                                VerticalAlignment="Center"
                                TextWrapping="Wrap"/>
                     <Button Content="Confirm"
-                            FontSize="9"
-                            Padding="6,2"
+                            FontSize="8"
+                            Padding="5,1"
                             Classes="Lfam3LiveIoToggle"
                             Command="{Binding ConfirmToggleCommand}"/>
                     <Button Content="Cancel"
-                            FontSize="9"
-                            Padding="6,2"
+                            FontSize="8"
+                            Padding="5,1"
                             Classes="Lfam3LiveIoToggle"
                             Command="{Binding CancelToggleCommand}"/>
                 </StackPanel>
@@ -76,11 +106,11 @@
     </UserControl.Resources>
 
     <Border Classes="Lfam3LiveIoPanel nested">
-        <StackPanel Spacing="6">
+        <StackPanel Spacing="5">
             <TextBlock Text="{Binding Phase1Hint}"
-                       FontSize="9"
-                       Foreground="#40b840"
-                       Margin="2,0"
+                       FontSize="8"
+                       Foreground="#71a72a"
+                       Margin="1,0,1,0"
                        TextWrapping="Wrap"/>
 
             <ScrollViewer HorizontalScrollBarVisibility="Auto"
@@ -88,7 +118,7 @@
             <ItemsControl ItemsSource="{Binding VisibleSections}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="10"/>
+                        <StackPanel Orientation="Horizontal" Spacing="7"/>
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
@@ -99,16 +129,16 @@
                                 Classes.pending="{Binding !IsPhaseLive}"
                                 VerticalAlignment="Top">
                             <StackPanel Spacing="4">
-                                <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,4">
+                                <Grid ColumnDefinitions="Auto,*,Auto" Margin="1,0,1,0">
                                     <Button Grid.Column="0"
                                             Background="Transparent"
                                             BorderThickness="0"
-                                            Padding="2,0"
+                                            Padding="1,0"
                                             Margin="0,0,4,0"
                                             Cursor="Hand"
                                             Command="{Binding ToggleCollapsedCommand}"
                                             ToolTip.Tip="Collapse / expand section">
-                                        <ia:Icon Value="{Binding CollapseIcon}" FontSize="14" Foreground="#40b840"/>
+                                        <ia:Icon Value="{Binding CollapseIcon}" FontSize="11" Foreground="#71a72a"/>
                                     </Button>
                                     <TextBlock Grid.Column="1"
                                                Text="{Binding Title}"
@@ -117,27 +147,27 @@
                                     <TextBlock Grid.Column="2"
                                                Text="{Binding StatusLine}"
                                                Classes="LabelMuted"
-                                               FontSize="9"
+                                               FontSize="8"
                                                VerticalAlignment="Center"
                                                TextWrapping="Wrap"
-                                               MaxWidth="120"/>
+                                               MaxWidth="80"/>
                                 </Grid>
 
                                 <StackPanel Spacing="4" IsVisible="{Binding IsBodyVisible}">
 
                                 <!-- Robot: Position | Inputs | Outputs -->
-                                <Grid ColumnDefinitions="Auto,10,*,10,*"
+                                <Grid ColumnDefinitions="Auto,6,*,8,*"
                                       IsVisible="{Binding UsesRobotTripleLayout}">
                                     <!-- Position column -->
                                     <Border Grid.Column="0" Classes="Lfam3LiveIoPoseColumn">
-                                        <StackPanel Spacing="6">
+                                        <StackPanel Spacing="3">
                                             <Grid ColumnDefinitions="*,Auto">
                                                 <TextBlock Grid.Column="0"
                                                            Text="POSITION"
-                                                           FontSize="9"
+                                                           FontSize="8"
                                                            FontWeight="SemiBold"
-                                                           Foreground="#40b840"
-                                                           LetterSpacing="0.8"
+                                                           Foreground="#71a72a"
+                                                           LetterSpacing="0.5"
                                                            VerticalAlignment="Center"/>
                                                 <Border Grid.Column="1"
                                                         Classes="Lfam3LiveIoPoseLivePill"
@@ -145,23 +175,23 @@
                                                     <TextBlock Text="LIVE"
                                                                FontSize="7"
                                                                FontWeight="Bold"
-                                                               Foreground="#40b840"
+                                                               Foreground="#71a72a"
                                                                LetterSpacing="0.5"/>
                                                 </Border>
                                             </Grid>
 
                                             <TextBlock Text="Sync robot for live position"
-                                                       FontSize="9"
+                                                       FontSize="8"
                                                        Classes="LabelMuted"
                                                        TextWrapping="Wrap"
                                                        IsVisible="{Binding !IsRobotPoseLive}"/>
 
-                                            <StackPanel Spacing="5" IsVisible="{Binding IsRobotPoseLive}">
+                                            <StackPanel Spacing="3" IsVisible="{Binding IsRobotPoseLive}">
                                                 <!-- Joint angles ($AXIS_ACT) -->
                                                 <Border Classes="Lfam3LiveIoPoseGroup">
                                                     <StackPanel Spacing="1">
                                                         <TextBlock Text="JOINTS" Classes="Lfam3LiveIoPoseGroupTitle"/>
-                                                        <Grid ColumnDefinitions="22,*,6,22,*" RowDefinitions="Auto,Auto,Auto,Auto">
+                                                        <Grid ColumnDefinitions="16,*,4,16,*" RowDefinitions="Auto,Auto,Auto,Auto">
                                                             <TextBlock Grid.Row="0" Grid.Column="0" Text="A1" Classes="Lfam3LiveIoPoseLabel"/>
                                                             <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding A1, StringFormat={}{0:F1}°}" Classes="Lfam3LiveIoPoseValue"/>
                                                             <TextBlock Grid.Row="0" Grid.Column="3" Text="A4" Classes="Lfam3LiveIoPoseLabel"/>
@@ -214,89 +244,99 @@
                                     </Border>
 
                                     <Border Grid.Column="1" Classes="Lfam3LiveIoColumnDivider"/>
-                                    <StackPanel Grid.Column="2" Spacing="2">
+                                    <Border Grid.Column="2" Classes="Lfam3LiveIoColumn">
+                                        <StackPanel Spacing="2">
                                         <TextBlock Text="INPUTS"
-                                                   FontSize="9"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="#40b840"
-                                                   LetterSpacing="0.8"
-                                                   Margin="0,0,0,2"/>
+                                                   Classes="Lfam3LiveIoColTitle"/>
                                         <ItemsControl ItemsSource="{Binding InputSignals}"
                                                       ItemTemplate="{StaticResource LiveIoSignalRowTemplate}"/>
-                                    </StackPanel>
+                                        </StackPanel>
+                                    </Border>
                                     <Border Grid.Column="3" Classes="Lfam3LiveIoColumnDivider"/>
-                                    <StackPanel Grid.Column="4" Spacing="2">
-                                        <TextBlock Text="OUTPUTS"
-                                                   FontSize="9"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="#40b840"
-                                                   LetterSpacing="0.8"
-                                                   Margin="0,0,0,2"/>
+                                    <Border Grid.Column="4" Classes="Lfam3LiveIoColumn">
+                                        <StackPanel Spacing="2">
+                                        <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,1">
+                                            <TextBlock Grid.Column="0"
+                                                       Text="OUTPUTS"
+                                                       Classes="Lfam3LiveIoColTitle"
+                                                       VerticalAlignment="Center"/>
+                                            <Button Grid.Column="1"
+                                                    Content="Zero O1-O4"
+                                                    FontSize="8"
+                                                    Padding="4,1"
+                                                    Classes="Lfam3LiveIoToggle"
+                                                    IsVisible="{Binding ShowZeroAnouts}"
+                                                    Command="{Binding ZeroAllAnoutsCommand}"
+                                                    IsEnabled="{Binding CanZeroAnouts}"
+                                                    ToolTip.Tip="Write $ANOUT[1]..[4] = 0 on the connected robot"/>
+                                        </Grid>
+                                        <TextBlock Text="{Binding ZeroAnoutStatus}"
+                                                   FontSize="8"
+                                                   Foreground="#f0c040"
+                                                   TextWrapping="Wrap"
+                                                   IsVisible="{Binding ZeroAnoutStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
                                         <ItemsControl ItemsSource="{Binding OutputSignals}"
                                                       ItemTemplate="{StaticResource LiveIoSignalRowTemplate}"/>
-                                    </StackPanel>
+                                        </StackPanel>
+                                    </Border>
                                 </Grid>
 
                                 <!-- Extruder / Spindle: Inputs | Outputs (+ RPM on Spindle) -->
-                                <Grid ColumnDefinitions="*,10,*"
+                                <Grid ColumnDefinitions="*,8,*"
                                       IsVisible="{Binding UsesDualIoLayout}">
-                                    <StackPanel Grid.Column="0" Spacing="2">
+                                    <Border Grid.Column="0" Classes="Lfam3LiveIoColumn">
+                                        <StackPanel Spacing="2">
                                         <TextBlock Text="INPUTS"
-                                                   FontSize="9"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="#40b840"
-                                                   LetterSpacing="0.8"
-                                                   Margin="0,0,0,2"/>
+                                                   Classes="Lfam3LiveIoColTitle"/>
                                         <ItemsControl ItemsSource="{Binding InputSignals}"
                                                       ItemTemplate="{StaticResource LiveIoSignalRowTemplate}"/>
-                                    </StackPanel>
+                                        </StackPanel>
+                                    </Border>
                                     <Border Grid.Column="1" Classes="Lfam3LiveIoColumnDivider"/>
-                                    <StackPanel Grid.Column="2" Spacing="2">
+                                    <Border Grid.Column="2" Classes="Lfam3LiveIoColumn">
+                                        <StackPanel Spacing="2">
                                         <!-- Spindle ATV RPM (separate from KUKA DO51 enable) -->
                                         <Border IsVisible="{Binding ShowSpindleRpm}"
                                                 Classes="Lfam3LiveIoPoseGroup"
-                                                Margin="0,0,0,6">
-                                            <StackPanel Spacing="4">
+                                                Margin="0,0,0,4">
+                                            <StackPanel Spacing="3">
                                                 <TextBlock Text="SPINDLE RPM"
                                                            Classes="Lfam3LiveIoPoseGroupTitle"/>
-                                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
                                                     <TextBox Grid.Column="0"
                                                              Text="{Binding SpindleRpmText, Mode=TwoWay}"
                                                              PlaceholderText="0-24000"
-                                                             FontSize="11"
+                                                             FontSize="8"
                                                              FontFamily="Consolas,Courier New,monospace"
-                                                             MinHeight="26"
-                                                             Padding="6,3"
+                                                             MinHeight="18"
+                                                             Padding="4,1"
                                                              IsEnabled="{Binding !SpindleRpmBusy}"/>
                                                     <Button Grid.Column="1"
                                                             Content="Set"
-                                                            FontSize="10"
-                                                            Padding="10,4"
-                                                            MinWidth="44"
+                                                            FontSize="8"
+                                                            Padding="6,2"
+                                                            MinWidth="28"
                                                             Classes="Lfam3LiveIoToggle"
                                                             Command="{Binding SetSpindleRpmCommand}"
                                                             IsEnabled="{Binding CanSetSpindleRpm}"
                                                             ToolTip.Tip="Send RPM setpoint to ATV340 (does not toggle DO51)"/>
                                                 </Grid>
                                                 <TextBlock Text="{Binding SpindleRpmActualLine}"
-                                                           FontSize="9"
+                                                           FontSize="8"
                                                            Classes="LabelMuted"
                                                            TextWrapping="Wrap"/>
                                                 <TextBlock Text="{Binding SpindleRpmStatus}"
-                                                           FontSize="9"
+                                                           FontSize="8"
                                                            Foreground="#f0c040"
                                                            TextWrapping="Wrap"/>
                                             </StackPanel>
                                         </Border>
                                         <TextBlock Text="OUTPUTS"
-                                                   FontSize="9"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="#40b840"
-                                                   LetterSpacing="0.8"
-                                                   Margin="0,0,0,2"/>
+                                                   Classes="Lfam3LiveIoColTitle"/>
                                         <ItemsControl ItemsSource="{Binding OutputSignals}"
                                                       ItemTemplate="{StaticResource LiveIoSignalRowTemplate}"/>
-                                    </StackPanel>
+                                        </StackPanel>
+                                    </Border>
                                 </Grid>
 
                                 <!-- Single-column phase equipment -->
@@ -313,8 +353,8 @@
 
             <TextBlock Text="{Binding PhaseRoadmapSummary}"
                        Classes="LabelMuted"
-                       FontSize="9"
-                       Margin="2,0"
+                       FontSize="8"
+                       Margin="1,2,1,0"
                        TextWrapping="Wrap"/>
         </StackPanel>
     </Border>

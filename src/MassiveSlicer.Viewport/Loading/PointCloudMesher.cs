@@ -1,3 +1,4 @@
+using MassiveSlicer.Core.Scanning;
 using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;
 
@@ -12,19 +13,31 @@ namespace MassiveSlicer.Viewport.Loading;
 public static class PointCloudMesher
 {
     /// <summary>
+    /// Builds a mesh node from a Zivid capture, including the organized sRGB
+    /// color map when <see cref="ScanCaptureResult.ColorsRgba"/> is present.
+    /// </summary>
+    public static SceneNode? Build(ScanCaptureResult capture, string name, float maxEdgeMm = 10f)
+        => Build(capture.PointsXYZ, capture.Width, capture.Height, name, maxEdgeMm, capture.ColorsRgba);
+
+    /// <summary>
     /// Builds a mesh node from row-major XYZ triples (<paramref name="width"/> ×
     /// <paramref name="height"/> grid, NaN = invalid). Triangle winding assumes a
     /// camera looking down +Z, producing normals that face back toward the camera.
-    /// Returns <c>null</c> when the cloud has too few valid points to mesh.
+    /// When <paramref name="colorsRgba"/> is Width×Height RGBA8, the mesh samples
+    /// that image as its base-color map. Returns <c>null</c> when the cloud has
+    /// too few valid points to mesh.
     /// </summary>
     public static SceneNode? Build(float[] pointsXYZ, int width, int height,
-                                   string name, float maxEdgeMm = 10f)
+                                   string name, float maxEdgeMm = 10f,
+                                   byte[]? colorsRgba = null)
     {
         int gridCount = width * height;
 
         // Compact valid points; map[gridIndex] → vertex index or -1.
         var map       = new int[gridCount];
         var positions = new List<Vector3>(gridCount / 2);
+        var uvList    = colorsRgba is { Length: > 0 } ? new List<Vector2>(gridCount / 2) : null;
+        bool useColor = uvList is not null && colorsRgba!.Length >= gridCount * 4;
         for (int i = 0; i < gridCount; i++)
         {
             float x = pointsXYZ[i * 3];
@@ -35,6 +48,12 @@ public static class PointCloudMesher
             }
             map[i] = positions.Count;
             positions.Add(new Vector3(x, pointsXYZ[i * 3 + 1], pointsXYZ[i * 3 + 2]));
+            if (useColor)
+            {
+                int col = i % width;
+                int row = i / width;
+                uvList!.Add(new Vector2((col + 0.5f) / width, (row + 0.5f) / height));
+            }
         }
 
         if (positions.Count < 3) return null;
@@ -69,10 +88,34 @@ public static class PointCloudMesher
                 ? normals[i].Normalized()
                 : -Vector3.UnitZ;
 
-        // Lime green (opaque) so scans are easy to distinguish from CAD/rock imports.
-        var lime = new Vector4(0.55f, 1.00f, 0.15f, 1f);
-        var mesh = new MeshData(verts, normals, indices.ToArray(), name,
+        MeshData mesh;
+        if (useColor)
+        {
+            var pixels = new byte[gridCount * 4];
+            Buffer.BlockCopy(colorsRgba!, 0, pixels, 0, pixels.Length);
+            var colorMap = new TextureData(
+                pixels, width, height, isSrgb: true,
+                TextureWrapKind.ClampToEdge, TextureWrapKind.ClampToEdge);
+            var material = new MaterialData
+            {
+                BaseColorFactor = Vector4.One,
+                MetallicFactor  = 0f,
+                RoughnessFactor = 0.85f,
+                DoubleSided     = true,
+                BaseColor       = colorMap,
+            };
+            mesh = new MeshData(verts, normals, indices.ToArray(), name,
+                                Vector4.One, metallic: 0f, roughness: 0.85f,
+                                uvList!.ToArray(), tangents: null, material);
+        }
+        else
+        {
+            // Lime green (opaque) so scans without color stay distinct from CAD imports.
+            var lime = new Vector4(0.55f, 1.00f, 0.15f, 1f);
+            mesh = new MeshData(verts, normals, indices.ToArray(), name,
                                 baseColor: lime, metallic: 0f, roughness: 0.85f);
+        }
+
         return new SceneNode
         {
             Name            = name,
