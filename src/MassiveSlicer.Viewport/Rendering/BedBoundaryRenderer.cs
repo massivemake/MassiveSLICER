@@ -25,7 +25,7 @@ public sealed class BedBoundaryRenderer : IDisposable
     private const float OriginLiftZMm = 2f;
 
     private static readonly Vector4 BorderColour = new(0.00f, 0.90f, 0.90f, 1f); // cyan
-    private static readonly Vector4 GridColour   = new(0.05f, 0.35f, 0.08f, 1f); // dark green
+    private static readonly Vector4 GridColour   = new(0.10f, 0.72f, 0.22f, 1f); // lime-green, readable on the platter
 
     private const float GridSpacing  = 500f;
     private const float BorderWidth  = 3.0f;
@@ -246,24 +246,26 @@ public sealed class BedBoundaryRenderer : IDisposable
     private void BuildCircleBorder(Vector3 c, float radius)
     {
         var verts = new List<float>();
-        _borderCount = AppendCircle(verts, c, radius, 120);
+        var lifted = new Vector3(c.X, c.Y, c.Z + OriginLiftZMm);
+        _borderCount = AppendCircle(verts, lifted, radius, 120);
         (_borderVao, _borderVbo) = Upload([.. verts]);
     }
 
     private void BuildPolarGrid(Vector3 c, float radius)
     {
         var verts = new List<float>();
+        var p = new Vector3(c.X, c.Y, c.Z + OriginLiftZMm);
 
         // Concentric rings every GridSpacing inside the border.
         for (float r = GridSpacing; r < radius; r += GridSpacing)
-            AppendCircle(verts, c, r, 96);
+            AppendCircle(verts, p, r, 96);
 
         // Radial spokes every 30°, centre → rim.
         for (int deg = 0; deg < 360; deg += 30)
         {
             float a = deg * MathF.PI / 180f;
-            verts.AddRange([c.X, c.Y, c.Z,
-                            c.X + radius * MathF.Cos(a), c.Y + radius * MathF.Sin(a), c.Z]);
+            verts.AddRange([p.X, p.Y, p.Z,
+                            p.X + radius * MathF.Cos(a), p.Y + radius * MathF.Sin(a), p.Z]);
         }
 
         _gridCount = verts.Count / 3;

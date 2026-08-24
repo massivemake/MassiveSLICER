@@ -26,6 +26,12 @@ public sealed class MillSettings
     /// <summary>Stock left above the final surface during roughing; the finish pass removes it.</summary>
     public float FinishAllowanceMm { get; init; } = 0.3f;
 
+    /// <summary>
+    /// Push the mill path along the surface normal (mm). + = out (shallower / leave stock),
+    /// − = into the work. Independent of <see cref="FinishAllowanceMm"/>.
+    /// </summary>
+    public float OffsetDistanceMm { get; init; } = 0f;
+
     public float FeedRateMmMin { get; init; } = 3000f;
     public float PlungeFeedMmMin { get; init; } = 1000f;
 

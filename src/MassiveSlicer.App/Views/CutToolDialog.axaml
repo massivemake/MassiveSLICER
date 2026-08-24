@@ -9,9 +9,15 @@
         WindowDecorations="None"
         CanResize="False"
         ShowInTaskbar="False"
-        Background="{DynamicResource Bg0}">
+        TransparencyLevelHint="Transparent"
+        Background="Transparent">
 
-    <Border BorderBrush="{DynamicResource Border2}" BorderThickness="1">
+    <Border Classes="DialogChrome"
+            Background="{DynamicResource Bg0}"
+            BorderBrush="{DynamicResource Border2}"
+            BorderThickness="1"
+            CornerRadius="10"
+            ClipToBounds="True">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="40"/>
@@ -21,6 +27,7 @@
 
             <Border Grid.Row="0" x:Name="TitleBar"
                     Background="{DynamicResource Bg1}"
+                    CornerRadius="10,10,0,0"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,0,0,1"
                     Cursor="SizeAll">
@@ -135,7 +142,8 @@
             <Border Grid.Row="2"
                     Background="{DynamicResource Bg1}"
                     BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="0,1,0,0">
+                    BorderThickness="0,1,0,0"
+                    CornerRadius="0,0,10,10">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                             Spacing="8" Margin="12,0">
                     <Button Content="Cancel" Classes="ToolbarButton" Padding="14,6" Click="OnCancel"/>

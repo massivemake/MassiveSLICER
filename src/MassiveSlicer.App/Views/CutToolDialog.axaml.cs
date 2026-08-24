@@ -10,6 +10,7 @@ public partial class CutToolDialog : Window
     public CutToolDialog()
     {
         InitializeComponent();
+        DialogWindowChrome.Apply(this);
         TitleBar.PointerPressed += (_, e) =>
         {
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)

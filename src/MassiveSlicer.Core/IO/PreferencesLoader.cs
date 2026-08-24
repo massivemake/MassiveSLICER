@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using MassiveSlicer.Core.Models;
 
@@ -31,7 +31,13 @@ public static class PreferencesLoader
     /// </summary>
     public static AppPreferences Load()
     {
-        if (!File.Exists(PrefsPath)) return new AppPreferences();
+        if (!File.Exists(PrefsPath))
+        {
+            var fresh = new AppPreferences();
+            // Travel Moves is on by default; do not also turn on Robot Mode MAT.
+            fresh.RobotModeEnabled = false;
+            return fresh;
+        }
         try
         {
             string json = File.ReadAllText(PrefsPath);
@@ -42,7 +48,9 @@ public static class PreferencesLoader
         }
         catch
         {
-            return new AppPreferences();
+            var fresh = new AppPreferences();
+            fresh.RobotModeEnabled = false;
+            return fresh;
         }
     }
 
@@ -50,6 +58,25 @@ public static class PreferencesLoader
     {
         if (prefs.WipeModeDisplay is "Natural" or "Normal")
             prefs.WipeModeDisplay = "Same-Direction";
+
+        // Old factory was Wipe Off + 10 mm / 120 mm/s (or the half-migrated 12 / 600).
+        bool factoryWipeOff = prefs.WipeModeDisplay is "Off" or null or "";
+        bool factoryWipeNums = (prefs.WipeLengthMm is 10.0 or 12.0)
+            && (prefs.WipeSpeed is 120.0 or 600.0);
+        if (factoryWipeOff && factoryWipeNums)
+        {
+            prefs.WipeModeDisplay = "Same-Direction";
+            prefs.WipeLengthMm = 35.0;
+            prefs.WipeSpeed = 600.0;
+            prefs.WipeRampMm = prefs.LayerHeight + 2.0;
+        }
+
+        if (!prefs.DigitalStartStopEnabled)
+        {
+            prefs.DigitalStartStopEnabled = true;
+            // Enabling travel start/stop must not flip Robot Mode on for pre-split prefs.
+            prefs.RobotModeEnabled ??= false;
+        }
     }
 
     /// <summary>Serialises <paramref name="prefs"/> to disk, creating the directory if needed.</summary>

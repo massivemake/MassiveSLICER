@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 
 namespace MassiveSlicer.Core.Kinematics;
 
@@ -28,10 +28,21 @@ public static class KukaIkSolver
     private static readonly float[] Offsets = [0f, -MathF.PI / 2f, MathF.PI / 2f, 0f, 0f, MathF.PI];
     private static readonly int[]   Signs   = [1, 1, 1, 1, 1, 1];
 
+    // Fallback software stops (legacy LFAM 1-ish). IK / InLimits use the 5% envelope.
+    private static readonly (float Min, float Max)[] MachineLimits =
+    [
+        (-70f,  70f), (-125f, 0f), (-120f, 168f),
+        (-350f, 350f), (-125f, 125f), (-350f, 350f),
+    ];
+
     private static readonly (float Min, float Max)[] Limits =
     [
-        (-60f,  60f), (-120f, 70f), (-120f, 168f),
-        (-350f, 350f), (-125f, 125f), (-350f, 350f),
+        JointLimitEnvelope.Inset(MachineLimits[0].Min, MachineLimits[0].Max),
+        JointLimitEnvelope.Inset(MachineLimits[1].Min, MachineLimits[1].Max),
+        JointLimitEnvelope.Inset(MachineLimits[2].Min, MachineLimits[2].Max),
+        JointLimitEnvelope.Inset(MachineLimits[3].Min, MachineLimits[3].Max),
+        JointLimitEnvelope.Inset(MachineLimits[4].Min, MachineLimits[4].Max),
+        JointLimitEnvelope.Inset(MachineLimits[5].Min, MachineLimits[5].Max),
     ];
 
     // DH table (matches kinematics.js _DH_ALPHA / _DH_A / _DH_D)

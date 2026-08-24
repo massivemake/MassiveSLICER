@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using MassiveSlicer.App.Enums;
 using MassiveSlicer.Commands;
 using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels.Base;
@@ -21,7 +22,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         : IsModifiersGroup ? "mdi-layers-outline"
         : IsModifier ? "mdi-crop"
         : IsEffector ? "mdi-white-balance-sunny"
-        : IsToolpath ? "mdi-reorder-horizontal"
+        : IsMillToolpath ? OutlinerToolpathKinds.MillIcon
+        : IsPrintToolpath ? OutlinerToolpathKinds.PrintIcon
+        : IsToolpath ? OutlinerToolpathKinds.PrintIcon
         : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "mdi-cube-scan"
         : Name is "Robot Root" or "Robot Arm" ? "mdi-robot-industrial"
         : Name.Contains("Bed", StringComparison.OrdinalIgnoreCase) ? "mdi-view-grid-outline"
@@ -32,7 +35,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         : IsModifiersGroup ? "#E8A33D"
         : IsModifier ? "#E8A33D"
         : IsEffector ? "#A6DE38"
-        : IsToolpath ? "#37C871"
+        : IsMillToolpath ? OutlinerToolpathKinds.MillColor
+        : IsPrintToolpath ? OutlinerToolpathKinds.PrintColor
+        : IsToolpath ? OutlinerToolpathKinds.PrintColor
         : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "#B07BF7"
         : Name is "Robot Root" or "Robot Arm" ? "#8B93A1"
         : Name.Contains("Bed", StringComparison.OrdinalIgnoreCase) ? "#8B93A1"
@@ -42,7 +47,10 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         IsPiecesGroup ? "Applied pieces — result of running the modifier stack, from an Apply press"
         : IsModifiersGroup ? "Modifier stack — select to move/rotate all together, or Apply"
         : IsModifier ? "Cut modifier"
-        : IsEffector ? "Effector" : IsToolpath ? "Toolpath"
+        : IsEffector ? "Effector"
+        : IsMillToolpath ? OutlinerToolpathKinds.MillTip
+        : IsPrintToolpath ? OutlinerToolpathKinds.PrintTip
+        : IsToolpath ? OutlinerToolpathKinds.PrintTip
         : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "Scan"
         : Name is "Robot Root" or "Robot Arm" ? "Robot"
         : Name.Contains("Bed", StringComparison.OrdinalIgnoreCase) ? "Print bed"
@@ -91,8 +99,45 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     public ICommand ReloadModelCommand { get; }
     public ICommand ReplaceModelCommand { get; }
 
+    bool _isToolpath;
     /// <summary>True for toolpath entries (set by RegisterToolpathInOutliner).</summary>
-    public bool IsToolpath { get; set; }
+    public bool IsToolpath
+    {
+        get => _isToolpath;
+        set
+        {
+            if (_isToolpath == value) return;
+            _isToolpath = value;
+            OnPropertyChanged();
+            NotifyTypeBadge();
+        }
+    }
+
+    OutlinerToolpathKind _toolpathKind = OutlinerToolpathKind.Print;
+    /// <summary>Print/extruder vs mill/spindle — drives the outliner icon and color.</summary>
+    public OutlinerToolpathKind ToolpathKind
+    {
+        get => _toolpathKind;
+        set
+        {
+            if (_toolpathKind == value) return;
+            _toolpathKind = value;
+            OnPropertyChanged();
+            NotifyTypeBadge();
+        }
+    }
+
+    public bool IsMillToolpath  => _isToolpath && _toolpathKind == OutlinerToolpathKind.Mill;
+    public bool IsPrintToolpath => _isToolpath && _toolpathKind == OutlinerToolpathKind.Print;
+
+    void NotifyTypeBadge()
+    {
+        OnPropertyChanged(nameof(TypeIcon));
+        OnPropertyChanged(nameof(TypeColor));
+        OnPropertyChanged(nameof(TypeTip));
+        OnPropertyChanged(nameof(IsMillToolpath));
+        OnPropertyChanged(nameof(IsPrintToolpath));
+    }
 
     /// <summary>True for live-effector handles — excluded from slicing/model resolution.</summary>
     public bool IsEffector { get; set; }

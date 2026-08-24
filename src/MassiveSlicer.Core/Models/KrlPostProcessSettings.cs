@@ -1,30 +1,45 @@
 namespace MassiveSlicer.Core.Models;
 
 /// <summary>
-/// User-editable KRL SRC post-processing options applied during export.
+/// Factory defaults for KRL Post-Processing (Rules + Header + Footer).
+/// Stored in repo <c>assets/krl_postprocess.json</c> so a rebuild and a GitHub
+/// clone keep the same recipe. Null / missing fields leave in-code defaults.
 /// </summary>
 public sealed class KrlPostProcessSettings
 {
-    /// <summary>
-    /// Header template inserted after <c>DEF program ()</c>. Supports
-    /// <see cref="IO.KrlExporter"/> placeholders such as {{PROGRAM_NAME}}.
-    /// Empty = built-in default.
-    /// </summary>
+    /// <summary>File / Lab payload version. 1 = Rules + Header + Footer.</summary>
+    public int SchemaVersion { get; set; } = 1;
+
+    /// <summary>When this recipe was last published (UTC). Lab is source of truth when set.</summary>
+    public DateTime? UpdatedAtUtc { get; set; }
+
     public string HeaderText { get; set; } = "";
-
-    /// <summary>
-    /// Footer template appended before file end. Empty = built-in default.</summary>
     public string FooterText { get; set; } = "";
-
-    /// <summary>
-    /// Operator-saved header default restored by "Reset to default".
-    /// Empty = fall back to the built-in <see cref="IO.KrlExporter.DefaultHeaderTemplate"/>.
-    /// </summary>
     public string DefaultHeaderText { get; set; } = "";
-
-    /// <summary>
-    /// Operator-saved footer default restored by "Reset to default".
-    /// Empty = fall back to the built-in <see cref="IO.KrlExporter.DefaultFooterTemplate"/>.
-    /// </summary>
     public string DefaultFooterText { get; set; } = "";
+
+    /// <summary>True once Rules have been written to the factory file.</summary>
+    public bool RulesSaved { get; set; }
+
+    public bool? RobotModeEnabled { get; set; }
+    public bool? TravelStartStopEnabled { get; set; }
+    public bool? ExtruderAirEnabled { get; set; }
+    public double? ApoCvel { get; set; }
+
+    public bool? SmoothRotation { get; set; }
+    public int? SmoothRotationRadius { get; set; }
+    public double? SmoothRotationMaxRateDegPerMm { get; set; }
+    public double? OrientationLookAheadMm { get; set; }
+    public double? OrientationSigmaMm { get; set; }
+
+    public double? ExtrusionStartWaitSec { get; set; }
+    public double? ExtrusionResumeWaitSec { get; set; }
+    public double? SsPreTravelWaitSec { get; set; }
+    public double? SsResumePrimePercent { get; set; }
+
+    public bool? ResumeRampEnabled { get; set; }
+    public double? ResumeRampStartSpeed { get; set; }
+    public double? ResumeRampStartRpmPercent { get; set; }
+    public double? ResumeRampDistanceMm { get; set; }
+    public int? ResumeRampSteps { get; set; }
 }

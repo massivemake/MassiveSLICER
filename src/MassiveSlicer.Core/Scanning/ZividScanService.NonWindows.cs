@@ -57,6 +57,7 @@ public sealed class ScanCaptureResult
     public required int Height { get; init; }
     public required float[] PointsXYZ { get; init; }
     public required int ValidPointCount { get; init; }
+    public byte[]? ColorsRgba { get; init; }
     public string? SavedZdfPath { get; init; }
     public string? SavedMetadataPath { get; init; }
     public ScanMetadata? Metadata { get; init; }

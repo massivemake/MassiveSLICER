@@ -34,10 +34,30 @@ public static class AssetPaths
         }
     }
 
+    public static string? FindRepoRoot()
+    {
+        foreach (var root in SearchRoots())
+        {
+            if (File.Exists(Path.Combine(root, "src", "MassiveSlicer.App", "MassiveSlicer.App.csproj"))
+                && Directory.Exists(Path.Combine(root, "assets")))
+                return root;
+        }
+        return null;
+    }
+
     /// <summary>
-    /// Resolves a relative asset path to an existing file, or returns the best-guess
-    /// full path when missing (for error messages).
+    /// Path to write a tracked asset. Prefers the git checkout so a rebuild
+    /// and a GitHub push see the same file — not the copy under bin/.
     /// </summary>
+    public static string ResolveWritable(string relativePath)
+    {
+        if (Path.IsPathRooted(relativePath))
+            return relativePath;
+        var repo = FindRepoRoot();
+        if (repo is not null)
+            return Path.GetFullPath(Path.Combine(repo, relativePath));
+        return Resolve(relativePath);
+    }
     public static string Resolve(string relativePath)
     {
         if (Path.IsPathRooted(relativePath))

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using MassiveSlicer.App.Erp;
+using MassiveSlicer.Core.Models;
 using Xunit;
 
 namespace MassiveSlicer.Tests;
@@ -350,5 +351,145 @@ public class ErpParsingTest
         Assert.Equal(472.60, c.SubtotalCost);
         Assert.Equal(543.49, c.ClientPrice);
         Assert.Equal("a1b2c3", c.PricingVersion);
+    }
+
+    // -- Shared print / material presets (GET /presets-bundle) -------------------
+
+    [Fact]
+    public void ParsesPresetsBundleWrappedAndBarePayload()
+    {
+        var bundle = ErpClient.ParsePresetsBundle(Parse("""
+        {
+          "version": "2026-08-16T18:00:00.000Z",
+          "printPresets": [
+            {
+              "id": "pp-1",
+              "updatedAt": "2026-08-16T18:00:00Z",
+              "payload": { "Name": "Master Defaults", "Folder": "Uncategorized", "BeadWidth": 6, "LayerHeight": 3 }
+            }
+          ],
+          "materialPresets": [
+            { "id": "mp-1", "payload": { "Name": "ASA GF - Black", "MaterialType": "ASA", "FlowRate": 0.4115 } }
+          ]
+        }
+        """));
+        Assert.Equal("2026-08-16T18:00:00.000Z", bundle.Version);
+        Assert.Single(bundle.PrintPresets);
+        Assert.Equal("pp-1", bundle.PrintPresets[0].Id);
+        Assert.Contains("Master Defaults", bundle.PrintPresets[0].PayloadJson);
+        Assert.Single(bundle.MaterialPresets);
+        Assert.Equal("mp-1", bundle.MaterialPresets[0].Id);
+        Assert.Contains("ASA GF - Black", bundle.MaterialPresets[0].PayloadJson);
+        Assert.Empty(bundle.MillTools);
+    }
+
+    [Fact]
+    public void ParsesMillToolsInPresetsBundle()
+    {
+        var bundle = ErpClient.ParsePresetsBundle(Parse("""
+        {
+          "version": "v2",
+          "printPresets": [],
+          "materialPresets": [],
+          "millTools": [
+            { "id": "mt-1", "payload": { "Id": "lfam3-ap90-flat-3in", "Name": "Flat end D76.2", "DiameterMm": 76.2 } }
+          ]
+        }
+        """));
+        Assert.Single(bundle.MillTools);
+        Assert.Equal("mt-1", bundle.MillTools[0].Id);
+        Assert.Contains("lfam3-ap90-flat-3in", bundle.MillTools[0].PayloadJson);
+        Assert.Contains("76.2", bundle.MillTools[0].PayloadJson);
+    }
+
+    [Fact]
+    public void ParsesLiveLabMillToolsListEnvelope()
+    {
+        var root = Parse("""
+        {
+          "version": "2026-08-17 16:17:39.650724",
+          "items": [
+            {
+              "id": "mt_7931fc7b-d649-43bd-9bbc-f4d82681ef07",
+              "updatedAt": "2026-08-17 16:17:39.022768",
+              "updatedBy": "Conference Room",
+              "payload": {
+                "Id": "lfam3-ap90-flat-3in",
+                "Name": "Flat end D76.2 (AP90 FLAT 3in End Mill)",
+                "Type": 1,
+                "DiameterMm": 76.2,
+                "CuttingPresets": [
+                  { "Name": "Default", "SpindleRpm": 2088, "CuttingFeedMmS": 10.44, "SpindleDirection": 0 }
+                ]
+              }
+            }
+          ]
+        }
+        """);
+        var items = ErpClient.EnumerateArray(root, "items", "millTools", "cuttingTools", "millBits", "tools")
+            .Select(ErpClient.ParsePresetEntry)
+            .Where(e => e is not null)
+            .ToList();
+        Assert.Single(items);
+        Assert.Equal("mt_7931fc7b-d649-43bd-9bbc-f4d82681ef07", items[0]!.Id);
+        var tool = System.Text.Json.JsonSerializer.Deserialize<MillBitTool>(items[0]!.PayloadJson);
+        Assert.NotNull(tool);
+        Assert.Equal("lfam3-ap90-flat-3in", tool!.Id);
+        Assert.Equal(MillBitType.FlatEndMill, tool.Type);
+        Assert.Single(tool.CuttingPresets);
+        Assert.Equal(2088, tool.CuttingPresets[0].SpindleRpm);
+    }
+
+    [Fact]
+    public void MillBit_recovers_CuttingPresets_from_DefaultPreset()
+    {
+        var tool = System.Text.Json.JsonSerializer.Deserialize<MillBitTool>("""
+        {
+          "Id": "only-default",
+          "Name": "Recovered",
+          "Type": "BallEndMill",
+          "DiameterMm": 6,
+          "DefaultPreset": { "Name": "Shop", "SpindleRpm": 9000, "CuttingFeedMmS": 12 }
+        }
+        """);
+        Assert.NotNull(tool);
+        Assert.Single(tool!.CuttingPresets);
+        Assert.Equal("Shop", tool.CuttingPresets[0].Name);
+        Assert.Equal(9000, tool.CuttingPresets[0].SpindleRpm);
+    }
+
+    [Fact]
+    public void ParsesBarePresetPayloadUsingNameAsFallbackId()
+    {
+        var entry = ErpClient.ParsePresetEntry(Parse("""
+        { "Name": "HHN Nasty Wall", "BeadWidth": 6.5, "LayerHeight": 3 }
+        """));
+        Assert.NotNull(entry);
+        Assert.Equal("name:HHN Nasty Wall", entry!.Id);
+        Assert.Contains("HHN Nasty Wall", entry.PayloadJson);
+    }
+
+    [Fact]
+    public void ParsePresetEntryRejectsEmptyObject()
+        => Assert.Null(ErpClient.ParsePresetEntry(Parse("""{ }""")));
+
+    [Fact]
+    public void ParsesLoginTokenFromSeveralShapes()
+    {
+        var a = ErpClient.ParseLogin(Parse("""{ "token": "msl_abc", "email": "thom@massivemake.com", "name": "Thom" }"""));
+        Assert.NotNull(a);
+        Assert.Equal("msl_abc", a!.Token);
+        Assert.Equal("thom@massivemake.com", a.Email);
+        Assert.Equal("Thom", a.DisplayName);
+
+        var b = ErpClient.ParseLogin(Parse("""{ "accessToken": "tok2", "user": { "email": "a@b.c", "displayName": "A" } }"""));
+        Assert.Equal("tok2", b!.Token);
+        Assert.Equal("a@b.c", b.Email);
+        Assert.Equal("A", b.DisplayName);
+
+        var c = ErpClient.ParseLogin(Parse("""{ "data": { "api_token": "tok3" } }"""));
+        Assert.Equal("tok3", c!.Token);
+
+        Assert.Null(ErpClient.ParseLogin(Parse("""{ "ok": true }""")));
     }
 }

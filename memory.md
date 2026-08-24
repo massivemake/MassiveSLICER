@@ -10,7 +10,40 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-07** (Seam guide traces the model surface, one guide per part; seam guides work on a sliced part; auto-slice on import restored; per-head material calibration + calibration flow-offset leak fixed; panel ADVANCED sections)
+Last updated: **2026-08-22** (export uses settings-menu header, not stock CaracolSafety)
+
+---
+
+## Convention — triad / gizmo axis colors (LOCKED)
+
+**Canonical MassiveSLICER:** standard robotics/CAD **RGB = XYZ**.
+
+| Axis | Color | Approx hex / RGB | Where |
+|------|--------|------------------|--------|
+| **+X** | **Red** | `#E63838` · `(0.90, 0.22, 0.22)` sticks · gizmo `(1.00, 0.20, 0.20)` | TCP / FLANGE / SENSOR sticks, world origin axes, Move/Rotate/Scale gizmo |
+| **+Y** | **Green** | `#38CC4D` · `(0.22, 0.80, 0.30)` · gizmo `(0.20, 1.00, 0.20)` | same |
+| **+Z** | **Blue** | `#4073F2` · `(0.25, 0.45, 0.95)` · gizmo `(0.30, 0.50, 1.00)` | same |
+
+**Source of truth in code (must stay in lockstep):**
+- `src/MassiveSlicer.Viewport/Rendering/AxisRenderer.cs` — comment + default verts (“X = red, Y = green, Z = blue”)
+- `src/MassiveSlicer.Viewport/Rendering/TcpAxisLabelLayout.cs` — tip labels `x`/`y`/`z` + `ColorX/Y/Z`
+- `src/MassiveSlicer.Viewport/Rendering/GizmoRenderer.cs` — `ColX` / `ColY` / `ColZ`
+
+**Labels on the triad:** small **x / y / z** at tips use the same colors. Frame titles (**TCP**, **FLANGE**, **SENSOR**) are white/grey — not axes.
+
+**Not axis colors (do not confuse):**
+- **Green spindle bit / cutter cylinder** = tool mesh preview, **not** +Y
+- Toolpath density / seam / direction arrows often use yellow/orange — **not** axes
+- Orca-style green→yellow→red bead thickness heatmaps — **not** XYZ
+
+**What looks like “inconsistency” (usually not a color swap):**
+1. **Wrong frame** — FLANGE vs TCP vs SENSOR triad orientation differs; colors still mean that frame’s local X/Y/Z.
+2. **glTF vs KUKA local** — mesh axes can look rotated; sticks are KUKA/tool frame after display correction, not raw glTF bone colors.
+3. **TOOL CONVENTION** (Z−/Z+/X−/X+) remaps how taught ABC is *shown* on the TCP triad — still RGB=XYZ in the displayed frame.
+4. **Two RGB sticks** near the wrist (TCP + FLANGE) — same color map, different origins/orientations.
+5. **KUKA pendant** HMI also uses RGB≈XYZ for BASE/TOOL frames; if pendant and Slicer disagree, check BASE # / TOOL # / IPO frame, not the color legend.
+
+**Agent rule:** When describing directions (“move +X”, “tool +Z into the part”), always map to **red / green / blue** with this table. If UI or a PR paints X green or Z red, treat it as a **bug** and fix toward this convention — do not invent a second legend.
 
 ---
 
@@ -132,7 +165,8 @@ dotnet format
 
 | What | Path |
 |------|------|
-| Repo (this machine / MassiveMAKE PC) | `C:\Users\MassiveMAKE\MassiveSLICER` |
+| Repo (MassiveFILES / this Mac) | `/Volumes/MassiveFILES/Research/LFAM/MassiveSLICER` |
+| Repo (shop PC) | `Z:\Research\LFAM\MassiveSLICER` (same MassiveFILES tree — **not** `C:\Users\MassiveMAKE\MassiveSLICER`) |
 | Repo (NAS historical) | `\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2\` |
 | GitHub (canonical) | https://github.com/massivemake/MassiveSLICER |
 | Active branch | **`feature/spsm`** |
@@ -148,7 +182,7 @@ dotnet format
 
 ```powershell
 Stop-Process -Name "MassiveSlicer.App" -Force -ErrorAction SilentlyContinue
-Set-Location 'C:\Users\MassiveMAKE\MassiveSLICER'
+Set-Location 'Z:\Research\LFAM\MassiveSLICER'
 dotnet build 'src/MassiveSlicer.App/MassiveSlicer.App.csproj' -c Release
 if ($LASTEXITCODE -eq 0) {
     Start-Process -FilePath '.\src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe' `
@@ -161,8 +195,8 @@ Publish variant (optional): `scripts\publish-and-run.ps1` → `%LOCALAPPDATA%\Ma
 ### Start only (no rebuild)
 
 ```powershell
-Start-Process -FilePath 'C:\Users\MassiveMAKE\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe' `
-  -WorkingDirectory 'C:\Users\MassiveMAKE\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows'
+Start-Process -FilePath 'Z:\Research\LFAM\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe' `
+  -WorkingDirectory 'Z:\Research\LFAM\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows'
 ```
 
 ---
@@ -201,10 +235,9 @@ Start-Process -FilePath 'C:\Users\MassiveMAKE\MassiveSLICER\src\MassiveSlicer.Ap
 - NVIDIA rejects **any non-ASCII** in shader source strings (even comments) → `error C0000: unexpected $end` → app dies on first mesh upload.
 - Keep `MeshRenderer.VertSrc` / `FragSrc` pure ASCII.
 
-#### LFAM 3 phase switch: do not select TCP
-- `SelectLfam3WorkflowPhase` updates `_lfam3WorkflowPhaseIndex` + sidebar only.
-- **Does not** call `SelectLfam3Tool` (that set `Robot.SelectedToolIndex` → mount → `_renderer.Select(tool)`).
-- Tool mount still via explicit pick/deposit or robot tool dropdown.
+#### LFAM 3 phase switch: mount tool, do not select TCP
+- `SelectLfam3WorkflowPhase` updates `_lfam3WorkflowPhaseIndex` and mounts Extruder / Scanner (Calibrated) / Spindle (No Bit).
+- `SuppressNextToolViewportSelect` skips `_renderer.Select` so the gizmo does not jump to the TCP.
 
 #### Console + MCP milling
 - Console: `mill status | mill area <whole|face|box|lasso|brush|clear> | mill brush size <mm> | mill brush falloff <0-1> | mill op <Kind>`
@@ -483,6 +516,829 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-22 — Export ignored settings-menu header (CaracolSafety gate)
+
+- Symptom: KRL Post-Processing showed `;FOLD Safety` / Alarms / Anticollision Flange, but the
+  `.src` still had `;FOLD CaracolSafety` / Antincendio / flangia anti caduta.
+- Cause: `WriteHeader` in Robot Mode only kept a custom header if it contained the string
+  `CaracolSafety`. Shop / factory headers use `;FOLD Safety`, so export swapped in
+  `DefaultUrmHeaderTemplate`.
+- Fix: keep the settings header unless it is the LFAM `$ANOUT[1]` MAT. Same for footer
+  (reject only the short LFAM OUT-only footer). `ApplyUrmPostProcessTemplates` treats
+  `;FOLD Safety` / `T1=` as Robot Mode so toggling does not overwrite the shop header.
+- Not print-verified.
+
+### 2026-08-22 — SRC / Send to Robot uses Lab-synced KRL post-process recipe
+
+- Every print `.src` write (`Export KRL`, `3D Print Files`, Send to Robot) goes through
+  `WriteKrlAsync` → Lab pull if connected → `KrlPostProcessRecipe.Apply`.
+- Workspace / prefs restore no longer rewrites Robot Mode / Travel Moves / header from
+  `.mass`. Factory / Lab recipe wins.
+- Mill SRC still uses mill header/footer. Drive package is path-only (no KRL recipe).
+- Not print-verified.
+
+### 2026-08-22 — Remove Code Editor / RCE inject; Travel Moves is RPM only
+
+- Removed `CodeEditorSrcInjector`, `CodeEditorInjectSettings`, and the Rules-tab inject UI
+  (`$OUT[7]`, `$OUT[8]`, TRIGGER, interpolated LIN, `; !Modified by RCE!`).
+- Travel Moves now writes `RPM = 0.00` at `;travel start` and print `RPM =` just before
+  `;travel end`. Robot Mode is unchanged (T1/T2/T3/RPM MAT).
+- Not print-verified.
+
+### 2026-08-22 — Viewport click / marquee / 2D pick dead
+
+- Symptom: click and drag-marquee selected nothing (Mesh, Slice, 2D lines/points). Camera still worked.
+- Cause (three sinks, not Picker.cs): overlay empty space was `Background="Transparent"` (Avalonia eats hits); orbit/pan release `return`ed even on a no-drag click; Preview+Edit Select `Handled` every LMB including misses so Mesh/Slice never ran.
+- Fix: `ViewportOverlayView` / `OverlayRoot` `{x:Null}`; `ViewportPointerPolicy` consumes orbit/pan release only when dragged; paint miss falls through to scene pick; both picks use `GetGlPickViewport`; 2D/marquee accept Mill + Extrude (`IsCutSegment`).
+- Files: `ViewportView.axaml.cs`, `ViewportOverlayView.axaml`, `ViewportPointerPolicy.cs`. Not print-verified.
+
+### 2026-08-21 — KRL Post-Processing: import/export + Lab team default
+
+- Dialog footer: **Import… / Export…** (JSON envelope) and **Pull from Lab / Publish to Lab**.
+- Lab is source of truth when the route exists: connect GETs `/api/slicer/v1/krl-postprocess` (fallback `presets-bundle.krlPostProcess`) and applies Rules + Header + Footer. 404 stays local. Publish is explicit — never auto-overwrite Lab on connect.
+- Console: `krlpost export|import <path>`, `krlpost pull`, `krlpost publish`.
+- Lab prompt: `docs/ERP-KrlPostProcess-API-Replit-Prompt.md`. Branch: `feature/krl-postprocess-erp`.
+
+### 2026-08-21 — Auto shop wipe when a slice has travel moves
+
+- After realtime / first slice, if the toolpath has any `MoveKind.Travel`, Wipe is set to Same-Direction, 35 mm, 5 mm ramp, 600 mm/s.
+- Once per source mesh so a later Retrace / custom length is kept. Wipe + Z hop now trigger a realtime reslice.
+- Key files: `Toolpath.cs`, `AdditiveSettingsViewModel.cs`, `ViewportView.axaml.cs`.
+
+### 2026-08-21 — Dialog windows: no black square behind rounded corners
+
+- Symptom: Material Preset (and other borderless dialogs) showed a black 90° HWND behind the 10px card. `TransparencyLevelHint` is ignored because the shop Windows build forces WGL (no per-pixel alpha).
+- Fix: `DialogWindowChrome` clips the Win32 window to the DialogChrome radius (`SetWindowRgn` + Win11 DWM round). Those corner pixels are no longer part of the window. Also `CornerClip` on `Border.DialogChrome`.
+- Key files: `DialogWindowChrome.cs`, `Resources/Styles/BaseStyles.axaml`.
+
+### 2026-08-21 — Expanded StepCards keep rounded corners
+
+- Symptom: TOOLPATH (and other expanded cards) looked square. Avalonia ClipToBounds is a rectangle, so GLOBAL / header fills painted over the 5px CornerRadius.
+- Fix: `CornerClip` sets Visual.Clip to a rounded rect on StepCard / SectionExpander / PresetsCard shells. Header ToggleButtons use a chrome-less template (radius 5 collapsed, 5,5,0,0 expanded).
+- Key files: `Behaviors/CornerClip.cs`, `Resources/Styles/BaseStyles.axaml`.
+
+### 2026-08-21 — Adaptive Speed card matches ADVANCED SETTINGS width
+
+- The Adaptive Speed and Flow card sat inset (8px Border margin plus SectionExpander body padding).
+- ADVANCED SETTINGS now uses TightPad; the card is stretch with no left/right margin so it matches the expander header.
+- Key file: `RightPanelView.axaml`.
+
+### 2026-08-21 — WIPE sits below MOVEMENT
+
+- Wipe was a nested expander inside MOVEMENT. It is now its own SectionExpander immediately under MOVEMENT (before STOCK FROM MAPS). Bindings unchanged.
+- Key file: `RightPanelView.axaml`.
+
+### 2026-08-21 — KRL Post-Processing factory JSON keeps Rules
+
+- Symptom: changing Rules (Travel Moves, Code Editor inject, air, timing) and recompiling reset to in-code defaults. Done only wrote header/footer, and wrote the **bin/** copy that a rebuild wipes.
+- Fix: Done writes the full recipe to repo `assets/krl_postprocess.json` (plus the bin copy). Startup applies that file after prefs so GitHub / rebuild keep the same defaults.
+- Key files: `KrlPostProcessLoader.cs`, `KrlPostProcessSettings.cs`, `AssetPaths.cs`, `KrlPostProcessSettingsViewModel.cs`.
+
+### 2026-08-21 — Code Editor inject: print speed + Before/After
+
+- Removed the Speed (mm/s) field. Time offsets always use the job Print Speed.
+- Stop Extruding `$VEL.CP` is rewritten to 50% of print speed (UI updates when print speed changes; export does the same).
+- Stop / Enter URM / Exit URM each have a Before/After dropdown. Defaults: Stop Before, Enter Before, Exit After.
+- Key files: `CodeEditorInjectSettings.cs`, `CodeEditorSrcInjector.cs`, `KrlPostProcessWindow.axaml`.
+
+### 2026-08-21 — Start/stop timing left MOVEMENT
+
+- Start wait, pre-travel pause, pre-resume pause, resume prime, and post-travel ramp are gone from the right-sidebar MOVEMENT section.
+- Same fields now sit under **KRL Post-Processing → Travel Moves** (shown when Start/Stop is on), below Code Editor inject. Bindings still on Additive; prefs / .mass / export unchanged.
+- Key files: `RightPanelView.axaml`, `KrlPostProcessWindow.axaml`, `KrlPostProcessSettingsViewModel.cs`.
+
+### 2026-08-21 — Live I/O: ~50% denser
+
+- Halved row height (30 → 18), fonts (11 → 9 / 8), column cards, gutters, and
+  min-widths (dual 680 → 380, robot 860 → 500). Table columns kept so
+  `AI-3020` still has a reserved pin slot.
+
+### 2026-08-21 — Orientation smoothing moved to KRL Rules
+
+- Smooth rotation, max rate, KRL look-ahead, and KRL sigma left the right-panel toolpath colors section.
+- Same fields now live under **KRL Post-Processing → Rules** (after $APO.CVEL). Radius (moves) still appears only when Smooth rotation is on. Bindings still sit on Additive; prefs / .mass / export unchanged.
+- Key files: `KrlPostProcessWindow.axaml`, `KrlPostProcessSettingsViewModel.cs`, `RightPanelView.axaml`.
+
+### 2026-08-21 — Extruder Air ($OUT[5]) checkbox
+
+- KRL Post-Processing Rules: **Extruder Air** checkbox. On = `$OUT[5] = TRUE` after the header, `$OUT[5] = FALSE` before footer `END`. Off = no extra I/O. Robot Mode footer already turns air off — we do not duplicate.
+- Print only (mill ignored). Comments are `;extruder air on/off` (no `$OUT` token). Persists in prefs / `.mass`. Console: `krlpost air on|off`.
+- Key files: `KrlExporter.cs`, `KrlPostProcessWindow.axaml`, `AdditiveSettingsViewModel.cs`, `AppPreferences.cs`.
+
+### 2026-08-21 — Travel Moves + wipe on by default
+
+- Symptom: new jobs started with Travel Moves off and Wipe Off (or 12 mm / 4 mm ramp).
+- Fix: factory defaults are Travel Moves (start/stop) ON, Wipe Same-Direction, 35 mm, 600 mm/s, ramp = layer height + 2 mm. Ramp tracks layer height until you type a different value. Robot Mode stays off. Prefs migrate the old Off / 10 mm / 120 mm/s factory once.
+- Key files: `AdditiveSettingsViewModel.cs`, `AppPreferences.cs`, `PreferencesLoader.cs`, `RightPanelView.axaml`.
+
+### 2026-08-21 — Code Editor inject in KRL Travel Moves
+
+- Symptom: Travel Moves only wrote `;layer change` / pulsed I/O at the last print pose. Wipe was not a travel. Cow Capital had 0 `;travel start`.
+- Cause: exporter used the old Caracol PreTravel/PostTravel block and treated layer-change as a different tag.
+- Fix: Code Editor 1.0.6 recipe under **KRL Post-Processing → Travel Moves**. Exporter always writes `;travel start` / `;travel end`; wipe opens travel. After export, `CodeEditorSrcInjector` inserts start/stop/URM at path distances. PointLoader-safe I/O is on by default (no `TRIGGER` in the CAD body).
+- Key files: `CodeEditorInjectSettings.cs`, `CodeEditorSrcInjector.cs`, `KrlExporter.cs`, `KrlPostProcessWindow.axaml`, `KrlPostProcessSettingsViewModel.cs`, `AdditiveSettingsViewModel.cs`.
+- Branch: `feature/code-editor-inject` (tree was 7 behind origin/main + dirty; did not pull).
+
+### 2026-08-21 — Live I/O columns: readable table layout
+
+- Signal rows were 34px pin + collapsing analog status, so `AI-3020` ran into
+  the label and values had no aligned column.
+- Each row is now pin (58, mono) · reserved status · label · value (76, right)
+  · action. Analog keeps the status slot empty instead of collapsing.
+- INPUTS / OUTPUTS sit in padded column cards with 20px gutter. Row padding
+  8,6 / min-height 30. Section min-width 680 (dual) / 860 (robot).
+
+### 2026-08-21 — KRL Post-Processing Rules: Robot Mode vs Travel Moves
+
+- Replaced the single Digital Start/Stop checkbox with two always-enabled toggle
+  buttons. **Robot Mode** writes temps + RPM (`T1/T2/T3/RPM` MAT). **Travel Moves**
+  writes start/stop around travels. Enabling Travel shows a placeholder for
+  upcoming customization.
+- Exporter splits `UseRobotMode` / `UseTravelStartStop`. Legacy
+  `DigitalStartStopEnabled=true` still turns both on (existing tests + old
+  workspaces). New workspaces persist `RobotModeEnabled` separately.
+- Console: `krlpost robot on|off`, `krlpost travel on|off` (`urm` still toggles both).
+
+### 2026-08-21 — PRESETS: 2px left/right content inset
+
+- SectionExpander body was 4 + ContentPresenter 6 + stack 8. Now PRESETS uses
+  `TightPad`: ExpandedBody `2,0,2,2`, content presenter 0, stack no extra L/R.
+
+### 2026-08-21 — Purple TOOL# ring: ControlTheme, not more Style setters
+
+- Root cause: Avalonia ControlTheme beats Style Template. Previous "full templates"
+  in BaseStyles never applied. SimpleTheme ComboBox + ToggleButton painted
+  ThemeBorderHigh (~`#642d55`).
+- New `Resources/Themes/ControlThemes.axaml` (`MassiveComboBoxTheme` + chrome-less
+  toggle). BaseStyles now sets `Theme="{StaticResource MassiveComboBoxTheme}"`.
+- Focus/open border hard-coded `#71a72a`. ThemeBorderHigh also forced lime at
+  Application.Resources (non-variant).
+
+
+### 2026-08-21 — Hover field border: purple → lime `#71a72a`
+
+- Symptom: hovering TextBox / ComboBox / NumericUpDown showed a purple ring.
+- Cause: SimpleTheme ControlTheme sets `Border#border` to `ThemeBorderHighBrush` on pointerover (style setters cannot beat it). Custom ComboBox template still used `Name="border"`, so the purple rule still hit. `ApplyTheme` also remapped ThemeBorderHigh to `Border2` (Cosmic `#2f2550`).
+- Fix: TextBox + ComboBox chrome renamed `fieldChrome`; hover/focus hard `#71a72a`. ThemeBorderHigh = Accent (not Border2).
+- Files: `BaseStyles.axaml`, `App.axaml`, `App.axaml.cs`.
+
+### 2026-08-21 — Purple ComboBox ring removed + dialog corners round for real
+
+- Sampled TOOL# ring approx `#642d55` (OS/SimpleTheme purple) — not MassiveMAKE lime.
+- Full ComboBox/ComboBoxItem ControlTemplate in BaseStyles; focus border hard `#71a72a`.
+- DialogWindowChrome forces transparent HWND so Preferences CornerRadius shows.
+- Theme colors: `Resources/Themes/MassiveMake.axaml`, `App.axaml` ThemeDictionaries, `BaseStyles.axaml`.
+
+
+### 2026-08-21 — ComboBox flyout: rounded corners actually show
+
+- SLICING METHOD (and all) dropdowns: 10px popup + square selected fill
+  sat on the 5px field; lime `/template/ Border` also painted inner
+  presenters and squared the corners.
+- Flyout is now `Popup > Border` only: **5px**, 3px pad, ClipToBounds.
+- Selected / hover fill is on the item ContentPresenter (5px), not the
+  full-bleed item. File: `Resources/Styles/BaseStyles.axaml`.
+
+### 2026-08-21 — PRESETS Sort/Group compact icon toolbar
+
+- Replaced text Sort/Group rows with one icon toolbar:
+  Sort A–Z / last printed / created · Group list / method / folder · ★ favorites.
+- List rows simplified to name + star + info (badge/date moved to tooltip/flyout).
+- Dropped verbose help blurb; search watermark shortened.
+
+### 2026-08-21 — ComboBox focus/open border: purple → lime
+
+- MATERIAL (and all) ComboBox focus / dropdown-open ring was OS/SimpleTheme purple.
+- Force `#71a72a` on `:focus`, `:focus-visible`, `:dropdownopen`, `:pressed`, plus nested Borders.
+- App.axaml SystemAccentColor* + SystemControlHighlight* keys set to lime; theme swap keeps them in sync.
+
+### 2026-08-21 — Dialog + popup windows: 10px rounded corners
+
+- All borderless dialogs (Material Preset, Preferences, Mill Tool library,
+  Cut Tool, Mesh Cleanup, KRL Post-Process): transparent window + root
+  `DialogChrome` Border CornerRadius 10 + ClipToBounds; title top / footer bottom radii.
+- BaseStyles: ContextMenu / Menu / ComboBox popup / Flyout / ToolTip radius 10 (or 8).
+- MassiveBOARD: `--radius: 10px`, `.modal { overflow: hidden }`.
+
+### 2026-08-21 — Lime accent #71a72a (kill purple #523446 / #412335)
+
+- MassiveMake + Cosmic themes: Accent `#71a72a`, Hover `#8bc43a`, Muted `#3a5716`.
+- Cosmic no longer violet (was Accent `#c054f0` / muted `#3d1060` / purple Bgs).
+- App.axaml SimpleTheme Highlight / ThemeAccent keys synced to lime.
+- BaseStyles hardcoded `#40b840` family → `#71a72a`; expanded section chrome
+  uses muted lime glass (not gray that read purple).
+- MassiveBOARD `style.css` / robots / ai-brand same lime.
+
+### 2026-08-21 — SectionExpander: expanded-body hairline matches header
+
+- Open section body (e.g. FILL PATTERN → Pattern/None) gets a 1px border in
+  the expanded header fill `#E62e2e2e` — same gray as the FILL PATTERN bar.
+- Bottom corners 5px; header top-only when open. File: `BaseStyles.axaml`.
+
+### 2026-08-21 — StepCard uniform translucency (OUTLINER was solid)
+
+- Expanded StepCard body was a second `#E6171717` layer — stacked with the
+  shell and made OUTLINER / filled cards look opaque while sparse cards
+  (ROBOT CELL) still ghosted.
+- Body is now transparent; one shell only `#E61e1e1e` (~90%) for every card.
+- Import dropzone uses `GlassInset` (`#E62b2b2b`) instead of solid Bg3.
+- SectionExpander body transparent too. File: `BaseStyles.axaml`.
+
+### 2026-08-21 — Live I/O: KUKA Analog O1-O4 editable + Zero All
+
+- Robot (KUKA) outputs show **Analog O1–O4** (`$ANOUT[1..4]`) on every cell.
+- Each row: engineering edit box (O1–O3 °C, O4 % RPM) + **Set** via C3Bridge.
+- **Zero O1-O4** on OUTPUTS header writes all four to 0.
+- `TryWriteKukaRealAsync` on RobotPanelViewModel. Catalog Writable=true.
+
+### 2026-08-21 — SectionExpander: no border, even spacing
+
+- Nested rows (SLICING METHOD / MATERIAL / …) drop the stroke — fill color only.
+- Default margin `6,4,6,4` (same feel as STOCK FROM MAPS); per-row Margin overrides cleared.
+- Hover/expand is a lighter fill, not a border. File: `BaseStyles.axaml`.
+
+### 2026-08-21 — Sidebar compact: 5px corners, tighter spacing, 90% opacity
+
+- StepCard / SectionExpander / inputs / combos: CornerRadius **5** only.
+- Less pad/margin (headers 8px, card gap 6, nested section 4/2).
+- Dark panel fills use **#E6…** (~90% alpha) so the viewport shows through.
+- Soft box-shadows removed. MassiveLAB cards match. File: `BaseStyles.axaml`.
+
+### 2026-08-21 — MassiveLAB left menu (ERP out of viewport dock)
+
+- Removed bottom-left ERP overlay dock from ViewportOverlayView.
+- New left StepCard **MASSIVELAB** between **ROBOT** and **VIEWPORT**.
+- ErpDockPanelView redesigned: connection strip, card search results, linked
+  workspace banner, Send Slice CTA, pricing footer (glass kit).
+- Header badge: Offline / Online / project·element. Files: LeftPanelView,
+  ErpDockPanelView, ErpViewModel, ViewportOverlayView.
+
+### 2026-08-21 — Sidebar: stop scrolling into blank space
+
+- `SidebarExpandScroll` no longer injects a permanent ~viewport-tall pad.
+- Pad = only what the expanded StepCard needs to pin to the top (`cardY +
+  viewport - realContent`). Zero when content already fills the column.
+- Collapse shrinks/removes pad and clamps Offset so you cannot sit in dead space.
+
+### 2026-08-21 — Glass kit sidebar (match reference UI sheet)
+
+- StepCard / SectionExpander: elevated dark glass cards (14/12px radius, soft
+  shadow), clearer body inset so collapsibles read as menus not flat rows.
+- PanelTextBox + ComboBox: pill fields (12px), lime hover/focus ring.
+- Slider: thick recessed track, lime fill, soft glowing round thumb.
+- ToggleSwitch: dark track off / lime-on track + knob (default Avalonia parts).
+- CheckBox: darker well, lime when checked. File: `BaseStyles.axaml`.
+
+### 2026-08-21 — Sidebar collapsibles: rounded cards + better inputs/sliders
+
+- SectionExpander (SLICING METHOD / GEOMETRY / SEAM / …) is a nested rounded
+  mini-card (Bg2, 7px radius) with hover/expanded header, not a flat list row.
+- StepCard shell darker (#1f) so nested sections pop; content body separated.
+- PanelTextBox: 6px radius, taller padding, lime hover/focus border.
+- Panel Slider: lime filled track + round thumb (not default Avalonia chrome).
+- ComboBox: taller + 6px radius. File: `Resources/Styles/BaseStyles.axaml`.
+
+### 2026-08-21 — Drive Cell 3D rebuilt as MassiveSLICER scene
+
+- three.js now parents like `CellSceneLoader` / `CellEnvironmentBuilder`:
+  GltfToScene (Rx+90 x1000), robot translate-only, rotary = ROBROOT+basePos then
+  world-Z yaw then KUKA ABC. Lime marker at Print Bed 0,0,0 (916.31).
+- Display adapter `kuka-root` Rx(-90)x0.001 unchanged. `?v=slicerscene1`.
+
+### 2026-08-21 — Drive Cell 3D bed sat 1 m below Slicer print plane
+
+- Slicer on-bed first layer is file/SRC Z ~3 and $POS_ACT Z ~919 (bed 916 + 3).
+- Copying Slicer `basePos` Z −655 / C −90 *without* ROBROOT + Y-up wrap dumped the
+  deck on its side (screenshot). Slicer world = ROBROOT + basePos (z 345) then C −90.
+- Drive `cell-view.js` now `wrapYupGlb` + ROBROOT + basePos, same as
+  `CellEnvironmentBuilder`. Motion still plays Slicer XYZ + bed_origin.
+
+### 2026-08-21 — Drive rebaselines from Slicer only
+
+- Rule: MassiveSLICER SRC/package is the path. Drive does not invent XYZ or
+  slide a Slicer job onto live TCP / Home. `bed_origin` is applied once in
+  memory; saved file stays BASE (Z ~3–5). Double-expand and hardcoded LFAM 3
+  origin removed.
+- Files (Drive): `job_package.py`. Slicer exporter already matches SRC.
+
+### 2026-08-21 — Drive job file Z 919 vs SRC Z 3
+
+- SRC / slicer TCP ACTUAL is print-bed BASE (first layer Z ~3). Send was writing $POS_ACT
+  world (Z ~919). That is the same point (bed 916 + 3 mm) but the saved JSON looked 900 mm high.
+- File now matches SRC: WorldToBase + `meta.frame=base` + `meta.bed_origin`. Drive adds origin
+  only in memory (validate / RSI / Cell 3D). Does not rewrite the saved file to world.
+- Files: `MassiveDriveJobExporter.cs`, `ViewportView.axaml.cs`; Drive `job_package.py`,
+  `path_validation.py`, `path_executor.py`.
+
+### 2026-08-21 — Drive V1 rejected Six squares bed-local XYZ (Z 3)
+
+- Latest job `2dc0d1089302` (Send 15:02 UTC): first pose `-180, -110, 3`. Drive V1 bounds are
+  $POS_ACT world (x 800-3200, z 50-2200) so 726 out_of_bounds and 425 IK soft-limit.
+- Slicer TCP ACTUAL (BASE 1) is bed-local. KUKA BASE_DATA[1] is {X 0, Y 0, Z 5}; RSI is world.
+  Correct first print is about `1955, -163, 919` A0 B90 C0. Keep meta.absolute + frames T1/B1.
+- Revert WorldToBase on Drive export. Files: `MassiveDriveJobExporter.cs`, `ViewportView.axaml.cs`.
+
+### 2026-08-21 — T1 triad sat on flange TCP instead of TOOL_DATA[1]
+
+- Symptom: MassiveSLICER viewport (not Drive Cell 3D). PRINT / TOOL #1 drew the Tool
+  Triad at A6. Cause: T1 is the cell default, so remount skipped and `_tcpOffsetLocal`
+  stayed 0. Mill cutter snap could also steal T1 if a spindle mesh was still current.
+- Fix: always apply TOOL_DATA on TOOL # / PRINT even when the combo index is already 0.
+  T1/T4/T5/T6 keep taught XYZ/ABC. Spindle mill tools still snap to SpindleBitTCP.
+  Readout fallback pulls cell TCP if offset is still zero. JSON not rewritten.
+- Files: `RobotPanelViewModel.cs`, `ViewportViewModel.cs`, `ViewportView.axaml.cs`.
+
+### 2026-08-21 — Send to MassiveDRIVE still targeted old brain .233
+
+- Cell JSON `massiveDriveUrl` was `http://192.168.0.233:8080` (RevPi, off). Live Drive is `http://192.168.0.201:8080`.
+- Updated all three `lfam3.json` copies. Cal unreachable message no longer says "on 233".
+- Files: `assets/cells/LFAM3/lfam3.json`, `src/assets/cells/LFAM3/lfam3.json`, `src/MassiveSlicer.App/Assets/cells/LFAM3/lfam3.json`, `MainWindowViewModel.cs`.
+
+### 2026-08-20 — Triad axis colors locked (RGB = XYZ)
+
+- Canonical: **X red · Y green · Z blue** (robotics/CAD).
+- Documented in header section **Convention — triad / gizmo axis colors**.
+- Code already agrees: `AxisRenderer`, `TcpAxisLabelLayout`, `GizmoRenderer`.
+- False friends: green cutter cylinder ≠ Y; dual TCP/FLANGE triads share colors but different frames.
+- Agent rule: treat any X≠red / Z≠blue paint as a bug, not a new convention.
+
+### 2026-08-18 — Control bridge can listen on shop LAN (not Lab MCP)
+
+- App already starts `LocalControlBridge` on launch (`127.0.0.1:8723`). MCP shim already at `scripts/mcp/massiveslicer_mcp.py`. This is **not** MassiveLAB.
+- LAN opt-in: `%LOCALAPPDATA%\MassiveSlicer\bridge.lan` = `1` or `MASSIVESLICER_BRIDGE_LAN=1`. Default stays loopback (`POST /command` can move the robot).
+- `/status` now includes `workspace` + `lan` + `port`.
+- MCP shim: `MASSIVESLICER_BRIDGE_HOST` (SB101 `192.168.0.69`) + macOS `~/Library/Application Support/MassiveSlicer/bridge.port`.
+- Do not register Hermes MCP until `curl http://192.168.0.69:8723/ping` works.
+
+### 2026-08-18 — Edit Point mode shows programmed corners
+
+- Symptom: lime edit points sat mid-side; square corners were empty. Cause: Point mode drew **bead midpoints** (`(From+To)/2`). Long wall moves (one LIN per side, or 3 pts/side) put the sphere in the middle, never at the vertex.
+- Fix: `ToolpathEditPoints` emits **From of each extrude + To of the last in a run** (closed loops drop the duplicate close). Renderer, hover, box-select use those vertices.
+- Files: `ToolpathEditPoints.cs`, `ToolpathRenderer.cs`, `ViewportView.axaml.cs`, `ToolpathEditPointsTest.cs`.
+
+### 2026-08-17 — Mill Send is absolute (Drive syncs live TCP, then lead-in)
+
+- Mill packages stamp `meta.absolute` + approach clearance. Drive does **not** rebase the mill raster onto live TCP.
+- On Run, Drive reads RSI pose and prepends lift / XY / plunge from here to the first mill point. Cut XYZ stay in cell/base.
+- Air-cuts (`meta.air_cut`) still rebase. Files: `MassiveDriveJobExporter.cs`, `ViewportView.axaml.cs`. Drive: `job_package.prepend_sync_lead_in`, `path_executor.begin`.
+
+### 2026-08-17 — Send mill path to MassiveDRIVE (upload, no auto-start)
+
+- Mill Send now emits `kind=mill` + mill ABC (`AbcFromMillNormal`) + `frames.tool` (T12) + `meta.spindle_rpm`.
+- Drive rejects mill packages at RPM 0. Slicer blocks send until MILL TOOLPATHING Spindle RPM is set.
+- Mill Send **uploads only**. Run from Drive Jobs after preflight. Path rebases to live TCP — jog to first cut first.
+- Files: `MassiveDriveJobExporter.cs`, `ViewportView.axaml.cs`, `MassiveDriveJobExporterTest.cs`.
+
+### 2026-08-17 — Mill TOOLPATHING Offset Distance (+/− along surface)
+
+- PASSES, above Number of depth cuts: **Offset Distance** (mm). + pushes the cutter out along the surface normal; − cuts into the work. Default 0. Range −200…+200.
+- Independent of Stock to leave. Generate / realtime mill apply it in `SurfaceFollowMillGenerator`.
+- Saved on `.mass` (`MillSidebarSettings.OffsetDistanceMm`). Console: `mill offset <mm>`.
+- Files: `RightPanelView.axaml`, `SubtractiveSettingsViewModel.cs`, `MillSettings.cs`, `MillSidebarSettings.cs`, `SurfaceFollowMillGenerator.cs`, `ViewportView.axaml.cs`.
+
+### 2026-08-17 — .mass reopens MILL workflow and keeps TOOL #12
+
+- Reopen snapped to PRINT: UiSession never stored LFAM 3 phase. Cell load reset the timeline to Print; mesh/toolpath select then forced Additive.
+- Clicking MILL then mounted **Spindle (No Bit) = T2**, wiping saved T12.
+- Save `Lfam3WorkflowPhase` / `MountedToolName` / pre-print flag. Restore MILL before models. MILL button keeps T12 / Face Mill / spindle TOOL #; T2 only if the live tool is not a mill.
+- T12 / spindle.glb names count as MILL (not only "Spindle (No Bit)").
+- Files: `WorkspaceDocument.cs`, `WorkspaceService.cs`, `ViewportViewModel.cs`, `MainWindowViewModel.cs`, `ViewportView.axaml.cs`, `WorkspaceSaveTest.cs`.
+
+### 2026-08-17 — Mill TOOLPATHING has its own Milling + Travel speeds
+
+- 600 mm/s on mill playback / KRL rapids was **print** Additive.TravelSpeed.
+- TOOLPATHING → MOVEMENT: **Milling speed** (CuttingFeedMmS) + **Travel speed** (TravelSpeedMmS, default 80 mm/s). Not print MOTION.
+- HUD, estimate, KRL `$VEL.CP` rapids, and Drive mill packages use these. Generate stamps TravelSpeedMps on mill travels.
+- Console: `mill speed <mm/s>`, `mill travel <mm/s>`.
+- Files: `RightPanelView.axaml`, `SubtractiveSettingsViewModel.cs`, `MillSidebarSettings.cs`, `ViewportView.axaml.cs`, `KrlExporter` wiring, `MassiveDriveJobExporter.cs`.
+
+### 2026-08-17 — Mill IK orients T12 ABC, not the flange
+
+- Planar facing looked aligned to the flange triad. T12 is taught at A=103.7 B=-43.7 C=40.5 vs flange.
+- Cause: orientation IK matched joint_6 / flange rows. Position already used SpindleBitTCP.
+- Fix: when a spindle cutter is mounted, solver applies **T12 TOOL_DATA ABC only** (no T12 XYZ). Triad location stays on SpindleBitTCP.
+- Files: `GltfNumericalIkSolver.cs`, `ViewportView.axaml.cs`.
+
+### 2026-08-17 — Lab mill-tools API is live; slicer client matches
+
+- Probed lab.massivemake.com with a Slicer Access token: GET /mill-tools 200 `{items, version}` (4 bits), presets-bundle includes millTools, POST 201, PUT 200, DELETE 204. PATCH is 404 (CORS lists it; slicer already uses PUT).
+- Local mill_tools.json already has matching ErpIds (mt_…) — connect sync works.
+- Hardened MillBitTool: do not serialize TypeDisplayName / IsBallEnd / DefaultPreset; recover CuttingPresets if Lab only sent DefaultPreset; Type 0/1 still deserializes.
+- Tests: ParsesLiveLabMillToolsListEnvelope, MillBit_recovers_CuttingPresets_from_DefaultPreset.
+- Files: `MillBitTool.cs`, `ErpParsingTest.cs`, `docs/ERP-SlicerAPI.md`.
+
+### 2026-08-17 — .mass did not restore mill right-sidebar settings
+
+- Symptom: Planar Facing, Box Selection, feeds, bit, planar axis all reset on reopen.
+- Cause: `AppPreferences` had no mill block. PersistSettings / CopyPreferences / SyncViewportFromPrefs only covered additive + scan.
+- Fix: `MillSidebarSettings` on prefs + .mass. Capture/apply on Subtractive. Old files with null Mill leave the live panel alone.
+- Files: `MillSidebarSettings.cs`, `AppPreferences.cs`, `SubtractiveSettingsViewModel.cs`, `MainWindowViewModel.cs`, `WorkspaceSaveTest.cs`.
+
+### 2026-08-17 — Mill TOOLHEAD GLOBAL ORIENTATION (same Y/X/Z as print)
+
+- Mill TOOLPATHING → MOVEMENT now has the same Y / X / Z sliders as print. Separate from print Additive.Toolhead*.
+- Applied as local KUKA ZYX after mill ABC (T12 +Z into the surface). Viewport IK, validation, and mill KRL use Subtractive.ToolheadA/B/C.
+- Console: `mill y <deg>`, `mill x <deg>`, `mill z <deg>`.
+- Files: `RightPanelView.axaml`, `SubtractiveSettingsViewModel.cs`, `KukaOrientation.cs`, `GltfNumericalIkSolver.cs`, `KrlExporter.cs`, `ViewportView.axaml.cs`.
+
+### 2026-08-17 — .mass did not restore ROBOT CELL TOOL # / BASE #
+
+- Symptom: reopen a saved workspace and the left TOOL # / BASE # pickers snap back to the cell default (LFAM 3 = T1 / first base), not what was selected at save.
+- Cause: UiSession stored joints but not the KRL frame pickers. Cell swap called `SetKrlFrameOptions` with Scan indices and always preferred the cell default tool. Restore then copied that default back onto Additive via `SyncKrlFrameIndicesToActiveTab`. PersistSettings wrote Additive.ToolDataIndex, which is stale on MILL.
+- Fix: save `KrlToolIndex` / `KrlBaseIndex` on UiSession; persist live robot pickers into Settings; restore after cell ready (`SelectKrlFrames`); honor the saved/current tool on cell swap instead of forcing the default.
+- Files: `WorkspaceDocument.cs`, `WorkspaceService.cs`, `RobotPanelViewModel.cs`, `MainWindowViewModel.cs`, `WorkspaceSaveTest.cs`.
+
+### 2026-08-17 — Cutting Tool Library syncs with Lab ERP (slicer ready; Lab route pending)
+
+- Same pattern as print/material presets. `MillBitTool.ErpId`; connect pulls `/mill-tools` (or `presets-bundle.millTools`) and merges by ErpId then desktop Id then Name; local-only rows POST.
+- Save mill library / persist bit: POST or PUT. Delete from the dialog DELETEs the ERP row.
+- 404 = Lab not shipped yet (local `mill_tools.json` only). Console: `erp millbits`.
+- Lab prompt: `docs/ERP-MillTools-API-Replit-Prompt.md`.
+- Files: `ErpClient.cs`, `ErpPresetSync.cs`, `ErpModels.cs`, `ErpViewModel.cs`, `SubtractiveSettingsViewModel.cs`, `MillBitTool.cs`, `MillBitLibraryLoader.cs`, `MillBitLibraryViewModel.cs`, `MainWindowViewModel.cs`. Test: `ParsesMillToolsInPresetsBundle`.
+
+### 2026-08-17 — Mill IK follows the cutter, triad stays on the mesh
+
+- Visible TCP / green bit stay on SpindleBitTCP. Do not load T12 TOOL_DATA onto the triad.
+- Spindle (No Bit) taught TCP is still extruder CRE_HV, so IK used to aim that point at the path and the cutter sat off the beads.
+- RebuildIkSolver now uses the flange-local offset of `TryGetCutterWorld` when a spindle is mounted. Same point the triad draws. TOOL_DATA fields unchanged.
+- File: `ViewportView.axaml.cs`.
+
+### 2026-08-17 — Mill TCP triad back on the spindle mesh
+
+- Putting T12 TOOL_DATA on the triad (and skipping SpindleBitTCP during playback) moved the TCP off the mesh. Mesh/TCP were already aligned; only the path follow was wrong.
+- Reverted: triad always uses `TryGetCutterWorld` (SpindleBitTCP). Generate no longer swaps in T12 offsets / SelectToolByKrlIndex(12).
+- File: `ViewportView.axaml.cs`.
+
+### 2026-08-21 — Sidebar StepCard expand crashed the app ("Infinite layout loop detected")
+
+- **Symptom:** clicking **Pattern/Effects** or **Toolpath** in the right panel aborted the
+  process (SIGABRT). The macOS crash report showed only native Avalonia/Skia frames; the
+  managed exception was `InvalidOperationException: Infinite layout loop detected` thrown from
+  `MediaContext.FireInvokeOnRenderCallbacks`.
+- **Cause:** `SidebarExpandScroll.Schedule` subscribed `sv.LayoutUpdated` to a handler calling
+  `TryPinToTop`, which writes `sv.Offset` and resizes the scroll pad — so *every* call dirtied
+  layout and re-raised `LayoutUpdated` inside the **same** render callback. The retry counter
+  `attempts` was only advanced by `Tick` (dispatcher-driven), never by the layout handler, and
+  the handler's only exit was `TryPinToTop` returning true (`|origin.Y| < 3`) — unreachable for
+  a card whose content grew such that it can no longer reach the top. Unbounded re-entry inside
+  one layout pass, so Avalonia aborted the process.
+- **Fix (this branch):** do not hook `LayoutUpdated` at all — background dispatcher retries only.
+  Main's `MaxLayoutPasses` cap is superseded by that (same crash, stronger fix).
+- **Diagnostics:** `Program.cs` now adds Trace listeners into the crash log and stderr.
+- **Files:** `src/MassiveSlicer.App/Behaviors/SidebarExpandScroll.cs`,
+  `src/MassiveSlicer.App/Program.cs`.
+
+### 2026-08-21 — `main` was unbuildable Aug 17–21; fixed upstream. Joint-limit envelope still open
+
+- `2181741` (Aug 17) committed the new `ViewportView.axaml.cs` referencing `OutlinerToolpathKind`
+  et al. without the files defining them — a clean clone failed at `ViewportView.axaml.cs(13922)`
+  with CS0246. Nick and Jeff fell back to build 573 as a baseline for four days.
+- Fixed upstream by `336e69d` (Aug 21, MassiveMAKE), which restored **8 files / 233 lines**.
+- **Root-cause pattern to avoid:** `git commit -a` stages tracked-file edits but silently skips
+  untracked files. Use `git add -A`, and build a clean worktree before pushing.
+- **STILL OPEN — robot motion.** `JointLimitEnvelope.MarginFraction = 0.05f` insets 5% of each
+  axis travel. Not applied here.
+
+### 2026-08-16 — macOS Release build: NETSDK1177 on SMB apphost
+
+- `codesign` failed on `obj/Release/net8.0/apphost` with "resource fork, Finder information, or similar detritus not allowed" because MassiveFILES is SMB.
+- Fix: `<_EnableMacOSCodeSign>false</_EnableMacOSCodeSign>` on OSX in `MassiveSlicer.App.csproj`. `dotnet run` does not need an ad-hoc signed host.
+- File: `src/MassiveSlicer.App/MassiveSlicer.App.csproj`.
+
+### 2026-08-16 — Mill T12 TCP now rides the facing path
+
+- MILL workflow mounts Spindle (No Bit), whose JSON TCP is still the extruder CRE_HV numbers. IK aimed that point at the path; the triad/bit were elsewhere.
+- Generate now applies taught T12 TOOL_DATA to IK, then arms scrub and snaps to the first mill move.
+- While a mill path is armed, the TCP triad is flange+TOOL_DATA (same point IK solves), not the SpindleBitTCP mesh datum.
+- File: `ViewportView.axaml.cs`.
+
+### 2026-08-16 — Planar facing TOOL AXIS (not locked to world -Z)
+
+- Planar Facing / Planar Clearing used to raster world XY and take the topmost Z. T12 stayed vertical.
+- New OPERATION → TOOL AXIS: World ±X/Y/Z, Painted area, Camera view, Custom XYZ, plus Tilt / Azimuth.
+- Generate rasters in that frame and locks move normals so mill ABC / T12 +Z = −approach.
+- From painted area / From camera buttons. Console: `mill axis`, `mill tilt`, `mill azimuth`.
+- Files: `MillPlanarOrientation.cs`, `SurfaceFollowMillGenerator.cs`, `SubtractiveSettingsViewModel.cs`, `RightPanelView.axaml`, `ViewportView.axaml.cs`. Tests: `MillPlanarOrientationTest`.
+
+### 2026-08-16 — Mill Box/Lasso only paint the front surface
+
+- Region select used every vertex inside the screen rectangle, including the back of the part.
+- Now: front-facing triangles only, plus a coarse depth buffer so the far wall is not painted through. Alt-erase uses the same rule. Lasso shares the path.
+- Files: `MillFrontSurfaceBox.cs`, `MillSurfacePaint.cs`, `ViewportView.axaml.cs`. Tests: `MillFrontSurfaceBoxTest` 2 passed.
+
+### 2026-08-16 — LFAM 3 circular bed grid was buried under the rotary platter
+
+- Polar overlay (circle + 500 mm rings + 30 deg spokes + origin) still built from `bed.diameter` 1828.8. It was drawn *before* meshes at the same Z as `rotary_bed_top.glb`, so Bed Grid looked off.
+- Draw after meshes with depth test off. Lift 2 mm. Grid colour brighter lime.
+- Files: `SceneRenderer.cs`, `BedBoundaryRenderer.cs`.
+
+### 2026-08-16 — Mill Box select started a panel-width to the right of the cursor
+
+- Overlay chrome (`OverlayRoot`) is inset `320,52,320,0` so tools clear the side cards. The box/lasso canvases lived inside that inset; pointer + `ProjectToScreen` are full-viewport.
+- Fix: draw marquee/lasso on the outer overlay grid (same as TCP x/y/z tags). Paint-mode box select uses the same canvases.
+- File: `ViewportOverlayView.axaml`.
+
+### 2026-08-16 — Connections could not scroll to LFAM 3 user/pass
+
+- Keep-on-bed stayed visible on every Preferences page and ate the top of the scroller. Hidden unless Navigation.
+- Last SMB card (LFAM 3) had no bottom pad, so username/password sat under the Done bar. +120 px pad; Floating scroller with a visible bar.
+- Files: `PreferencesWindow.axaml`, `PreferencesWindow.axaml.cs`.
+
+### 2026-08-16 — Preferences window 60% wider; Connections page recast
+
+- Window 620x640 -> 992x700 (min 832). Nav column 188. No dingbat labels.
+- Connections: Lab ERP card (email/password row, URL, projects root, Sign in + status pill). API token tucked under Advanced expander.
+- Robot SMB: 3-col cards (IP / share / folder, then user / password / Test).
+- Files: `PreferencesWindow.axaml`, `ErpViewModel.IsConnecting`.
+
+### 2026-08-16 — Green spindle cylinder vanished with the TCP plane
+
+- TCP at T12 was correct; "Show cylinder on spindle" drew nothing.
+- Cause: preview was a child of `SpindleBitTCP`, then `HideTcpDatum` set `Visible=false` on that node. `SceneNode.Draw` skips the whole subtree.
+- Fix: `AttachPreview` parents the cylinder to the tool holder (same world pose). Plane stays hidden.
+- Tests 14 passed.
+
+### 2026-08-16 — SpindleBitTCP plane is the TCP / bit Z
+
+- New `spindle.glb` has material `SpindleBitTCP` on a plane (`Mesh_0.001`). Green bit was 90° off (horizontal) vs the purple shop line (down).
+- Cause: preview + TCP followed the housing long axis, not the authored plane normal.
+- Fix: prefer `SpindleBitTCP`; origin on the plane; +Z = plane normal flipped away from the housing. Hide the plane (datum only). Legacy `SpindleBit` still uses housing axis.
+- Files: `SpindleBitCylinder.cs`, `ViewportView.axaml.cs`, `SpindleBitCylinderTest.cs`. Tests 13 passed.
+
+### 2026-08-16 — ERP email/password login (slicer ready; Lab route pending)
+
+- Preferences → Connections: Email + Password. Connect / launch POSTs `/api/slicer/v1/login` and stores the returned bearer. Pasted API token still works.
+- Password scrubbed from `.mass` files. Console: `erp email` / `erp password`.
+- Lab does not have this route yet (404). Prompt: `docs/ERP-Login-API-Replit-Prompt.md`.
+
+### 2026-08-16 — massiveslicer:// opens a .mass; Board copies the project folder
+
+- Symptom: MassiveSYSTEM Windows icon copied `Z:\Research\LFAM\MassiveSLICER` (the checkout), not the project mass-files folder.
+- Fix (Board): copy is now `"Z:\Projects\…\mass Files\"` from the save row (Projects only). New logo button launches `massiveslicer://open?path=`.
+- Fix (Slicer): register `massiveslicer` URL protocol on Windows launch. `GET/POST /open` on the localhost bridge opens the .mass. A second instance hands off to the running app and exits.
+- Files: `ProtocolUri.cs`, `ProtocolRegistration.cs`, `Program.cs`, `App.axaml.cs`, `LocalControlBridge.cs`, `macOS/Info.plist`, `ProtocolUriTest.cs`. Board `public/js/graph.js`.
+
+### 2026-08-16 — Shared print + material presets via ERP (lab.massivemake.com)
+
+- Print presets (`%AppData%/MassiveSlicer/presets.json`) and material presets (`materials.json`) were machine-local only. New MassiveSLICER installs could not see team libraries.
+- **ERP contract (Replit):** `GET /api/slicer/v1/presets-bundle` plus CRUD on `/print-presets` and `/material-presets`. Same `Authorization: Bearer msl_…` as search/pricing. Payload is opaque desktop JSON (`PrintPresetRecord` / `MaterialPreset`) wrapped as `{ id, updatedAt, payload }`. Prompt: `docs/ERP-Presets-API-Replit-Prompt.md`.
+- **Slicer (NAS clone `\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER`):** on ERP connect, pull bundle (404 → list endpoints → stay local). Merge by `ErpId` then name; POST local-only rows. Save preset / save material POST or PUT. Console: `erp presets`. 404 = “API not shipped yet” (connect still works).
+- Files: `ErpClient.cs`, `ErpPresetSync.cs`, `ErpModels.cs`, `ErpViewModel.cs`, `PresetsCardViewModel.cs`, `MainWindowViewModel.cs`, `RightPanelView.axaml.cs`, `PrintPresetRecord.ErpId`, `MaterialPreset.ErpId`. Tests: `ErpParsingTest` 27 passed.
+- **Not done:** Replit must still deploy the routes. Local `C:\Users\MassiveMAKE\MassiveSLICER` clone was not updated (NAS only).
+
+### 2026-08-16 — LFAM 3 flange triad: Extruder tool roll spun X/Y
+
+- Symptom: flange Z correct; green Y sat where red X should be.
+- Cause: `FlangeFrameMatrix` used `totalRoll = toolFrameRoll + flangeDisplayRoll`. Extruder `toolFrameRoll=-90` rotated the physical flange mark.
+- Fix: flange triad uses **only** `flangeDisplayRoll` (−15° on LFAM3). TCP/IK still use total roll. Rebuild launched.
+
+### 2026-08-16 — Spindle cylinder was cocked off the housing
+
+- Shop: green preview came out of the collet at an angle; purple line is the spindle (straight down). TCP should sit on that tip, just above the bed.
+- Cause: cylinder +Z followed the SpindleBit puck thick axis (~31 mm X), which is not the housing spin axis.
+- Fix: `FindHousing` = largest non-bit mesh; cylinder +Z = housing long axis, flipped away from the body. TCP still snaps to the cylinder tip.
+- Files: `SpindleBitCylinder.cs`, `ViewportView.axaml.cs`, `SpindleBitCylinderTest.cs`.
+
+### 2026-08-16 — MassiveSYSTEM Windows icon opens Explorer
+
+- Symptom: graph Windows button only copied `Z:\…`.
+- Cause: MassiveBOARD runs on the Mac, so `explorer.exe` never ran on the shop PC.
+- Fix: `LocalControlBridge` `GET/POST /reveal?path=` starts Explorer on the folder (MassiveFILES / `Z:\Projects` / `Z:\Research` only). Graph calls `127.0.0.1:8723–8728` when the browser is Windows. Fallback still copies the path if slicer is not running.
+- Files: `src/MassiveSlicer.App/Console/LocalControlBridge.cs`, MassiveBOARD `public/js/graph.js`.
+
+### 2026-08-15 — KRL header records slicer version, preset, and slice settings
+
+- After `DEF`: `;FOLD MassiveSLICER export` with status-bar `BuildInfo.Label`, UTC time, cell, TOOL/BASE.
+- Print: material preset name (or none), type/color, HV/HF, layer height, bead width, extrusion flow, print/travel/wipe speeds, first-layer speed/RPM when set, extrusion RPM %, T1/T2/T3, approach Z.
+- Mill: spindle RPM, cutting/plunge feed, rapid, approach Z.
+- Injected into default / URM / mill / custom headers. ASCII only.
+
+### 2026-08-15 — T12 TCP triad sat at the wrist; bit was on the table
+
+- TOOL_DATA[12] applied in A6 put the RGB triad ~flange height. The cutter (green cylinder) was already on the bed. Pendant BASE 1 Z is about -99 mm (table).
+- Spindle tools: snap TCP origin to the SpindleBit disc / preview-cylinder tip and align taught Z with the spindle. Extruder / scanner unchanged. TOOL_DATA numbers are not rewritten.
+
+### 2026-08-15 — LFAM 3 flange triad rotated, mesh left alone
+
+- Shop sketch: flange **X** along old Y (left), **Y** along -old X (down), **Z** unchanged (out of the face).
+- Display-only `FlangeDisplayRotation` (+90 deg about Z) on `FlangeFrameMatrix`. TCP / TOOL_DATA / spindle GLB unchanged.
+
+### 2026-08-15 — TOOL CONVENTION defaults to Z- (backward)
+
+- Startup + null fallback is **Z- (backward)**, not Undefined. Combo, triad readout, and `ToolAxisConventionOption.Default` all agree.
+
+### 2026-08-15 — TOOL #12 from ROBOT CELL crashed; MILL then T12 worked
+
+- ROBOT CELL TOOL # mounted T12 **and selected** the toolhead (gizmo + Desync + flash Additive). MILL first used `SuppressNextToolViewportSelect` so the spindle came up without that overlay.
+- TOOL # now uses the same no-select mount. TCP / TOOL_DATA still load. Overlay select is try/caught.
+
+### 2026-08-15 — TOOL #12 select crashed the app
+
+- Selecting T12 on LFAM 3 ran mount on the GL thread. A null TOOL CONVENTION SelectedItem (Avalonia ComboBox) or a missing T12 flange holder could NRE and take the process down.
+- Convention ComboBox now binds SelectedIndex. Mount no longer unmounts every tool if T12 has no holder. Mount + spindle-cylinder wrap in try/catch and log to `%TEMP%/massiveslicer-crash.log`.
+
+### 2026-08-15 — TOOL CONVENTION dropdown on the ROBOT card
+
+- Next to TCP OFFSET: Undefined / Z- (backward) / Z+ (forward) / X- (backward) / X+ (forward).
+- Remaps the TCP triad after taught ABC. Does not change TOOL_DATA or TCP ACTUAL numbers.
+
+### 2026-08-15 — ROBOT card shows only TCP ACTUAL in the current BASE
+
+- Removed FLANGE (ROBROOT), TCP WORLD, and BASE FRAME readouts from the left ROBOT card.
+- One block: **TCP ACTUAL (BASE n)** XYZABC. Live sync = controller `$POS_ACT`. Otherwise scene TCP minus ROBROOT minus `bed.baseData`.
+
+### 2026-08-15 — Name the two TCP triads + small x/y/z
+
+- The two RGB sticks are **TCP** (T12 + mounted tool name) and **FLANGE**. Sensor (if present) is **SENSOR**.
+- Small **x / y / z** at each tip: red / green / blue.
+
+### 2026-08-15 — Spindle Show Cylinder was 1000x too big
+
+- Tool GLBs bake verts to metres (`NormalizeMetresIfLooksLikeMillimetres`); flange applies GltfToScene ×1000. The preview cylinder was created in millimetres, so a Ø76 mm × 1 mm stick-out became 76 m × 1 m — larger than the cell.
+- `MmToParentLocal` converts UI mm into the disc's local units (metres when AABB diag &lt; 10).
+
+### 2026-08-15 — Save Home Position sits under Joint Angles
+
+- Moved HOME POSITIONS (name + SAVE AS HOME POSITION) in the left ROBOT card to just below the A1–E1 sliders and above LIMITS.
+
+### 2026-08-15 — Remove GO TO BED CENTER from left ROBOT card
+
+- Dropped the `PrimaryButton` in `LeftPanelView.axaml`. `GoToBedCenterCommand` stays on `RobotPanelViewModel` (unused from UI).
+
+### 2026-08-15 — Remove nested scroll in ROBOT / VIEWPORT
+
+- VIEWPORT had `MaxHeight=520` ScrollViewer inside LeftPanelHost (wheel stole events, expand-to-top fought the inner offset).
+- ROBOT had a Disabled ScrollViewer wrapper. Both unwrapped — the left column is the only scroller.
+
+### 2026-08-15 — Left + right sidebar: expand pins the card to the top
+
+- VIEWPORT only moved a few pixels because it is the last card — a scroller cannot pin the last item without empty space below. Inject a pad ~column height.
+- ROBOT still failed when Offset was applied before Extent grew, or the inner Disabled viewer was targeted. Shared `SidebarExpandScroll` skips Disabled, waits for layout, binds Floating `Offset`.
+- Same behavior on the **right** tab ScrollViewers (PRINTING / SCAN / MILL StepCards).
+
+### 2026-08-15 — ROBOT expand scrolls the left column to that card
+
+- Clicking ROBOT expanded in place because (1) the expand hook could miss the card and (2) scroll ran before layout, when Extent was still the collapsed height.
+- Now a class handler on every StepCard, then LayoutUpdated + delayed retries, using the card's Y inside the scroll content.
+- Floating ScrollViewer template also got a vertical scroll gesture so Offset actually moves the column.
+
+### 2026-08-15 — MassiveBOARD lists last 10 .mass saves
+
+- MassiveSLICER already logs each save (`WorkspaceSaveLog` → AppData + `Projects/_slicer/workspace-saves.jsonl`).
+- Added `ReadRecent` for newest-first unique paths. Board `GET /api/slicer/saves` reads that JSONL (prefs `RecentWorkspaces` until the first log line).
+- Expand MassiveSLICER on the graph: last 10 files. **Mac** reveals in Finder (`open -R`); **Windows** copies `Z:\…`.
+
+### 2026-08-15 — Log every .mass save for MassiveLAB
+
+- After a successful workspace save, append one JSONL line (path, UNAS-relative path, bytes, cell, project/element) to `%AppData%/MassiveSlicer/workspace-saves.jsonl` and `Projects/_slicer/workspace-saves.jsonl`.
+- If Lab is connected, POST `/api/slicer/v1/workspace-saves` (404 is fine until Lab ships it). Does **not** create a slice rev.
+- Share-relative paths now cover shop `Z:\Projects\…` and UNC `\\192.168.0.191\MassiveFILES\…`, not just `/Volumes/…`.
+
+### 2026-08-15 — PRINT / SCAN / MILL swap the flange toolhead
+
+- Clicking WORKFLOW PRINT / SCAN / MILL now mounts Extruder / Scanner (Calibrated) / Spindle (No Bit) on LFAM 3.
+- Does **not** select the TCP in the viewport (no gizmo steal). Sidebar tabs still follow the phase.
+
+### 2026-08-15 — Hide leftover seam-guide green line
+
+- The thin lime line beside the LFAM 3 table was a **seam-guide column** (always-on-top, ~1 m stub when no part is loaded).
+- Committed guides no longer draw unless a visible model or toolpath is in the scene. Open the seam editor to see/edit them.
+
+### 2026-08-15 — Viewport top chrome: no overlap on small screens
+
+- Move/rotate/scale bar (center) and Body/Toolpath/Speed/RPM/Thermal/Preview pills (right) overlapped when the viewport strip was narrow.
+- If they would collide, the pills drop to a second row (centered). Wide windows stay one row.
+
+### 2026-08-15 — Left sidebar: expand ROBOT (etc.) slides that card to the top
+
+- First pass scrolled on a single Loaded post, before the expander body measured — Extent was still collapsed, so ROBOT stayed put.
+- Now retries across layout/render (up to 10 frames) and targets `LeftPanelHost`, not the ROBOT card’s inner disabled ScrollViewer.
+
+### 2026-08-15 — Imported KRL: drop it to the plate, and drag-drop it in
+
+**Drop to Plate works on an imported toolpath.** Two separate blockers: the button was hidden
+whenever a toolpath was selected (`IsVisible="{Binding !IsToolpathSelected}"`), and
+`DropToPlate` bailed on `LayFlatMinZ` returning `MaxValue` — that walks mesh vertices, and a
+KRL program has no mesh, only move endpoints. `NodeMinZWithToolpaths` now measures both.
+Lay on Face stays mesh-only and stays hidden: it needs a face to rest on, a drop only needs a
+lowest point. Travels count — one dipping below the extrusions still hits the bed.
+
+**Trap, and it shipped a broken build before being caught: a registered toolpath keeps
+ABSOLUTE points, but `SceneRenderer` sets the node transform to the toolpath CENTROID and both
+renderer and exporter draw `(point − origin) × world`.** Transforming the raw point
+double-counts the centroid. The first version did exactly that, so the drop overshot by the
+centroid height and buried the part under the bed. Use `_toolpathOriginByNode` — the same
+origin the exporter passes as `NodeOrigin`.
+
+*Why the tests missed it:* all five used an identity transform and a zero origin, where the
+bug is invisible. Added two that model how the scene really holds a toolpath. **A fixture that
+cannot express the bug is not coverage.**
+
+**Dropping a `.src` onto the app imports it.** Both targets were mesh-only: the viewport
+filtered on `ImportHelper.IsSupported` and discarded it silently, while the left panel's drop
+zone handed it to the mesh loader and logged an import failure it never deserved. Both now
+route `.src`/`.krl` to `ImportKrlToolpath`, the same call the menu item makes.
+
+**Related, landed on main separately (`374b534`):** KRL import now offsets by the drawn Print
+Bed 0,0,0 (`Bed.BaseMarkerWorld`) rather than ROBROOT + BASE_DATA — the actual reason imported
+programs floated metres in the air — plus E1 rail replay for programs carrying baked E1
+(`KrlToolpathParser.HasProgrammedE1`; SRC E1 is authoritative and is never replanned).
+
+**Safe to move a toolpath:** `KrlExporter` applies `NodeWorldTransform` to every point
+(`KrlExporter.cs` ~1054), so a drop shifts exported coordinates, not just the display. Verified
+before building — a version that moved only the render would have printed in the old place.
+
+### 2026-08-15 — save.ps1: no stash on SMB
+
+- Stash failed on shop PC: `unable to create file save.sh: File exists` while resetting the index (SMB).
+- Flow is now **commit → pull → push** (no stash). Leftover `save.* auto-stash` is cleared.
+- Every git call still uses `-c safe.directory=*`.
+
+### 2026-08-15 — save.sh is SMB-safe (no more 700-file chmod dumps)
+
+- `core.filemode=false`, `core.trustctime=false`. Stale `index.lock` dropped if no git process.
+- After `git add -A`, chmod-only (`numstat 0/0`) is unstaged. `/install.sh` (Hermes installer) is gitignored.
+- Tree is otherwise clean: only real KRL-import / sidebar work remains until the next save.
+
+### 2026-08-15 — KRL import replays LFAM 1 E1 rail
+
+- Parser now keeps inline `E1` on each LIN/PTP (holds last value when a later frame omits it).
+- Imported E1 is authoritative: validation does **not** wipe or replan it. Rail moves on scrub/play even when Additive **E1 motion** is off.
+- Import populates `_e1MmByNode` and kicks reachability so IK is rail-relative.
+
+### 2026-08-15 — KRL import uses Print Bed 0,0,0
+
+- Offset is the drawn **BASE / Print Bed 0,0,0 marker** (`Bed.BaseMarkerWorld` = ROBROOT XY + `baseData` XY, Z = `bed.origin.Z`).
+- Do **not** parent the path under the bed node: toolpaths are drawn with `LocalTransform * mvp` (not world), so parenting put LFAM 1 imports on the rail at Z≈0, below the plate.
+- LFAM 1 marker `(1475.51, -609.30, 70)`. LFAM 3 `(2135.45, -52.54, 916.31)`.
+
+### 2026-08-15 — Left sidebar: expand a bottom card scrolls it to the top
+
+- Expanding a collapsed left **StepCard** (ROBOT, VIEW, …) scrolls `LeftPanelHost` so that card’s header sits at the top of the column.
+- Skips PersistExpander restore-on-load so startup doesn’t jump.
+
+### 2026-08-15 — 5% software-limit envelope on sim / IK / export
+
+- Shared `JointLimitEnvelope` (5% of each axis travel inside `$SOFTN_END`/`$SOFTP_END`).
+- Viewport sliders, numerical IK, analytic IK `InLimits`, E1 rail planner, and toolpath validation all use the envelope.
+- LIMITS expander still shows/edits the raw KRC stops. Export warns on moves outside the envelope.
+- Wrist singularity still `|A5| < 5°`.
+
+### 2026-08-14 — ROBOT LIMITS editor (LFAM 1 $machine.dat)
+
+- Left **ROBOT** card: **LIMITS** expander — A1–A6 + E1 min/max (`$SOFTN_END` / `$SOFTP_END`).
+- Seeded **LFAM 1** from live `\\192.168.0.151\krc\ROBOTER\KRC\R1\Mada\$machine.dat`.
+- Edit writes to the connected KRC via C3Bridge. **Requires KUKA cold reboot** banner on change.
+
+### 2026-08-14 — LFAM 3 Tool 12 re-taught on KRC
+
+- Live `.153` `$ACT_TOOL=12`: `TOOL_DATA[12] = X -78.399, Y 325.229, Z 637.358, A 103.677, B -43.719, C 40.483`
+- Synced three `lfam3.json` copies. LOAD_DATA[12] unset after pendant save.
+
+### 2026-08-14 — Mill bit library: spindle cylinder locked to SpindleBit
+
+- Tool library **Cutter** tab: **SPINDLE CYLINDER**. Origin = disc centroid; length along rotational-symmetry axis (not vertex-normal average).
+
+### 2026-08-14 — Pattern scope: texture the skin, leave bracing straight (main 571)
+
+**Shipped** (`PatternScope` in `SliceSettings`, picker at the top of PATTERN AND TEXTURE):
+`Everything` / `WallsOnly` / `VisibleSkin`. Wave and Pattern displace only what is in scope.
+
+- `ToolpathMove.IsWall`, set only by `ContourSeamPlanner` — the one place perimeters are
+  emitted, so infill / X-bracing / Formbound / supports default to structure.
+- `SkinOnlyBracing`: structure left out of scope stays straight, but an **open** run's ends
+  take the displacement of the nearest wall point, blended linearly along the run. Linear
+  blending is what keeps a brace straight — a straight segment under a linearly varying
+  displacement is still straight. **Closed** runs (cavity boundaries) are left exactly where
+  the slicer put them: they have no ends to keep attached, and translating a whole loop toward
+  one side of a wavy skin only drags it off true.
+- Fixed en route: both effects rebuilt moves keeping only `Normal`/`IsLayerChange`, silently
+  dropping `IsBrim`, `HeightScale`, `PrintSpeedScale`, `IsWipe` — so brim RPM and adaptive
+  layer-height flow were discarded on any patterned wall.
+
+**A nesting-depth scope was built, shipped, and then REMOVED by taqotaqo** (`2474456`),
+superseded by their raycast (`d7fd2bb`). Worth knowing why, because the reasoning generalises:
+classifying a wall as outer-vs-interior by contour nesting asks "is this contour inside
+another one", and **open chains have no answer**. Scanned and organic parts slice into open
+chains — measured on one, all **6,676,002** wall moves came back at depth 0, so every interior
+rib was classified as outer surface and got textured. `VisibleSkin` instead sweeps horizontal
+rays from every compass direction per layer: first thing hit is skin, anything shadowed behind
+it stays straight. No closed contours required.
+
+**Do not reach for contour nesting on this codebase's real parts.** It is correct only for
+clean solid models; the LFAM workload is largely scanned/organic.
+
+**Still open — on `feature/pattern-skin-only`, NOT merged, may still reproduce on main:**
+selecting a non-print-object (an effector, a modifier gizmo) breaks slicing two ways. Auto-slice
+resolves to an item with no toolpath and takes the fresh-import path into the size guard; and
+`SliceCommand` requires `HasMeshSelected`, which an effector selection clears — so the only
+control that could rescue a scene above the auto-slice triangle limit disables itself exactly
+when it is needed. Combined with the 1M-triangle guard this reads as "the setting did nothing"
+while the toolpath is simply stale. Verify against main before porting the fix.
+
+**Also on that branch and now dead:** the `walls` console command and the single-skin depth
+realignment both depend on the removed nesting mechanism.
 
 ### 2026-08-07 — Seam guide traces the model surface (merged; five failed attempts first)
 

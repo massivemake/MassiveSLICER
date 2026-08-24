@@ -34,11 +34,17 @@ public partial class MaterialPresetDialog : Window
     /// </summary>
     public bool SaveAsNew { get; private set; }
 
+    /// <summary>True when Delete was clicked — the caller removes the preset being edited
+    /// from the library. Result is null either way (same as Cancel); the caller tells the
+    /// two apart via this flag.</summary>
+    public bool DeleteRequested { get; private set; }
+
     public MaterialPresetDialog()
-    {
-        InitializeComponent();
-        TitleBar.PointerPressed += (_, e) => BeginMoveDrag(e);
-    }
+        {
+            InitializeComponent();
+            DialogWindowChrome.Apply(this);
+            TitleBar.PointerPressed += (_, e) => BeginMoveDrag(e);
+        }
 
     private void OnSave(object? sender, RoutedEventArgs e)
     {
@@ -296,4 +302,10 @@ public partial class MaterialPresetDialog : Window
     }
 
     private void OnCancel(object? sender, RoutedEventArgs e) => Close(null);
+
+    private void OnDelete(object? sender, RoutedEventArgs e)
+    {
+        DeleteRequested = true;
+        Close(null);
+    }
 }

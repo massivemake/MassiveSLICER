@@ -11,7 +11,8 @@
         WindowDecorations="None"
         CanResize="True"
         ShowInTaskbar="False"
-        Background="{DynamicResource Bg0}">
+        TransparencyLevelHint="Transparent"
+        Background="Transparent">
 
     <Window.Styles>
         <!-- Room for value + spinner so digits are not clipped -->
@@ -40,12 +41,18 @@
         </Style>
     </Window.Styles>
 
-    <Border BorderBrush="{DynamicResource Border2}" BorderThickness="1">
+    <Border Classes="DialogChrome"
+            Background="{DynamicResource Bg0}"
+            BorderBrush="{DynamicResource Border2}"
+            BorderThickness="1"
+            CornerRadius="10"
+            ClipToBounds="True">
         <Grid RowDefinitions="44,*,56">
 
             <!-- Title bar -->
             <Border Grid.Row="0" x:Name="TitleBar"
                     Background="{DynamicResource Bg1}"
+                    CornerRadius="10,10,0,0"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,0,0,1"
                     Cursor="SizeAll">
@@ -243,6 +250,29 @@
                                 <CheckBox Content="Default spindle bit (LFAM 3 mounted)"
                                           IsChecked="{Binding SelectedTool.IsDefaultSpindleBit, Mode=TwoWay}"
                                           FontSize="12" Margin="0,4,0,0"/>
+
+                                <TextBlock Text="SPINDLE CYLINDER" Classes="LabelMuted" FontSize="10" LetterSpacing="1.2" Margin="0,14,0,0"/>
+                                <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.65" Margin="0,0,0,4"
+                                           Text="Starts on the SpindleBitTCP plane (or the SpindleBit disc) and grows along the plane normal. Diameter and length are millimetres."/>
+                                <CheckBox Content="Show cylinder on spindle"
+                                          IsChecked="{Binding SelectedTool.ShowSpindleCylinder, Mode=TwoWay}"
+                                          FontSize="12"/>
+                                <Grid ColumnDefinitions="168,*" RowDefinitions="Auto,Auto" RowSpacing="10">
+                                    <TextBlock Grid.Row="0" Text="Cylinder length" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <Grid Grid.Row="0" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <NumericUpDown Classes="BitField"
+                                                       Value="{Binding SelectedTool.CylinderLengthMm, Mode=TwoWay}"
+                                                       Minimum="0" Maximum="400" Increment="0.5" FormatString="F2"
+                                                       ToolTip.Tip="0 = use Total cutter length, then Flute length, then 50 mm"/>
+                                        <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Width="36" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <TextBlock Grid.Row="1" Text="" Classes="LabelMuted"/>
+                                    <CheckBox Grid.Row="1" Grid.Column="1"
+                                              Content="Flip direction"
+                                              IsChecked="{Binding SelectedTool.CylinderFlip, Mode=TwoWay}"
+                                              FontSize="12"
+                                              ToolTip.Tip="Grow the cylinder from the opposite SpindleBit face"/>
+                                </Grid>
                             </StackPanel>
 
                             <!-- HOLDER -->
@@ -425,7 +455,8 @@
             <Border Grid.Row="2"
                     Background="{DynamicResource Bg1}"
                     BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="0,1,0,0">
+                    BorderThickness="0,1,0,0"
+                    CornerRadius="0,0,10,10">
                 <Grid Margin="20,0" ColumnDefinitions="*,Auto">
                     <TextBlock Text="Save writes the library and applies the selected tool to Mill → BITS."
                                Classes="LabelMuted" FontSize="11"

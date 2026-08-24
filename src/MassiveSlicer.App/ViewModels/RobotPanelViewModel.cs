@@ -1,4 +1,5 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
+using System.Linq;
 using System.Numerics;
 using System.Windows.Input;
 using Avalonia.Threading;
@@ -29,20 +30,55 @@ public sealed class RobotPanelViewModel : ViewModelBase
     private double _minA6 = -360, _maxA6 = 360;
     private double _minE1 = -360, _maxE1 = 360;
 
-    public double MinA1 { get => _minA1; set => SetField(ref _minA1, value); }
-    public double MaxA1 { get => _maxA1; set => SetField(ref _maxA1, value); }
-    public double MinA2 { get => _minA2; set => SetField(ref _minA2, value); }
-    public double MaxA2 { get => _maxA2; set => SetField(ref _maxA2, value); }
-    public double MinA3 { get => _minA3; set => SetField(ref _minA3, value); }
-    public double MaxA3 { get => _maxA3; set => SetField(ref _maxA3, value); }
-    public double MinA4 { get => _minA4; set => SetField(ref _minA4, value); }
-    public double MaxA4 { get => _maxA4; set => SetField(ref _maxA4, value); }
-    public double MinA5 { get => _minA5; set => SetField(ref _minA5, value); }
-    public double MaxA5 { get => _maxA5; set => SetField(ref _maxA5, value); }
-    public double MinA6 { get => _minA6; set => SetField(ref _minA6, value); }
-    public double MaxA6 { get => _maxA6; set => SetField(ref _maxA6, value); }
-    public double MinE1 { get => _minE1; set => SetField(ref _minE1, value); }
-    public double MaxE1 { get => _maxE1; set => SetField(ref _maxE1, value); }
+    private IReadOnlyList<JointConfig> _joints = [];
+    private bool _loadingLimits;
+    private bool _limitsRequireColdReboot;
+    private DispatcherTimer? _limitPushTimer;
+    private string _limitsStatus = "";
+
+    /// <summary>True after the user edits a software limit (needs a KUKA cold reboot).</summary>
+    public bool LimitsRequireColdReboot
+    {
+        get => _limitsRequireColdReboot;
+        private set => SetField(ref _limitsRequireColdReboot, value);
+    }
+
+    public string LimitsStatus
+    {
+        get => _limitsStatus;
+        private set => SetField(ref _limitsStatus, value);
+    }
+
+    public double MinA1 { get => _minA1; set => SetSoftLimit(ref _minA1, value); }
+    public double MaxA1 { get => _maxA1; set => SetSoftLimit(ref _maxA1, value); }
+    public double MinA2 { get => _minA2; set => SetSoftLimit(ref _minA2, value); }
+    public double MaxA2 { get => _maxA2; set => SetSoftLimit(ref _maxA2, value); }
+    public double MinA3 { get => _minA3; set => SetSoftLimit(ref _minA3, value); }
+    public double MaxA3 { get => _maxA3; set => SetSoftLimit(ref _maxA3, value); }
+    public double MinA4 { get => _minA4; set => SetSoftLimit(ref _minA4, value); }
+    public double MaxA4 { get => _maxA4; set => SetSoftLimit(ref _maxA4, value); }
+    public double MinA5 { get => _minA5; set => SetSoftLimit(ref _minA5, value); }
+    public double MaxA5 { get => _maxA5; set => SetSoftLimit(ref _maxA5, value); }
+    public double MinA6 { get => _minA6; set => SetSoftLimit(ref _minA6, value); }
+    public double MaxA6 { get => _maxA6; set => SetSoftLimit(ref _maxA6, value); }
+    public double MinE1 { get => _minE1; set => SetSoftLimit(ref _minE1, value); }
+    public double MaxE1 { get => _maxE1; set => SetSoftLimit(ref _maxE1, value); }
+
+    /// <summary>Slider / sim range — 5% inside the software stops.</summary>
+    public double SimMinA1 => JointLimitEnvelope.UsableMin(_minA1, _maxA1);
+    public double SimMaxA1 => JointLimitEnvelope.UsableMax(_minA1, _maxA1);
+    public double SimMinA2 => JointLimitEnvelope.UsableMin(_minA2, _maxA2);
+    public double SimMaxA2 => JointLimitEnvelope.UsableMax(_minA2, _maxA2);
+    public double SimMinA3 => JointLimitEnvelope.UsableMin(_minA3, _maxA3);
+    public double SimMaxA3 => JointLimitEnvelope.UsableMax(_minA3, _maxA3);
+    public double SimMinA4 => JointLimitEnvelope.UsableMin(_minA4, _maxA4);
+    public double SimMaxA4 => JointLimitEnvelope.UsableMax(_minA4, _maxA4);
+    public double SimMinA5 => JointLimitEnvelope.UsableMin(_minA5, _maxA5);
+    public double SimMaxA5 => JointLimitEnvelope.UsableMax(_minA5, _maxA5);
+    public double SimMinA6 => JointLimitEnvelope.UsableMin(_minA6, _maxA6);
+    public double SimMaxA6 => JointLimitEnvelope.UsableMax(_minA6, _maxA6);
+    public double SimMinE1 => JointLimitEnvelope.UsableMin(_minE1, _maxE1);
+    public double SimMaxE1 => JointLimitEnvelope.UsableMax(_minE1, _maxE1);
 
     // -- Joint angles (KRL degrees) -------------------------------------------
 
@@ -54,14 +90,14 @@ public sealed class RobotPanelViewModel : ViewModelBase
     private double _a6 =   0;
     private double _e1 =   0;
 
-    public double A1 { get => _a1; set => SetField(ref _a1, Math.Clamp(value, _minA1, _maxA1)); }
-    public double A2 { get => _a2; set => SetField(ref _a2, Math.Clamp(value, _minA2, _maxA2)); }
-    public double A3 { get => _a3; set => SetField(ref _a3, Math.Clamp(value, _minA3, _maxA3)); }
-    public double A4 { get => _a4; set => SetField(ref _a4, Math.Clamp(value, _minA4, _maxA4)); }
-    public double A5 { get => _a5; set => SetField(ref _a5, Math.Clamp(value, _minA5, _maxA5)); }
-    public double A6 { get => _a6; set => SetField(ref _a6, Math.Clamp(value, _minA6, _maxA6)); }
-    /// <summary>External axis 1 — rotary bed (KRL degrees).</summary>
-    public double E1 { get => _e1; set => SetField(ref _e1, Math.Clamp(value, _minE1, _maxE1)); }
+    public double A1 { get => _a1; set => SetField(ref _a1, JointLimitEnvelope.Clamp(value, _minA1, _maxA1)); }
+    public double A2 { get => _a2; set => SetField(ref _a2, JointLimitEnvelope.Clamp(value, _minA2, _maxA2)); }
+    public double A3 { get => _a3; set => SetField(ref _a3, JointLimitEnvelope.Clamp(value, _minA3, _maxA3)); }
+    public double A4 { get => _a4; set => SetField(ref _a4, JointLimitEnvelope.Clamp(value, _minA4, _maxA4)); }
+    public double A5 { get => _a5; set => SetField(ref _a5, JointLimitEnvelope.Clamp(value, _minA5, _maxA5)); }
+    public double A6 { get => _a6; set => SetField(ref _a6, JointLimitEnvelope.Clamp(value, _minA6, _maxA6)); }
+    /// <summary>External axis 1 — rotary bed (KRL degrees) or rail (mm).</summary>
+    public double E1 { get => _e1; set => SetField(ref _e1, JointLimitEnvelope.Clamp(value, _minE1, _maxE1)); }
 
     /// <summary>Rotary-bed (E1) axis calibration: scan the board across E1 rotations to find the bed centre.</summary>
     public RotaryBedCalibrationViewModel BedCalibration { get; } = new();
@@ -153,6 +189,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
     {
         IsRobotRail = rail is not null;
         OnPropertyChanged(nameof(E1UnitLabel));
+        _loadingLimits = true;
         if (rail is { } r)
         {
             MinE1 = r.MinMm;
@@ -163,6 +200,8 @@ public sealed class RobotPanelViewModel : ViewModelBase
             MinE1 = -360;
             MaxE1 = 360;
         }
+        _loadingLimits = false;
+        NotifySimLimits();
     }
 
     /// <summary>
@@ -242,6 +281,27 @@ public sealed class RobotPanelViewModel : ViewModelBase
         try
         {
             await _sync.SetBoolAsync(varName, value);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            ResumeStreaming();
+        }
+    }
+
+    /// <summary>Writes a KRL REAL / $ANOUT value (invariant text). Pauses streaming briefly.</summary>
+    public async Task<bool> TryWriteKukaRealAsync(string varName, string valueText)
+    {
+        if (!_sync.IsConnected) return false;
+        if (string.IsNullOrWhiteSpace(varName) || string.IsNullOrWhiteSpace(valueText)) return false;
+        PauseStreaming();
+        try
+        {
+            await _sync.WriteVarAsync(varName, valueText.Trim());
             return true;
         }
         catch
@@ -402,6 +462,8 @@ public sealed class RobotPanelViewModel : ViewModelBase
     /// <summary>Applies joint limits and home position from the loaded cell config.</summary>
     public void Configure(IReadOnlyList<JointConfig> joints, float[] home)
     {
+        _loadingLimits = true;
+        _joints = joints;
         if (joints.Count >= 6)
         {
             MinA1 = joints[0].MinDeg; MaxA1 = joints[0].MaxDeg;
@@ -411,7 +473,94 @@ public sealed class RobotPanelViewModel : ViewModelBase
             MinA5 = joints[4].MinDeg; MaxA5 = joints[4].MaxDeg;
             MinA6 = joints[5].MinDeg; MaxA6 = joints[5].MaxDeg;
         }
+        _loadingLimits = false;
+        LimitsRequireColdReboot = false;
+        LimitsStatus = "";
+        NotifySimLimits();
         ApplyViewportJoints(home);
+    }
+
+    void SetSoftLimit(ref double field, double value)
+    {
+        if (!SetField(ref field, value)) return;
+        if (_loadingLimits) return;
+        NotifySimLimits();
+        SyncLiveJointConfigs();
+        LimitsRequireColdReboot = true;
+        LimitsStatus = IsConnected
+            ? "Writing $SOFTN_END / $SOFTP_END — requires a KUKA cold reboot."
+            : "Changed locally. Sync Robot to write $SOFTN_END / $SOFTP_END. Requires a KUKA cold reboot.";
+        QueuePushSoftLimits();
+    }
+
+    void NotifySimLimits()
+    {
+        OnPropertyChanged(nameof(SimMinA1)); OnPropertyChanged(nameof(SimMaxA1));
+        OnPropertyChanged(nameof(SimMinA2)); OnPropertyChanged(nameof(SimMaxA2));
+        OnPropertyChanged(nameof(SimMinA3)); OnPropertyChanged(nameof(SimMaxA3));
+        OnPropertyChanged(nameof(SimMinA4)); OnPropertyChanged(nameof(SimMaxA4));
+        OnPropertyChanged(nameof(SimMinA5)); OnPropertyChanged(nameof(SimMaxA5));
+        OnPropertyChanged(nameof(SimMinA6)); OnPropertyChanged(nameof(SimMaxA6));
+        OnPropertyChanged(nameof(SimMinE1)); OnPropertyChanged(nameof(SimMaxE1));
+        // Re-clamp live angles into the new envelope.
+        A1 = A1; A2 = A2; A3 = A3; A4 = A4; A5 = A5; A6 = A6; E1 = E1;
+    }
+
+    void SyncLiveJointConfigs()
+    {
+        if (_joints.Count < 6) return;
+        _joints[0].MinDeg = (float)MinA1; _joints[0].MaxDeg = (float)MaxA1;
+        _joints[1].MinDeg = (float)MinA2; _joints[1].MaxDeg = (float)MaxA2;
+        _joints[2].MinDeg = (float)MinA3; _joints[2].MaxDeg = (float)MaxA3;
+        _joints[3].MinDeg = (float)MinA4; _joints[3].MaxDeg = (float)MaxA4;
+        _joints[4].MinDeg = (float)MinA5; _joints[4].MaxDeg = (float)MaxA5;
+        _joints[5].MinDeg = (float)MinA6; _joints[5].MaxDeg = (float)MaxA6;
+    }
+
+    void QueuePushSoftLimits()
+    {
+        _limitPushTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+        _limitPushTimer.Tick -= OnLimitPushTick;
+        _limitPushTimer.Tick += OnLimitPushTick;
+        _limitPushTimer.Stop();
+        _limitPushTimer.Start();
+    }
+
+    async void OnLimitPushTick(object? sender, EventArgs e)
+    {
+        _limitPushTimer?.Stop();
+        await PushSoftLimitsToRobotAsync();
+    }
+
+    async Task PushSoftLimitsToRobotAsync()
+    {
+        if (!IsConnected)
+            return;
+        try
+        {
+            PauseStreaming();
+            var pairs = new (string Name, double Value)[]
+            {
+                ("$SOFTN_END[1]", MinA1), ("$SOFTP_END[1]", MaxA1),
+                ("$SOFTN_END[2]", MinA2), ("$SOFTP_END[2]", MaxA2),
+                ("$SOFTN_END[3]", MinA3), ("$SOFTP_END[3]", MaxA3),
+                ("$SOFTN_END[4]", MinA4), ("$SOFTP_END[4]", MaxA4),
+                ("$SOFTN_END[5]", MinA5), ("$SOFTP_END[5]", MaxA5),
+                ("$SOFTN_END[6]", MinA6), ("$SOFTP_END[6]", MaxA6),
+                ("$SOFTN_END[7]", MinE1), ("$SOFTP_END[7]", MaxE1),
+            };
+            foreach (var (name, value) in pairs)
+                await _sync.WriteVarAsync(name, value.ToString("0.0000", System.Globalization.CultureInfo.InvariantCulture));
+            LimitsStatus = "Wrote $SOFTN_END / $SOFTP_END. Requires a KUKA cold reboot.";
+        }
+        catch (Exception ex)
+        {
+            LimitsStatus = "Write failed: " + ex.Message;
+        }
+        finally
+        {
+            ResumeStreaming();
+        }
     }
 
     /// <summary>Sets the viewport robot to <paramref name="home"/> (A1–A6, KRL degrees) without moving the real robot.</summary>
@@ -439,18 +588,22 @@ public sealed class RobotPanelViewModel : ViewModelBase
     private double _tcpX, _tcpY, _tcpZ;
     private double _tcpA, _tcpB, _tcpC;
 
-    /// <summary>TCP X position in mm (Z-up world frame).</summary>
+    /// <summary>TCP X in the current BASE # (mm). Live = $POS_ACT; otherwise scene FK.</summary>
     public double TcpX { get => _tcpX; set => SetField(ref _tcpX, value); }
-    /// <summary>TCP Y position in mm.</summary>
+    /// <summary>TCP Y in the current BASE # (mm).</summary>
     public double TcpY { get => _tcpY; set => SetField(ref _tcpY, value); }
-    /// <summary>TCP Z position in mm.</summary>
+    /// <summary>TCP Z in the current BASE # (mm).</summary>
     public double TcpZ { get => _tcpZ; set => SetField(ref _tcpZ, value); }
-    /// <summary>TCP A rotation (Euler Z) in degrees -- flange orientation in ROBROOT.</summary>
+    /// <summary>TCP A (Euler Z) in the current BASE #, degrees.</summary>
     public double TcpA { get => _tcpA; set => SetField(ref _tcpA, value); }
-    /// <summary>TCP B rotation (Euler Y) in degrees.</summary>
+    /// <summary>TCP B (Euler Y) in the current BASE #, degrees.</summary>
     public double TcpB { get => _tcpB; set => SetField(ref _tcpB, value); }
-    /// <summary>TCP C rotation (Euler X) in degrees.</summary>
+    /// <summary>TCP C (Euler X) in the current BASE #, degrees.</summary>
     public double TcpC { get => _tcpC; set => SetField(ref _tcpC, value); }
+
+    /// <summary>Section header: TCP ACTUAL (BASE n).</summary>
+    public string TcpActualTitle
+        => KrlBaseIndex > 0 ? $"TCP ACTUAL (BASE {KrlBaseIndex})" : "TCP ACTUAL";
 
     // -- Flange readout (ROBROOT frame, from scene graph) ---------------------
 
@@ -559,10 +712,21 @@ public sealed class RobotPanelViewModel : ViewModelBase
                     KrlToolIndex = krl;
                     OnPropertyChanged(nameof(KrlToolIndex));
                 }
-                OnToolSelected?.Invoke(_toolLibrary[value]);
-                LoadToolTcpEdit(_toolLibrary[value]);
+                ApplyCurrentToolSelection();
             }
         }
+    }
+
+    /// <summary>
+    /// Mount + load TOOL_DATA for the current library row even if the combo index
+    /// did not change (T1 is the cell default, so SelectedToolIndex is already 0).
+    /// </summary>
+    public void ApplyCurrentToolSelection()
+    {
+        if ((uint)_selectedToolIndex >= (uint)_toolLibrary.Count) return;
+        var t = _toolLibrary[_selectedToolIndex];
+        OnToolSelected?.Invoke(t);
+        LoadToolTcpEdit(t);
     }
 
     /// <summary>
@@ -585,8 +749,10 @@ public sealed class RobotPanelViewModel : ViewModelBase
         }
         _selectedToolIndex = def;
         OnPropertyChanged(nameof(SelectedToolIndex));
+        // Setter did not fire (backing field). Still mount TOOL_DATA — T1 is the
+        // cell default, so skipping this left the viewport triad on the flange.
         if (tools.Count > 0)
-            LoadToolTcpEdit(tools[def]);
+            ApplyCurrentToolSelection();
     }
 
     // -- TCP offset editing -------------------------------------------------------
@@ -602,6 +768,40 @@ public sealed class RobotPanelViewModel : ViewModelBase
     public double EditTcpC { get => _editTcpC; set { if (SetField(ref _editTcpC, value)) FireTcpEdited(); } }
 
     internal Action<double, double, double, double, double, double>? OnTcpOffsetEdited { get; set; }
+
+    // -- Tool axis convention (display triad only) -----------------------------
+
+    public IReadOnlyList<ToolAxisConventionOption> ToolAxisConventionOptions { get; } =
+        ToolAxisConventionOption.All;
+
+    private ToolAxisConventionOption _selectedToolAxisConvention = ToolAxisConventionOption.Default;
+
+    /// <summary>Which taught tool axis is drawn as forward (away from the flange).</summary>
+    public ToolAxisConventionOption SelectedToolAxisConvention
+    {
+        get => _selectedToolAxisConvention ?? ToolAxisConventionOption.Default;
+        set
+        {
+            var next = value ?? ToolAxisConventionOption.Default;
+            if (!SetField(ref _selectedToolAxisConvention, next)) return;
+            OnPropertyChanged(nameof(SelectedToolAxisConventionIndex));
+            OnToolAxisConventionChanged?.Invoke(next.Kind);
+        }
+    }
+
+    /// <summary>ComboBox index twin of <see cref="SelectedToolAxisConvention"/> (avoids Avalonia SelectedItem nulls).</summary>
+    public int SelectedToolAxisConventionIndex
+    {
+        get => (int)SelectedToolAxisConvention.Kind;
+        set
+        {
+            var opt = ToolAxisConventionOption.All.FirstOrDefault(o => (int)o.Kind == value)
+                      ?? ToolAxisConventionOption.Default;
+            SelectedToolAxisConvention = opt;
+        }
+    }
+
+    internal Action<ToolAxisConvention>? OnToolAxisConventionChanged { get; set; }
 
     private void FireTcpEdited()
     {
@@ -672,14 +872,16 @@ public sealed class RobotPanelViewModel : ViewModelBase
                 KrlToolIndex = _krlToolIndices[value];
                 OnPropertyChanged(nameof(KrlToolIndex));
 
-                // Sync the viewport tool so the TCP gizmo updates to match the selected KRL tool.
+                // Always apply TOOL_DATA for this TOOL #. Skipping when the library
+                // index is already T1 left the triad at the flange (offset never mounted).
                 for (int i = 0; i < _toolLibrary.Count; i++)
                 {
-                    if (_toolLibrary[i].KrlIndex == KrlToolIndex && i != _selectedToolIndex)
-                    {
+                    if (_toolLibrary[i].KrlIndex != KrlToolIndex) continue;
+                    if (i != _selectedToolIndex)
                         SelectedToolIndex = i;
-                        break;
-                    }
+                    else
+                        ApplyCurrentToolSelection();
+                    break;
                 }
             }
         }
@@ -695,6 +897,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
             {
                 KrlBaseIndex = _krlBaseIndices[value];
                 OnPropertyChanged(nameof(KrlBaseIndex));
+                OnPropertyChanged(nameof(TcpActualTitle));
             }
         }
     }
@@ -725,28 +928,49 @@ public sealed class RobotPanelViewModel : ViewModelBase
             KrlBaseOptions.Add($"{b.Index}: {b.Name}");
         }
 
-        // Prefer the cell's designated default tool (e.g. LFAM 3 → HV Extruder / TOOL_NO 1)
-        // so each cell exports with its intended KRL tool. Falls back to the caller's current
-        // selection, then the lowest-index tool. Called only on cell swap, so honoring the
-        // cell default here is correct (it doesn't override a mid-session dropdown pick).
+        // Prefer the caller's current TOOL # (workspace restore, live picker).
+        // Fall back to the cell default (LFAM 3 Extruder) only when nothing is selected yet.
         int defaultKrlTool = tools.FirstOrDefault(t => t.Default && t.KrlIndex > 0)?.KrlIndex ?? 0;
-        int wantToolIndex  = defaultKrlTool > 0 ? defaultKrlTool : currentToolIndex;
-        var ti = _krlToolIndices.IndexOf(wantToolIndex);
-        _krlToolSelectedIndex = ti >= 0 ? ti : 0;
-        OnPropertyChanged(nameof(KrlToolSelectedIndex));
-        if (_krlToolIndices.Count > 0)
+        int wantToolIndex  = currentToolIndex > 0 ? currentToolIndex
+                           : defaultKrlTool > 0   ? defaultKrlTool
+                           : 0;
+        int wantBaseIndex  = currentBaseIndex > 0 ? currentBaseIndex : 0;
+
+        // Reset so SelectKrlFrames' SelectedIndex setters always fire (and remount).
+        _krlToolSelectedIndex = -1;
+        _krlBaseSelectedIndex = -1;
+        if (wantToolIndex > 0 || wantBaseIndex > 0)
+            SelectKrlFrames(wantToolIndex, wantBaseIndex);
+        else if (_krlToolIndices.Count > 0)
+            KrlToolSelectedIndex = 0;
+    }
+
+    /// <summary>
+    /// Restore ROBOT CELL TOOL # / BASE # after a workspace open. No-ops missing
+    /// indices so a stale saved number cannot blank the dropdowns.
+    /// </summary>
+    public void SelectKrlFrames(int toolIndex, int baseIndex)
+    {
+        if (toolIndex > 0)
         {
-            KrlToolIndex = _krlToolIndices[Math.Max(0, _krlToolSelectedIndex)];
-            OnPropertyChanged(nameof(KrlToolIndex));
+            int ti = _krlToolIndices.IndexOf(toolIndex);
+            if (ti >= 0)
+            {
+                if (ti == _krlToolSelectedIndex)
+                    _krlToolSelectedIndex = -1;
+                KrlToolSelectedIndex = ti;
+            }
         }
 
-        var bi = _krlBaseIndices.IndexOf(currentBaseIndex);
-        _krlBaseSelectedIndex = bi >= 0 ? bi : 0;
-        OnPropertyChanged(nameof(KrlBaseSelectedIndex));
-        if (_krlBaseIndices.Count > 0)
+        if (baseIndex > 0)
         {
-            KrlBaseIndex = _krlBaseIndices[Math.Max(0, _krlBaseSelectedIndex)];
-            OnPropertyChanged(nameof(KrlBaseIndex));
+            int bi = _krlBaseIndices.IndexOf(baseIndex);
+            if (bi >= 0)
+            {
+                if (bi == _krlBaseSelectedIndex)
+                    _krlBaseSelectedIndex = -1;
+                KrlBaseSelectedIndex = bi;
+            }
         }
     }
 
@@ -791,6 +1015,24 @@ public sealed class RobotPanelViewModel : ViewModelBase
         BaseX = Math.Round(x, 2);
         BaseY = Math.Round(y, 2);
         BaseZ = Math.Round(z, 2);
+    }
+
+    /// <summary>
+    /// Writes TCP ACTUAL in the current BASE (scene world minus ROBROOT minus BASE_DATA).
+    /// No-op while live-synced — <c>TcpUpdated</c> already has controller $POS_ACT.
+    /// </summary>
+    public void SetTcpActualFromSceneWorld(
+        double worldX, double worldY, double worldZ,
+        double aDeg, double bDeg, double cDeg,
+        double robrootX, double robrootY, double robrootZ)
+    {
+        if (IsConnected) return;
+        TcpX = Math.Round(worldX - robrootX - BaseX, 1);
+        TcpY = Math.Round(worldY - robrootY - BaseY, 1);
+        TcpZ = Math.Round(worldZ - robrootZ - BaseZ, 1);
+        TcpA = Math.Round(aDeg, 2);
+        TcpB = Math.Round(bDeg, 2);
+        TcpC = Math.Round(cDeg, 2);
     }
 
     public ICommand GoToBedCenterCommand { get; }

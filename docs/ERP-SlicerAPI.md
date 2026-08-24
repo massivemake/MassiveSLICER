@@ -2,12 +2,36 @@
 
 What the slicer client (MassiveSLICER, `src/MassiveSlicer.App/Erp/`) calls, what it
 sends, and what it still needs the ERP to ship. Verified against
-`https://lab.massivemake.com/api/slicer/v1` on 2026-07-07.
+`https://lab.massivemake.com/api/slicer/v1` on 2026-07-07; mill-tools + login
+re-verified 2026-08-17.
 
-Auth: `Authorization: Bearer msl_…` on every request (tokens from ERP Settings →
-Slicer Access). The slicer maps 401/403 to "token invalid or revoked" and any other
-non-2xx to a user-visible failure. It stores the token in local prefs only — never
-in shared `.mass` files.
+Auth: `Authorization: Bearer ***` on every request except `POST /login`.
+Tokens come from `POST /api/slicer/v1/login` (email + password; **live**) or
+ERP Settings → Slicer Access. The slicer maps 401/403 to a human-readable
+failure. Token, email, and password stay in local prefs only — never in shared
+`.mass` files.
+
+## Needed next / recently added
+
+### POST /login  (live 2026-08-17)
+
+Password sign-in so shop PCs do not paste a Slicer Access token.
+
+```http
+POST /api/slicer/v1/login
+Content-Type: application/json
+
+{ "email": "thom@massivemake.com", "username": "thom@massivemake.com", "password": "…" }
+```
+
+200:
+
+```json
+{ "token": "msl_…", "email": "thom@massivemake.com", "name": "Thom", "expiresAt": null }
+```
+
+401 wrong password (verified). Same token family as Settings → Slicer Access.
+Full Replit prompt: `docs/ERP-Login-API-Replit-Prompt.md`.
 
 ## Working today (live on production)
 
@@ -26,7 +50,32 @@ in shared `.mass` files.
   `elementNumber|element|number|no`, rev count from
   `revCount|revisionCount|revisions|currentRevCount|sliceCount`.
 
-## Needed next (slicer UI already ships these calls; production returns 404)
+## Needed next / recently added
+
+### POST /workspace-saves  (slicer ships this; Lab may 404 until it lands)
+
+Every successful `.mass` save posts metadata only (no file bytes):
+
+```json
+{
+  "at": "2026-08-15T20:00:00.000Z",
+  "path": "Projects/26-173 - …/06-Production Documents/job.mass",
+  "localPath": "Z:\\\\Projects\\\\26-173 - …\\\\06-Production Documents\\\\job.mass",
+  "bytes": 313560625,
+  "file": "job.mass",
+  "cell": "LFAM 3",
+  "host": "SHOP-PC",
+  "projectNumber": "26-173",
+  "elementId": "41"
+}
+```
+
+A 404 is expected until Lab adds the route. The slicer also appends the same record to:
+
+- `%AppData%/MassiveSlicer/workspace-saves.jsonl`
+- `{UnasProjectsRoot}/_slicer/workspace-saves.jsonl` (usually `Projects/_slicer/workspace-saves.jsonl`)
+
+This is **not** a slice revision — use `POST /elements/{id}/slices` / Send Slice for that.
 
 ### 1. POST /projects/{id}/elements — and — POST /leads/{id}/elements
 Create an element from the slicer (the dock offers this when a project/lead has no
@@ -155,6 +204,59 @@ prints the authoritative breakdown. Slice registration also now sends numeric
 quantity 1, no finishing) — the permanent cost record for that rev. The slicer
 shows the client price in the dock status and console after `sendslice`, and
 uses the echoed `pricingVersion` to detect stale configs.
+
+## Shared print + material + mill-tool libraries (live 2026-08-17)
+
+Desktop pulls and pushes the team libraries over the same bearer token.
+HTTP 404 still means "stay local" if a route is missing.
+
+### GET /presets-bundle
+
+Returns `{ "version", "printPresets": [...], "materialPresets": [...], "millTools": [...], "krlPostProcess"? }`.
+Each list entry: `{ "id", "updatedAt?", "updatedBy?", "payload": { …desktop record… } }`.
+`millTools` is live; the slicer also calls `GET /mill-tools` if the array is empty.
+`krlPostProcess` is the **singleton team default** for KRL Post-Processing (not a list). Lab has not shipped it yet (404 / omit = stay local).
+
+### GET/POST/PUT/DELETE /print-presets[/{id}]
+### GET/POST/PUT/DELETE /material-presets[/{id}]
+### GET/POST/PUT/DELETE /mill-tools[/{id}]
+
+Verified 2026-08-17 on lab.massivemake.com:
+
+- `GET /mill-tools` → 200 `{ "items": [...], "version" }`
+- `GET /presets-bundle` includes `millTools` (same rows as list)
+- `POST /mill-tools` → 201 `{ id: "mt_…", payload, updatedAt, updatedBy }`
+- `PUT /mill-tools/:id` → 200 (update verb; CORS lists PATCH but PATCH is 404)
+- `DELETE /mill-tools/:id` → 204
+- No bearer → 401
+
+POST/PUT body: `{ "payload": { … } }`. Response is the same entry shape as list items.
+`payload.Type` / `SpindleDirection` may be numbers (0/1) or enum names — both deserialize.
+
+Slicer behavior:
+- On connect: `GET /presets-bundle` (falls back to the list endpoints) → merge
+  into local AppData (match by `id` then by `Name`; mill bits also match desktop `Id`)
+  → POST any local-only rows.
+- On Save preset / save material / save mill library: POST if no `ErpId`, else PUT.
+  Mill delete from the library dialog also DELETEs the ERP row when it has an `ErpId`.
+- Console: `erp presets` or `erp millbits` re-runs the pull.
+- `payload` is opaque JSON matching `PrintPresetRecord` / `MaterialPreset` / `MillBitTool`.
+- Mill bits also stay in `%AppData%/MassiveSlicer/mill_tools.json`.
+
+### GET/PUT /krl-postprocess  (slicer ships this; Lab 404 until it lands)
+
+One org-wide factory recipe (Rules + Header + Footer + Code Injector).
+
+- `GET` → `{ id, updatedAt, updatedBy, payload }` or **404** (no default yet)
+- `PUT` body `{ "payload": { …KrlPostProcessSettings… } }` → 200 same shape
+- On connect: GET (fallback `presets-bundle.krlPostProcess`). Lab wins when present.
+- Publish is explicit (dialog **Publish to Lab** / `krlpost publish`). Never auto-overwrite Lab on connect.
+- Import/Export are local JSON (`kind: MassiveSLICER.KrlPostProcess`).
+
+See `docs/ERP-KrlPostProcess-API-Replit-Prompt.md`.
+
+See `docs/ERP-Presets-API-Replit-Prompt.md` and
+`docs/ERP-MillTools-API-Replit-Prompt.md`.
 
 ## Slicer-side state (already shipped)
 

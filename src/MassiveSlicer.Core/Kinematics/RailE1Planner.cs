@@ -26,8 +26,12 @@ public static class RailE1Planner
         float homeAlong   = Along(robotHomeWorld, rail.Axis);
         float sign = rail.E1Sign == 0f ? 1f : rail.E1Sign;
         float ideal = sign * (targetAlong - homeAlong);
-        return ClampToAllowance(ideal, homeE1Mm, yPlusMm, yMinusMm, rail.MinMm, rail.MaxMm);
+        var (rMin, rMax) = JointLimitEnvelope.Inset(rail.MinMm, rail.MaxMm);
+        return ClampToAllowance(ideal, homeE1Mm, yPlusMm, yMinusMm, rMin, rMax);
     }
+
+    static (float Min, float Max) RailEnvelope(RobotRailCellConfig rail)
+        => JointLimitEnvelope.Inset(rail.MinMm, rail.MaxMm);
 
     public static float ClampToAllowance(
         float e1,
@@ -56,13 +60,14 @@ public static class RailE1Planner
         float yMinusMm,
         int gridCount = 9)
     {
-        float lo = MathF.Max(rail.MinMm, homeE1Mm - MathF.Max(0f, yMinusMm));
-        float hi = MathF.Min(rail.MaxMm, homeE1Mm + MathF.Max(0f, yPlusMm));
+        var (rMin, rMax) = RailEnvelope(rail);
+        float lo = MathF.Max(rMin, homeE1Mm - MathF.Max(0f, yMinusMm));
+        float hi = MathF.Min(rMax, homeE1Mm + MathF.Max(0f, yPlusMm));
         if (lo > hi) (lo, hi) = (hi, lo);
 
         gridCount = Math.Clamp(gridCount, 3, 21);
         var set = new HashSet<float>();
-        set.Add(ClampToAllowance(homeE1Mm, homeE1Mm, yPlusMm, yMinusMm, rail.MinMm, rail.MaxMm));
+        set.Add(ClampToAllowance(homeE1Mm, homeE1Mm, yPlusMm, yMinusMm, rMin, rMax));
         set.Add(IdealE1(worldPos, robotHomeWorld, rail, homeE1Mm, yPlusMm, yMinusMm));
 
         for (int i = 0; i < gridCount; i++)
@@ -160,6 +165,7 @@ public static class RailE1Planner
         int n = worldPoints.Count;
         var e1 = new float[n];
         if (n == 0) return e1;
+        var (rMin, rMax) = RailEnvelope(rail);
 
         float prev = homeE1Mm;
         for (int i = 0; i < n; i++)
@@ -169,7 +175,7 @@ public static class RailE1Planner
                 prev, preferredHorizReachMm, inWorkspace, gridCount);
             // Blend toward pick so rail doesn't step-jump every bead
             float blended = SmoothToward(prev, pick, smoothBlend);
-            e1[i] = ClampToAllowance(blended, homeE1Mm, yPlusMm, yMinusMm, rail.MinMm, rail.MaxMm);
+            e1[i] = ClampToAllowance(blended, homeE1Mm, yPlusMm, yMinusMm, rMin, rMax);
             prev = e1[i];
         }
 
@@ -179,11 +185,11 @@ public static class RailE1Planner
             for (int i = 1; i < n; i++)
                 e1[i] = ClampToAllowance(
                     0.65f * e1[i] + 0.35f * e1[i - 1],
-                    homeE1Mm, yPlusMm, yMinusMm, rail.MinMm, rail.MaxMm);
+                    homeE1Mm, yPlusMm, yMinusMm, rMin, rMax);
             for (int i = n - 2; i >= 0; i--)
                 e1[i] = ClampToAllowance(
                     0.65f * e1[i] + 0.35f * e1[i + 1],
-                    homeE1Mm, yPlusMm, yMinusMm, rail.MinMm, rail.MaxMm);
+                    homeE1Mm, yPlusMm, yMinusMm, rMin, rMax);
         }
 
         return e1;

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Windows.Input;
 using Avalonia;
 using Avalonia.Threading;
@@ -165,8 +165,16 @@ public sealed class MainWindowViewModel : ViewModelBase
         Viewport.Erp.FindWorkspaceFiles = FindErpWorkspaceFiles;
 
         Viewport.Erp.OpenWorkspaceFile  = p => OpenWorkspace(p);
+        Viewport.ImportKrlFile          = p => ImportKrlToolpath(p);
 
         Viewport.Erp.BuildSlicePayloadAsync = BuildErpSlicePayloadAsync;
+
+        // Shared print + material presets on lab.massivemake.com (pull on connect, push on save).
+        RightPanel.Presets.PushToErp = rec => Viewport.Erp.PushPrintPresetInBackground(rec);
+        RightPanel.Subtractive.PushBitToErp = bit => Viewport.Erp.PushMillBitInBackground(bit);
+        RightPanel.Subtractive.DeleteBitFromErp = bit => Viewport.Erp.DeleteMillBitInBackground(bit);
+        Viewport.Erp.PresetsLibraryChanged += ReloadPresetLibrariesFromDisk;
+        Viewport.Erp.KrlPostProcessPulled += ApplyLabKrlPostProcess;
         Toolbar.SetRecentWorkspaces(AppPreferences.RecentWorkspaces);
         Toolbar.OpenRecentRequested += (_, recentPath) =>
         {
@@ -285,6 +293,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Restore all persisted settings before subscribing so saves don't fire
         // during initialisation.
         SyncViewportFromPrefs();
+        // Factory / Lab recipe wins over machine prefs and .mass flags for KRL
+        // Post-Processing (header, footer, Robot Mode, Travel Moves).
+        RightPanel.Additive.KrlPostProcess.LoadFrom(KrlPostProcessLoader.Load());
         PersistSettings();
         _lastCommittedPrefsJson = CapturePrefsJson();
 
@@ -328,7 +339,18 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             if (e.PropertyName is nameof(ViewportViewModel.SliceStatusMessage))
             {
-                if (Viewport.IsSlicing)
+                if (Viewport.SliceStatusIsError && !string.IsNullOrWhiteSpace(Viewport.SliceStatusMessage))
+                {
+                    // The footer banner auto-dismisses after a few seconds, so the console
+                    // is the durable record — log unconditionally. Previously this only
+                    // happened via LogProgressDetail below, i.e. when a slice happened to
+                    // be running; robot validation finishes *after* IsSlicing goes false,
+                    // so its warnings never reached the console except by race.
+                    Console.LogError(Viewport.SliceStatusMessage);
+                    StatusBar.OperationFeedback = Viewport.SliceStatusMessage;
+                    _lastProgressLogMessage = Viewport.SliceStatusMessage;
+                }
+                else if (Viewport.IsSlicing)
                 {
                     LogProgressDetail(Viewport.SliceStatusMessage);
                     UpdateBusy(Viewport.SliceStatusMessage);
@@ -358,6 +380,26 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             if (e.PropertyName is nameof(AdditiveSettingsViewModel.SelectedPresetIndex))
                 return;
+
+            if (e.PropertyName is nameof(AdditiveSettingsViewModel.IsAutoOrientRunning))
+            {
+                if (RightPanel.Additive.IsAutoOrientRunning)
+                    ShowBusy("Auto Orient", "Searching orientations…");
+                else
+                    HideBusy();
+                return;
+            }
+            if (e.PropertyName is nameof(AdditiveSettingsViewModel.AutoOrientProgressPercent)
+                                or nameof(AdditiveSettingsViewModel.AutoOrientStatusDetail))
+            {
+                if (RightPanel.Additive.IsAutoOrientRunning)
+                {
+                    UpdateBusyProgress(RightPanel.Additive.AutoOrientProgressPercent);
+                    UpdateBusy(RightPanel.Additive.AutoOrientStatusDetail);
+                }
+                return;
+            }
+
             OnSettingsChanged();
         };
         RightPanel.Scan.PropertyChanged          += (_, e) =>
@@ -500,11 +542,22 @@ public sealed class MainWindowViewModel : ViewModelBase
             _cellSceneReady = true;
             var cell = Viewport.ActiveCell;
             if (cell is not null)
+            {
+                int wantTool = robot.KrlToolIndex;
+                int wantBase = robot.KrlBaseIndex;
+                if (_pendingWorkspaceRestore is { } pending)
+                {
+                    wantTool = pending.Doc.UiSession?.KrlToolIndex
+                               ?? pending.Doc.Settings.ToolDataIndex;
+                    wantBase = pending.Doc.UiSession?.KrlBaseIndex
+                               ?? pending.Doc.Settings.BaseDataIndex;
+                }
                 robot.SetKrlFrameOptions(
                     cell.EffectiveTools,
                     cell.KrlBases,
-                    RightPanel.Scan.ToolDataIndex,
-                    RightPanel.Scan.BaseDataIndex);
+                    wantTool,
+                    wantBase);
+            }
 
             // Show/hide the Scan tab based on whether this cell has a scanner.
             RightPanel.HasScanTab = cell?.ScanToolName is not null;
@@ -526,6 +579,9 @@ public sealed class MainWindowViewModel : ViewModelBase
                     if (idx >= 0) robot.SelectedToolIndex = idx;
                 }
             }
+
+            if (_pendingWorkspaceRestore is { } pendingWf)
+                RestoreLfam3WorkflowFromWorkspace(pendingWf.Doc);
 
             SyncLfam3WorkflowSidebar();
             SyncKrlFrameIndicesToActiveTab();
@@ -626,10 +682,11 @@ public sealed class MainWindowViewModel : ViewModelBase
                 outDir, meta,
                 msg => Dispatcher.UIThread.Post(() => scan.ScanStatus = msg)));
 
-            scan.ScanStatus = $"Meshing {result.ValidPointCount:N0} points...";
+            scan.ScanStatus = result.ColorsRgba is { Length: > 0 }
+                ? $"Meshing {result.ValidPointCount:N0} colored points..."
+                : $"Meshing {result.ValidPointCount:N0} points...";
             var name = $"Scan {DateTime.Now:HH-mm-ss}";
-            var node = await Task.Run(() => PointCloudMesher.Build(
-                result.PointsXYZ, result.Width, result.Height, name));
+            var node = await Task.Run(() => PointCloudMesher.Build(result, name));
 
             if (node is null)
             {
@@ -777,7 +834,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             var status = await client.QueryPathStatusAsync();
             if (!status.Reachable)
             {
-                string msg = $"MassiveDRIVE unreachable ({status.Detail}) — start massivedrive on 233.";
+                string msg = $"MassiveDRIVE unreachable ({status.Detail}) — start massivedrive on {url}.";
                 setStatus?.Invoke(msg);
                 Console.LogError($"{logPrefix} {msg}");
                 return false;
@@ -1975,10 +2032,11 @@ public sealed class MainWindowViewModel : ViewModelBase
                 return;
             }
 
-            scan.ScanStatus = $"Meshing {result.ValidPointCount:N0} points...";
+            scan.ScanStatus = result.ColorsRgba is { Length: > 0 }
+                ? $"Meshing {result.ValidPointCount:N0} colored points..."
+                : $"Meshing {result.ValidPointCount:N0} points...";
             var nodeName = $"Scan {DateTime.Now:HH-mm-ss}";
-            var node = await Task.Run(() => PointCloudMesher.Build(
-                result.PointsXYZ, result.Width, result.Height, nodeName));
+            var node = await Task.Run(() => PointCloudMesher.Build(result, nodeName));
             if (node is null)
             {
                 scan.ScanStatus = "Scan contained no meshable points.";
@@ -2215,7 +2273,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         var src = await ExportSrcToPrintFilesAsync();
         if (src is { } s2)
         {
-            if (ToUnasShareRelative(s2.Path) is { } krlRel)
+            if (ToUnasShareRelative(s2.Path, AppPreferences.UnasProjectsRoot) is { } krlRel)
                 files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("krl", krlRel, new System.IO.FileInfo(s2.Path).Length));
         }
         else
@@ -2233,7 +2291,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 string previewPath = System.IO.Path.Combine(
                     dir, System.IO.Path.GetFileNameWithoutExtension(massPath) + " preview.png");
                 await System.IO.File.WriteAllBytesAsync(previewPath, png);
-                if (ToUnasShareRelative(previewPath) is { } previewRel)
+                if (ToUnasShareRelative(previewPath, AppPreferences.UnasProjectsRoot) is { } previewRel)
                     files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("preview", previewRel, png.Length));
             }
         }
@@ -2242,7 +2300,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.Log($"[erp] preview render failed: {ex.Message}");
         }
 
-        if (ToUnasShareRelative(massPath) is { } massRel)
+        if (ToUnasShareRelative(massPath, AppPreferences.UnasProjectsRoot) is { } massRel)
             files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("workspace", massRel, new System.IO.FileInfo(massPath).Length));
 
         var add = RightPanel.Additive;
@@ -2270,12 +2328,12 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         // srcPath is the NAS copy under 3D Print Files/Rev N/ when the workspace is
         // saved on the share; reference it directly.
-        if (ToUnasShareRelative(srcPath) is { } krlRel && System.IO.File.Exists(srcPath))
+        if (ToUnasShareRelative(srcPath, AppPreferences.UnasProjectsRoot) is { } krlRel && System.IO.File.Exists(srcPath))
             files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("krl", krlRel, new System.IO.FileInfo(srcPath).Length));
 
         if (AppPreferences.LastWorkspacePath is { Length: > 0 } massPath && System.IO.File.Exists(massPath))
         {
-            if (ToUnasShareRelative(massPath) is { } massRel)
+            if (ToUnasShareRelative(massPath, AppPreferences.UnasProjectsRoot) is { } massRel)
                 files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("workspace", massRel, new System.IO.FileInfo(massPath).Length));
         }
 
@@ -2359,13 +2417,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <c>/Volumes/&lt;share&gt;/rest…</c> → <c>rest…</c> — the path the ERP's UNAS API
     /// resolves against the same share. Null for local (non-mounted) paths.
     /// </summary>
-    internal static string? ToUnasShareRelative(string path)
-    {
-        var parts = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length > 2 && parts[0] == "Volumes"
-            ? string.Join('/', parts.Skip(2))
-            : null;
-    }
+    internal static string? ToUnasShareRelative(string path, string? unasProjectsRoot = null)
+        => UnasPaths.ToShareRelative(path, unasProjectsRoot);
 
     /// <summary>Saves a full-window PNG under <c>%LOCALAPPDATA%/MassiveSlicer/screenshots/</c> and returns the path.</summary>
     public async Task<string> SaveViewportScreenshotAsync()
@@ -2438,8 +2491,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                     msg => Dispatcher.UIThread.Post(() => scan.ScanStatus = msg)));
 
                 var name = $"Scan {fi.LastWriteTime:HH-mm-ss}";
-                var node = await Task.Run(() => PointCloudMesher.Build(
-                    result.PointsXYZ, result.Width, result.Height, name));
+                var node = await Task.Run(() => PointCloudMesher.Build(result, name));
                 if (node is null)
                 {
                     fail++;
@@ -3503,11 +3555,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         Console.Log("[workspace] New workspace — scene cleared, cell reloaded.");
     }
 
-    /// <summary>Imports a model file into the scene and logs material diagnostics.</summary>
     /// <summary>
     /// Imports a KUKA KRL (.src) program's Cartesian motion as a scrubbable toolpath in the outliner.
-    /// Positions are placed in world space using the active cell's robroot + base offset (inverse of
-    /// the exporter). Logs success/failure to the console.
+    /// <c>{X 0, Y 0, Z 0}</c> is the cell <c>bed.origin</c> (Print Bed 0,0,0) — not ROBROOT + BASE_DATA.
     /// </summary>
     public bool ImportKrlToolpath(string path)
     {
@@ -3523,12 +3573,13 @@ public sealed class MainWindowViewModel : ViewModelBase
             var text = System.IO.File.ReadAllText(path);
             var off  = System.Numerics.Vector3.Zero;
             if (Viewport.ActiveCell is { } cell)
-                off = new System.Numerics.Vector3(
-                    cell.Robot.WorldPosition.X + cell.Bed.BaseData.X,
-                    cell.Robot.WorldPosition.Y + cell.Bed.BaseData.Y,
-                    cell.Robot.WorldPosition.Z + cell.Bed.BaseData.Z);
+            {
+                // Drawn Print Bed 0,0,0 (blue BASE marker), not ROBROOT+BASE Z.
+                var m = cell.Bed.BaseMarkerWorld(cell.Robot.WorldPosition);
+                off = new System.Numerics.Vector3(m.X, m.Y, m.Z);
+            }
             else
-                Console.Log("[krl] No active cell â€” placing the toolpath in raw KRL base coordinates.");
+                Console.Log("[krl] No active cell — placing the toolpath in raw KRL base coordinates.");
 
             var tp = KrlToolpathParser.Parse(text, off, out int moves);
             if (moves == 0)
@@ -4020,6 +4071,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 : $"[workspace] Saved {modelCount} model(s) and settings to {path}");
             if (RightPanel.Additive.SelectedPreset is { } mp)
                 Console.Log($"[workspace] Material preset '{mp.Name}' saved with the workspace.");
+            RecordWorkspaceSaveForLab(path);
         }
         catch (Exception ex)
         {
@@ -4033,6 +4085,22 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     /// <summary>Fire-and-forget wrapper for callers that cannot await.</summary>
     public void SaveWorkspace(string path) => _ = SaveWorkspaceAsync(path);
+
+    /// <summary>
+    /// Appends a JSONL save record (AppData + UNAS <c>Projects/_slicer/</c>) and
+    /// pings MassiveLAB with the path when the workspace is attached.
+    /// </summary>
+    void RecordWorkspaceSaveForLab(string path)
+    {
+        var root = AppPreferences.UnasProjectsRoot;
+        var rec  = WorkspaceSaveLog.Build(path, root, Viewport.ActiveCell?.Name, Viewport.Erp.Attachment);
+        var dest = WorkspaceSaveLog.Append(rec, root);
+        string where = rec.UnasPath ?? path;
+        Console.Log(dest.Count > 0
+            ? $"[workspace] Logged save -> {where}"
+            : $"[workspace] Saved at {where} (save log write failed)");
+        _ = Viewport.Erp.NotifyWorkspaceSavedAsync(rec);
+    }
 
     /// <summary>
     /// Suggested filename stem for the Save As dialog (last save or default).
@@ -4074,14 +4142,22 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         CopyPreferences(doc.Settings);
         SyncViewportFromPrefs();
-        // UiSession can override Settings for helper visibility (saved after prefs snapshot
-        // quirks; older mass files leave this null and keep the Settings value).
+        // Settings-menu / Lab recipe owns KRL post-process — a .mass must not
+        // restore stale Robot Mode / Travel Moves / header over it.
+        RightPanel.Additive.KrlPostProcess.LoadFrom(KrlPostProcessLoader.Load());
+        if (doc.Settings.Mill is { } millSnap)
+            Console.Log($"[workspace] Restored mill {millSnap.SelectedOperation} / {millSnap.AreaSelectTool}.");
         if (doc.UiSession?.XBracingShowHelper is bool showXHelper)
             RightPanel.Additive.XBracingShowHelper = showXHelper;
         RestoreMaterialPresetSelection(doc.Settings.SelectedMaterialPresetName,
             keepCurrentWhenMissing: true);
 
-        if (Enum.TryParse<RightPanelTab>(doc.RightPanelTab, out var tab))
+        // Workflow + TOOL # before models so mesh/toolpath select cannot snap back to PRINT / T1.
+        RestoreKrlFramesFromWorkspace(doc);
+        RestoreLfam3WorkflowFromWorkspace(doc);
+
+        if (Enum.TryParse<RightPanelTab>(doc.RightPanelTab, out var tab)
+            && tab is RightPanelTab.Settings or RightPanelTab.Toolpath)
             RightPanel.ActiveTab = tab;
 
         Viewport.Erp.RestoreAttachment(doc.Erp);
@@ -4101,6 +4177,11 @@ public sealed class MainWindowViewModel : ViewModelBase
             robotVm.A4 = rj[3]; robotVm.A5 = rj[4]; robotVm.A6 = rj[5];
             robotVm.E1 = rj[6];
         }
+
+        // Cell swap always snaps TOOL # to the cell default (LFAM 3 = T1). Re-apply
+        // the saved ROBOT CELL pickers so the file opens the way it was closed.
+        RestoreKrlFramesFromWorkspace(doc);
+        RestoreLfam3WorkflowFromWorkspace(doc);
 
         Viewport.RestoreSimCameraKeyframes(doc.UiSession?.SimCameraKeyframes);
 
@@ -4140,6 +4221,65 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Re-select ROBOT CELL TOOL # / BASE # from the .mass file. UiSession wins
+    /// (the live pickers); Settings.ToolDataIndex is the fallback for older files.
+    /// </summary>
+    private void RestoreKrlFramesFromWorkspace(WorkspaceDocument doc)
+    {
+        var robot = RightPanel.Settings.Robot;
+        int tool = doc.UiSession?.KrlToolIndex ?? doc.Settings.ToolDataIndex;
+        int bse  = doc.UiSession?.KrlBaseIndex ?? doc.Settings.BaseDataIndex;
+        if (tool <= 0 && bse <= 0) return;
+        robot.SelectKrlFrames(tool, bse);
+        Console.Log($"[workspace] Restored TOOL #{robot.KrlToolIndex}  BASE #{robot.KrlBaseIndex}.");
+    }
+
+    void RestoreLfam3WorkflowFromWorkspace(WorkspaceDocument doc)
+    {
+        var session = doc.UiSession;
+        int tool = session?.KrlToolIndex ?? doc.Settings.ToolDataIndex;
+        Viewport.RestoreLfam3Workflow(
+            session?.Lfam3WorkflowPhase,
+            session?.HasPrePrintScanStep,
+            tool,
+            session?.MountedToolName,
+            doc.RightPanelTab);
+        if (Viewport.IsMillStepActive)
+            Console.Log($"[workspace] Restored MILL workflow (TOOL #{RightPanel.Settings.Robot.KrlToolIndex}).");
+    }
+
+    /// <summary>
+    /// Reloads print + material libraries from AppData after an ERP pull. Preserves the
+    /// selected material by name when it still exists.
+    /// </summary>
+    private void ReloadPresetLibrariesFromDisk()
+    {
+        var selectedName = RightPanel.Additive.SelectedPreset?.Name;
+        RightPanel.Additive.MaterialPresets.Clear();
+        foreach (var preset in MaterialPresetsLoader.Load())
+            RightPanel.Additive.MaterialPresets.Add(preset);
+        if (selectedName is { } name)
+        {
+            int idx = RightPanel.Additive.MaterialPresets
+                .Select((p, i) => (p, i))
+                .FirstOrDefault(t => t.p.Name == name, (null!, -1)).i;
+            RightPanel.Additive.SelectedPresetIndex = idx >= 0 ? idx : -1;
+        }
+        RightPanel.Presets.ReloadFromDiskAfterErpSync();
+        RightPanel.Subtractive.ReloadBitLibrary();
+        Console.Log("[erp] local preset + mill-tool libraries reloaded from ERP sync");
+    }
+
+    /// <summary>Lab team default is the factory recipe — apply Rules + Header + Footer.</summary>
+    private void ApplyLabKrlPostProcess(KrlPostProcessSettings settings)
+    {
+        RightPanel.Additive.KrlPostProcess.LoadFrom(settings);
+        PersistSettings();
+        PreferencesLoader.Save(AppPreferences);
+        Console.Log("[erp] applied Lab KRL post-process default (Rules + Header + Footer)");
     }
 
     private void OnSettingsChanged()
@@ -4283,6 +4423,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.SsPreTravelWaitSec      = copy.SsPreTravelWaitSec;
         live.SsResumePrimePercent    = copy.SsResumePrimePercent;
         live.DigitalStartStopEnabled = copy.DigitalStartStopEnabled;
+        live.RobotModeEnabled        = copy.RobotModeEnabled;
+        live.ExtruderAirEnabled      = copy.ExtruderAirEnabled;
         live.ResumeRampEnabled         = copy.ResumeRampEnabled;
         live.ResumeRampStartSpeed      = copy.ResumeRampStartSpeed;
         live.ResumeRampStartRpmPercent = copy.ResumeRampStartRpmPercent;
@@ -4330,6 +4472,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
         live.BrimEnabled            = copy.BrimEnabled;
         live.BrimLoops              = copy.BrimLoops;
+        live.BrimSpeedMmS           = copy.BrimSpeedMmS;
+        live.BrimRpmPercent         = copy.BrimRpmPercent;
         live.XBracingEnabled        = copy.XBracingEnabled;
         live.XBracingDepthMm        = copy.XBracingDepthMm;
         live.XBracingDepthBottomMm  = copy.XBracingDepthBottomMm;
@@ -4366,6 +4510,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ExtrusionRpmOverridePercent = copy.ExtrusionRpmOverridePercent;
         live.PatternType            = copy.PatternType;
         live.PatternMapping         = copy.PatternMapping;
+        live.PatternScope           = copy.PatternScope;
         live.PatternWavelengthMm    = copy.PatternWavelengthMm;
         live.PatternAmplitude       = copy.PatternAmplitude;
         live.PatternFrequency       = copy.PatternFrequency;
@@ -4405,6 +4550,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ScanOutputDirectory    = copy.ScanOutputDirectory;
         live.ScanToolDataIndex      = copy.ScanToolDataIndex;
         live.ScanBaseDataIndex      = copy.ScanBaseDataIndex;
+        live.Mill                   = copy.Mill;
     }
 
     private void RestoreMaterialPresetSelection(
@@ -4542,6 +4688,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         scan.OutputDirectory = p.ScanOutputDirectory;
         scan.ToolDataIndex   = p.ScanToolDataIndex;
         scan.BaseDataIndex   = p.ScanBaseDataIndex;
+
+        if (p.Mill is { } mill)
+            RightPanel.Subtractive.ApplySidebar(mill);
     }
 
     /// <summary>
@@ -4595,6 +4744,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.BumpMultiPlanarStamp();
         add.BrimEnabled         = p.BrimEnabled;
         add.BrimLoops           = p.BrimLoops;
+        add.BrimSpeed           = p.BrimSpeedMmS;
+        add.BrimRpmPercent      = p.BrimRpmPercent;
         add.XBracingEnabled     = p.XBracingEnabled;
         add.XBracingDepthMm     = p.XBracingDepthMm;
         add.XBracingDepthBottomMm = p.XBracingDepthBottomMm;
@@ -4646,6 +4797,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.PatternType         = p.PatternType;
         add.PatternMapping      = add.PatternMappingOptions.Contains(p.PatternMapping)
             ? p.PatternMapping : "Wavelength (mm)";
+        add.PatternScope        = add.PatternScopeOptions.Contains(p.PatternScope)
+            ? p.PatternScope : "Everything";
         add.PatternWavelengthMm = p.PatternWavelengthMm;
         add.PatternAmplitude    = p.PatternAmplitude;
         add.PatternFrequency    = p.PatternFrequency;
@@ -4676,10 +4829,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.ExtrusionResumeWaitSec  = p.ExtrusionResumeWaitSec;
         add.SsPreTravelWaitSec      = p.SsPreTravelWaitSec;
         add.SsResumePrimePercent    = p.SsResumePrimePercent;
-        add.DigitalStartStopEnabled = p.DigitalStartStopEnabled;
-        // Ensure post-process header is Caracol URM (not LFAM $ANOUT MAT) when flag is on.
-        // SetField no-ops if value already matched, so always re-apply templates after load.
-        add.ApplyUrmPostProcessTemplates(p.DigitalStartStopEnabled);
+        add.ExtruderAirEnabled = p.ExtruderAirEnabled;
         add.ResumeRampEnabled         = p.ResumeRampEnabled;
         add.ResumeRampStartSpeed      = p.ResumeRampStartSpeed;
         add.ResumeRampStartRpmPercent = p.ResumeRampStartRpmPercent;
@@ -4749,6 +4899,16 @@ public sealed class MainWindowViewModel : ViewModelBase
         // the numbered workflow steps (Additive) stay up for all selections.
         if (Viewport.IsToolpathSelected)
         {
+            if (Viewport.ShowLfam3ToolPicker && Viewport.IsMillStepActive)
+            {
+                RightPanel.ActiveTab = RightPanelTab.Subtractive;
+                return;
+            }
+            if (Viewport.ShowLfam3ToolPicker && Viewport.IsVerifyScanStepActive && RightPanel.HasScanTab)
+            {
+                RightPanel.ActiveTab = RightPanelTab.Scan;
+                return;
+            }
             if (RightPanel.ShowAdditiveTabButton)
                 RightPanel.ActiveTab = RightPanelTab.Additive;
             return;
@@ -4756,11 +4916,23 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         if (!Viewport.HasMeshSelected)
         {
-            // Nothing selected: leave the toolpath-options view and show the workflow
-            // steps again (don't disturb Scan/Subtractive/Settings if those are active).
             if (RightPanel.ActiveTab == RightPanelTab.Toolpath && RightPanel.ShowAdditiveTabButton)
                 RightPanel.ActiveTab = RightPanelTab.Additive;
             return;
+        }
+
+        if (Viewport.ShowLfam3ToolPicker)
+        {
+            if (Viewport.IsMillStepActive)
+            {
+                RightPanel.ActiveTab = RightPanelTab.Subtractive;
+                return;
+            }
+            if (Viewport.IsVerifyScanStepActive && RightPanel.HasScanTab)
+            {
+                RightPanel.ActiveTab = RightPanelTab.Scan;
+                return;
+            }
         }
 
         if (RightPanel.ShowAdditiveTabButton)
@@ -4769,7 +4941,6 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // LFAM 3 phase gating hides Additive outside Print â€” use the active phase tab.
         if (!Viewport.ShowLfam3ToolPicker) return;
 
         if (Viewport.IsMillStepActive)
@@ -4837,12 +5008,13 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// Snapshots all auto-save eligible ViewModel state into <see cref="AppPreferences"/>
     /// and flushes to disk. Called on every relevant PropertyChanged event.
     /// </summary>
-    private void PersistSettings()
+    internal void PersistSettings()
     {
-        var p    = AppPreferences;
-        var vp   = Viewport;
-        var view = RightPanel.Settings.View;
-        var add  = RightPanel.Additive;
+        var p     = AppPreferences;
+        var vp    = Viewport;
+        var view  = RightPanel.Settings.View;
+        var add   = RightPanel.Additive;
+        var robot = RightPanel.Settings.Robot;
 
         // Viewport visibility & navigation
         p.ShowGrid              = vp.ShowGrid;
@@ -4915,6 +5087,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.MultiPlanarAxisX = add.MultiPlanarAxisX;
         p.BrimEnabled          = add.BrimEnabled;
         p.BrimLoops            = add.BrimLoops;
+        p.BrimSpeedMmS         = add.BrimSpeed;
+        p.BrimRpmPercent       = add.BrimRpmPercent;
         p.XBracingEnabled      = add.XBracingEnabled;
         p.XBracingDepthMm      = add.XBracingDepthMm;
         p.XBracingDepthBottomMm = add.XBracingDepthBottomMm;
@@ -4951,6 +5125,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ExtrusionRpmOverridePercent = add.ExtrusionRpmOverridePercent;
         p.PatternType          = add.PatternType;
         p.PatternMapping       = add.PatternMapping;
+        p.PatternScope         = add.PatternScope;
         p.PatternWavelengthMm  = add.PatternWavelengthMm;
         p.PatternAmplitude     = add.PatternAmplitude;
         p.PatternFrequency     = add.PatternFrequency;
@@ -4981,6 +5156,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.SsPreTravelWaitSec      = add.SsPreTravelWaitSec;
         p.SsResumePrimePercent    = add.SsResumePrimePercent;
         p.DigitalStartStopEnabled = add.DigitalStartStopEnabled;
+        p.RobotModeEnabled        = add.RobotModeEnabled;
+        p.ExtruderAirEnabled      = add.ExtruderAirEnabled;
         p.ResumeRampEnabled         = add.ResumeRampEnabled;
         p.ResumeRampStartSpeed      = add.ResumeRampStartSpeed;
         p.ResumeRampStartRpmPercent = add.ResumeRampStartRpmPercent;
@@ -5010,8 +5187,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.CurvedEnableRegionSplit    = add.CurvedEnableRegionSplit;
         p.CurvedBoundaryLowVertices  = add.BuildCurvedLowBoundaryList().ToList();
         p.CurvedBoundaryHighVertices = add.BuildCurvedHighBoundaryList().ToList();
-        p.ToolDataIndex    = add.ToolDataIndex;
-        p.BaseDataIndex    = add.BaseDataIndex;
+        p.ToolDataIndex    = robot.KrlToolIndex > 0 ? robot.KrlToolIndex : add.ToolDataIndex;
+        p.BaseDataIndex    = robot.KrlBaseIndex > 0 ? robot.KrlBaseIndex : add.BaseDataIndex;
         p.ToolheadA        = add.ToolheadA;
         p.ToolheadB        = add.ToolheadB;
         p.ToolheadC        = add.ToolheadC;
@@ -5033,6 +5210,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ScanOutputDirectory = scan.OutputDirectory;
         p.ScanToolDataIndex   = scan.ToolDataIndex;
         p.ScanBaseDataIndex   = scan.BaseDataIndex;
+        p.Mill                = RightPanel.Subtractive.CaptureSidebar();
 
         PreferencesLoader.Save(p);
     }

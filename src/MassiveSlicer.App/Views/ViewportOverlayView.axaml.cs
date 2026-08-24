@@ -1,6 +1,8 @@
 using System;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Layout;
 using Avalonia.Threading;
 using MassiveSlicer.ViewModels;
 
@@ -15,6 +17,9 @@ public partial class ViewportOverlayView : UserControl
     public ViewportOverlayView()
     {
         InitializeComponent();
+        OverlayRoot.SizeChanged += (_, _) => UpdateTopChromeLayout();
+        TransformToolbar.SizeChanged += (_, _) => UpdateTopChromeLayout();
+        ViewPillsBar.SizeChanged += (_, _) => UpdateTopChromeLayout();
         ScrubTrackGrid.SizeChanged += (_, e) =>
         {
             if (DataContext is ViewportViewModel vm)
@@ -243,12 +248,12 @@ public partial class ViewportOverlayView : UserControl
                 lift = Math.Max(lift, bar.Margin.Bottom + bar.Bounds.Height + 16);
 
         // Lfam3WorkflowBar's phase-detail cards and embedded Live I/O monitor float above
-        // the collapsed panel via negative-margin + ClipToBounds=False (a deliberate trick
-        // so expanding a card doesn't push the header row down) — so Bounds.Height only
-        // ever reports the COLLAPSED height and under-reports the true visual footprint
-        // whenever a card or Live I/O is open. That under-count is why the ERP / Live I/O
-        // corner docks used to sit low enough to overlap the timeline on LFAM 3. Use the
-        // analytically-computed max height (already modelled correctly) as a floor.
+                // the collapsed panel via negative-margin + ClipToBounds=False (a deliberate trick
+                // so expanding a card doesn't push the header row down) — so Bounds.Height only
+                // ever reports the COLLAPSED height and under-reports the true visual footprint
+                // whenever a card or Live I/O is open. That under-count is why the Live I/O
+                // corner dock used to sit low enough to overlap the timeline on LFAM 3. Use the
+                // analytically-computed max height (already modelled correctly) as a floor.
         if (Lfam3WorkflowBar.IsVisible)
         {
             double workflowHeight = Math.Max(Lfam3WorkflowBar.Bounds.Height, vm.Lfam3WorkflowMaxHeight);
@@ -274,5 +279,45 @@ public partial class ViewportOverlayView : UserControl
     {
         if (DataContext is ViewportViewModel vm)
             vm.AddSimCameraKeyframeCommand.Execute(null);
+    }
+
+    /// <summary>
+    /// When the viewport strip is too narrow for the centered transform tools
+    /// and the right-hand Body/Toolpath/… pills, drop the pills onto a second
+    /// row so they never overlap.
+    /// </summary>
+    void UpdateTopChromeLayout()
+    {
+        if (OverlayRoot.Bounds.Width <= 0) return;
+
+        var infinite = new Size(double.PositiveInfinity, double.PositiveInfinity);
+        TransformToolbar.Measure(infinite);
+        ViewPillsBar.Measure(infinite);
+
+        double w = OverlayRoot.Bounds.Width;
+        double toolsW = Math.Max(TransformToolbar.DesiredSize.Width, TransformToolbar.Bounds.Width);
+        double pillsW = Math.Max(ViewPillsBar.DesiredSize.Width, ViewPillsBar.Bounds.Width);
+        double toolsH = Math.Max(36, TransformToolbar.DesiredSize.Height);
+
+        // Tools are centered; pills are right-aligned. They collide when the
+        // right edge of the tools meets the left edge of the pills.
+        double toolsRight = w * 0.5 + toolsW * 0.5;
+        double pillsLeft = w - pillsW;
+        bool stack = toolsRight + 16 > pillsLeft;
+
+        if (stack)
+        {
+            Grid.SetColumn(ViewPillsBar, 0);
+            Grid.SetColumnSpan(ViewPillsBar, 2);
+            ViewPillsBar.HorizontalAlignment = HorizontalAlignment.Center;
+            TopChromeHost.Margin = new Thickness(0, 8 + toolsH + 8, 0, 0);
+        }
+        else
+        {
+            Grid.SetColumn(ViewPillsBar, 1);
+            Grid.SetColumnSpan(ViewPillsBar, 1);
+            ViewPillsBar.HorizontalAlignment = HorizontalAlignment.Right;
+            TopChromeHost.Margin = new Thickness(0, 8, 0, 0);
+        }
     }
 }

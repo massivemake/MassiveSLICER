@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+using System.Net.Http;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Native;
 using Optris.Icons.Avalonia;
@@ -24,6 +25,20 @@ class Program
             }
             catch { /* best effort */ }
         }
+        // LogToTrace() sends Avalonia's warnings to System.Diagnostics.Trace, which has no
+        // listener by default — so they went nowhere. That hid the one line that names the
+        // control behind an "Infinite layout loop detected" crash:
+        //   "Layout cycle detected. Item {Item} was enqueued {Count} times."
+        // Mirror Trace into the same crash log the handlers below write to.
+        try
+        {
+            System.Diagnostics.Trace.Listeners.Add(new System.Diagnostics.TextWriterTraceListener(crashLog));
+            System.Diagnostics.Trace.Listeners.Add(
+                new System.Diagnostics.TextWriterTraceListener(global::System.Console.Error));
+            System.Diagnostics.Trace.AutoFlush = true;
+        }
+        catch { /* diagnostics only — never block startup */ }
+
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             LogCrash("AppDomain.UnhandledException", e.ExceptionObject as Exception);
         TaskScheduler.UnobservedTaskException += (_, e) =>
@@ -34,6 +49,9 @@ class Program
 
         // Cell JSON + GLBs resolve from assets/ next to the executable.
         Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+        ProtocolRegistration.Ensure();
+        if (TryHandoffToRunningInstance(args))
+            return;
         try
         {
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
@@ -71,5 +89,31 @@ class Program
             });
 
         return builder;
+    }
+
+    /// <summary>
+    /// If MassiveSLICER is already open, send the .mass path to the localhost
+    /// bridge and exit so Windows does not start a second instance.
+    /// </summary>
+    static bool TryHandoffToRunningInstance(string[] args)
+    {
+        string? path = MassiveSlicer.Core.IO.ProtocolUri.ResolveWorkspacePath(args);
+        if (string.IsNullOrEmpty(path)) return false;
+        string json = System.Text.Json.JsonSerializer.Serialize(new { path });
+        for (int port = 8723; port <= 8728; port++)
+        {
+            try
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromMilliseconds(500) };
+                using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                var resp = http.PostAsync($"http://127.0.0.1:{port}/open", content).GetAwaiter().GetResult();
+                if (resp.IsSuccessStatusCode) return true;
+            }
+            catch
+            {
+                // nothing listening on this port
+            }
+        }
+        return false;
     }
 }

@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 
 namespace MassiveSlicer.Core.Models;
 
@@ -56,6 +56,28 @@ public sealed class SliceSettings
 
     /// <summary>Number of brim offset loops (spaced one bead width apart).</summary>
     public int BrimLoops { get; init; } = 3;
+
+    /// <summary>
+    /// Fixed brim print speed (mm/s), independent of print speed and of the Adaptive Speed
+    /// window. The brim is bed adhesion, not part shape — it has no reason to follow the
+    /// part's speed rule, and following it made the brim the fastest move in the print
+    /// (and the one that hit the 99 % RPM export gate). Capped at
+    /// <see cref="MaxBrimSpeedMmS"/>. RPM follows the speed, so flow stays correct.
+    /// </summary>
+    public float BrimSpeedMmS { get; init; } = 60f;
+
+    /// <summary>Upper bound on <see cref="BrimSpeedMmS"/> — a brim never wants to be quick.</summary>
+    public const float MaxBrimSpeedMmS = 60f;
+
+    /// <summary>
+    /// Absolute extrusion RPM (%) for the brim. 0 = off, i.e. let RPM follow brim speed.
+    /// Set it to lay a deliberately fat brim for adhesion despite the slow speed. Capped at
+    /// <see cref="MaxBrimRpmPercent"/> so it can never trip the export gate on its own.
+    /// </summary>
+    public float BrimRpmPercent { get; init; }
+
+    /// <summary>Upper bound on <see cref="BrimRpmPercent"/>, matching the export RPM gate.</summary>
+    public const float MaxBrimRpmPercent = 99f;
 
     /// <summary>Material flow rate (rev/cm³) for RPM ramp scaling.</summary>
     public float FlowRate { get; init; } = 0.463f;
@@ -121,6 +143,13 @@ public sealed class SliceSettings
     public float PatternFadeInMm { get; init; } = 0f;
     /// <summary>Ease-out distance to the top (mm).</summary>
     public float PatternFadeOutMm { get; init; } = 0f;
+
+    /// <summary>
+    /// How far decorative effects (Wave, Pattern) reach into the part. Structure left out of
+    /// scope stays straight, but its ends still follow the wall so it stays bonded — see
+    /// <c>SkinOnlyBracing</c>.
+    /// </summary>
+    public PatternScope PatternScope { get; init; } = PatternScope.Everything;
 
     public float TiltAngle { get; init; } = 0f;
 
@@ -531,6 +560,26 @@ public sealed class SliceSettings
 }
 
 /// <summary>Live effector behaviour inside the influence radius.</summary>
+/// <summary>What decorative effects (Wave, Pattern) are allowed to displace.</summary>
+public enum PatternScope
+{
+    /// <summary>Every extrusion, including infill and bracing. Original behaviour.</summary>
+    Everything,
+    /// <summary>Perimeters only — slicer infill, X-bracing, Formbound fill and supports
+    /// stay straight. Interior walls (cavity boundaries, modelled ribs) are still textured.</summary>
+    WallsOnly,
+    /// <summary>
+    /// Whatever a horizontal ray can reach. Rays sweep each layer from every compass direction
+    /// and the first thing hit is skin; everything shadowed behind it stays straight.
+    /// <para>
+    /// Needs no closed contours, which is why this rather than a nesting-depth test: scanned and
+    /// organic parts slice into open chains, and "is this contour inside another one" has no
+    /// answer for those — measured on one, all 6,676,002 wall moves came back at depth 0.
+    /// </para>
+    /// </summary>
+    VisibleSkin,
+}
+
 public enum EffectorMode
 {
     /// <summary>Boost the local pattern amplitude (smoothstep bell × strength).</summary>

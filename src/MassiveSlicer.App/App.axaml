@@ -8,7 +8,15 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://MassiveSlicer.App/Resources/Themes/MassiveMake.axaml"/>
+                <ResourceInclude Source="avares://MassiveSlicer.App/Resources/Themes/ControlThemes.axaml"/>
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Always-on lime field ring. ThemeDictionaries can miss if SimpleTheme
+                 resolves ThemeBorderHighBrush from Default instead of Dark. -->
+            <SolidColorBrush x:Key="ThemeBorderHighBrush" Color="#71a72a"/>
+            <Color x:Key="ThemeBorderHighColor">#71a72a</Color>
+            <SolidColorBrush x:Key="ThemeAccentBrush" Color="#71a72a"/>
+            <Color x:Key="ThemeAccentColor">#71a72a</Color>
 
             <!-- Override SimpleTheme's Dark variant keys with the MassiveMAKE palette. -->
             <!-- Must be in ThemeDictionaries to beat SimpleTheme's own Dark entries.   -->
@@ -26,20 +34,21 @@
                     <Color x:Key="ThemeForegroundLowColor">#acacac</Color>
                     <SolidColorBrush x:Key="ThemeForegroundLowBrush" Color="#acacac"/>
 
-                    <!-- Accent — MassiveMAKE green (2/3/4 = translucent variants used by
+                    <!-- Accent — MassiveMAKE lime (2/3/4 = translucent variants used by
                          SimpleTheme for menu/list hover + selection highlights) -->
-                    <Color x:Key="ThemeAccentColor">#40b840</Color>
-                    <SolidColorBrush x:Key="ThemeAccentBrush" Color="#40b840"/>
-                    <Color x:Key="ThemeAccentColor2">#CC40b840</Color>
-                    <SolidColorBrush x:Key="ThemeAccentBrush2" Color="#CC40b840"/>
-                    <Color x:Key="ThemeAccentColor3">#9940b840</Color>
-                    <SolidColorBrush x:Key="ThemeAccentBrush3" Color="#9940b840"/>
-                    <Color x:Key="ThemeAccentColor4">#6640b840</Color>
-                    <SolidColorBrush x:Key="ThemeAccentBrush4" Color="#6640b840"/>
+                    <Color x:Key="ThemeAccentColor">#71a72a</Color>
+                    <SolidColorBrush x:Key="ThemeAccentBrush" Color="#71a72a"/>
+                    <Color x:Key="ThemeAccentColor2">#CC71a72a</Color>
+                    <SolidColorBrush x:Key="ThemeAccentBrush2" Color="#CC71a72a"/>
+                    <Color x:Key="ThemeAccentColor3">#9971a72a</Color>
+                    <SolidColorBrush x:Key="ThemeAccentBrush3" Color="#9971a72a"/>
+                    <Color x:Key="ThemeAccentColor4">#6671a72a</Color>
+                    <SolidColorBrush x:Key="ThemeAccentBrush4" Color="#6671a72a"/>
 
-                    <!-- Borders -->
-                    <Color x:Key="ThemeBorderHighColor">#575757</Color>
-                    <SolidColorBrush x:Key="ThemeBorderHighBrush" Color="#575757"/>
+                    <!-- Borders. High = hover/focus field ring (SimpleTheme
+                         ControlTheme binds this). Must be lime, never Cosmic/OS purple. -->
+                    <Color x:Key="ThemeBorderHighColor">#71a72a</Color>
+                    <SolidColorBrush x:Key="ThemeBorderHighBrush" Color="#71a72a"/>
                     <Color x:Key="ThemeBorderMidColor">#454545</Color>
                     <SolidColorBrush x:Key="ThemeBorderMidBrush" Color="#454545"/>
                     <Color x:Key="ThemeBorderLowColor">#171717</Color>
@@ -59,21 +68,35 @@
                     <SolidColorBrush x:Key="ThemeControlTransparentBrush" Color="Transparent"/>
 
                     <!-- Highlights (selection, focus, active states) -->
-                    <Color x:Key="ThemeControlHighlightHighColor">#58cc58</Color>
-                    <SolidColorBrush x:Key="ThemeControlHighlightHighBrush" Color="#58cc58"/>
-                    <Color x:Key="ThemeControlHighlightMidColor">#40b840</Color>
-                    <SolidColorBrush x:Key="ThemeControlHighlightMidBrush" Color="#40b840"/>
-                    <Color x:Key="ThemeControlHighlightLowColor">#1f5c1f</Color>
-                    <SolidColorBrush x:Key="ThemeControlHighlightLowBrush" Color="#1f5c1f"/>
+                    <Color x:Key="ThemeControlHighlightHighColor">#8bc43a</Color>
+                    <SolidColorBrush x:Key="ThemeControlHighlightHighBrush" Color="#8bc43a"/>
+                    <Color x:Key="ThemeControlHighlightMidColor">#71a72a</Color>
+                    <SolidColorBrush x:Key="ThemeControlHighlightMidBrush" Color="#71a72a"/>
+                    <Color x:Key="ThemeControlHighlightLowColor">#3a5716</Color>
+                    <SolidColorBrush x:Key="ThemeControlHighlightLowBrush" Color="#3a5716"/>
 
                     <!-- Disabled state -->
                     <x:Double x:Key="ThemeDisabledOpacity">0.38</x:Double>
 
-                    <!-- System selection/highlight — overrides platform blue used by CheckBox/ComboBox -->
-                    <Color x:Key="HighlightColor">#40b840</Color>
-                    <SolidColorBrush x:Key="HighlightBrush" Color="#40b840"/>
+                    <!-- System selection/highlight — overrides platform purple used by CheckBox/ComboBox -->
+                    <Color x:Key="HighlightColor">#71a72a</Color>
+                    <SolidColorBrush x:Key="HighlightBrush" Color="#71a72a"/>
                     <Color x:Key="HighlightForegroundColor">#e8e8e8</Color>
                     <SolidColorBrush x:Key="HighlightForegroundBrush" Color="#e8e8e8"/>
+
+                    <!-- Windows / Avalonia system accent (Fluent + Simple focus rings) -->
+                    <Color x:Key="SystemAccentColor">#71a72a</Color>
+                    <Color x:Key="SystemAccentColorDark1">#71a72a</Color>
+                    <Color x:Key="SystemAccentColorDark2">#3a5716</Color>
+                    <Color x:Key="SystemAccentColorDark3">#2a4010</Color>
+                    <Color x:Key="SystemAccentColorLight1">#8bc43a</Color>
+                    <Color x:Key="SystemAccentColorLight2">#a3d45c</Color>
+                    <Color x:Key="SystemAccentColorLight3">#c0e88a</Color>
+                    <SolidColorBrush x:Key="SystemAccentBrush" Color="#71a72a"/>
+                    <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#71a72a"/>
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentLowBrush" Color="#6671a72a"/>
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentMediumBrush" Color="#9971a72a"/>
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentHighBrush" Color="#CC71a72a"/>
 
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>

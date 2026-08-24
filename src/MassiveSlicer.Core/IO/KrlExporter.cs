@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Numerics;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -10,6 +10,18 @@ namespace MassiveSlicer.Core.IO;
 public sealed record KrlExportSettings
 {
     public required string ProgramName { get; init; }
+    /// <summary>MassiveSLICER build label (status-bar version) written into the KRL header.</summary>
+    public string? SlicerVersion { get; init; }
+    /// <summary>Applied material / print preset name, if one was selected.</summary>
+    public string? MaterialPresetName { get; init; }
+    /// <summary>Preset material family (e.g. ABS), if known.</summary>
+    public string? MaterialType { get; init; }
+    /// <summary>Preset color, if known.</summary>
+    public string? MaterialColor { get; init; }
+    /// <summary>Active cell name (LFAM 1/2/3).</summary>
+    public string? CellName { get; init; }
+    /// <summary>True when the HF extruder flow was used (print only).</summary>
+    public bool ExtruderIsHf { get; init; }
     public int ToolDataIndex { get; init; } = 1;
     public int BaseDataIndex { get; init; } = 1;
     /// <summary>Deposition print speed in m/s.</summary>
@@ -94,8 +106,34 @@ public sealed record KrlExportSettings
     /// <item><c>$OUT[7]</c> = FALSE before travel, TRUE after travel (screw enable)</item>
     /// <item>Pre-travel WAIT + half print speed approach; post-travel resume WAIT</item>
     /// </list>
+    /// Legacy combined flag: when true, enables <see cref="RobotModeEnabled"/> AND
+    /// <see cref="TravelStartStopEnabled"/>. New UI sets the two flags separately.
     /// </summary>
     public bool DigitalStartStopEnabled { get; init; }
+
+    /// <summary>
+    /// Robot Mode: Caracol <c>T1/T2/T3/RPM</c> MAT (temps + screw RPM), not LFAM
+    /// <c>$ANOUT[1–4]</c>. Does not emit travel start/stop.
+    /// </summary>
+    public bool RobotModeEnabled { get; init; }
+
+    /// <summary>
+    /// Travel Moves: <c>RPM = 0</c> at <c>;travel start</c>, print <c>RPM =</c>
+    /// again just before <c>;travel end</c>. Independent of Robot Mode.
+    /// </summary>
+    public bool TravelStartStopEnabled { get; init; }
+
+    /// <summary>MAT temps/RPM via T1/T2/T3/RPM (Robot Mode or legacy URM).</summary>
+    public bool UseRobotMode => RobotModeEnabled || DigitalStartStopEnabled;
+
+    /// <summary>Travel start/stop <c>RPM =</c> (Travel Moves or legacy URM).</summary>
+    public bool UseTravelStartStop => TravelStartStopEnabled || DigitalStartStopEnabled;
+
+    /// <summary>
+    /// Extruder cooling air: <c>$OUT[5]</c> TRUE in the header, FALSE in the footer.
+    /// Print only — ignored for mill. Default off.
+    /// </summary>
+    public bool ExtruderAirEnabled { get; init; }
 
     /// <summary>Caracol S&amp;S: wait after screw-off before travel motion (sec). Default 0.5.</summary>
     public float SsPreTravelWaitSec { get; init; } = 0.5f;
@@ -164,7 +202,7 @@ public sealed record KrlExportSettings
     /// 0 = disabled (raw per-move normals used directly).
     /// </summary>
     /// <summary>KUKA $APO.CVEL value (0–100). Controls the minimum speed fraction at path corners.</summary>
-    public int ApoCvel { get; init; } = 100;
+    public int ApoCvel { get; init; }
     public float OrientationLookAheadMm { get; init; } = 0f;
     /// <summary>
     /// Standard deviation (mm) of the Gaussian kernel used to smooth normals before ABC
@@ -203,16 +241,15 @@ public sealed record KrlExportSettings
 
     /// <summary>
     /// Custom header template. Null/empty uses the built-in default for the export mode.
-    /// Ignored when <see cref="DigitalStartStopEnabled"/> (URM always uses
-    /// <see cref="KrlExporter.DefaultUrmHeaderTemplate"/> so LFAM post-process
-    /// <c>$ANOUT</c> MAT blocks cannot override Caracol <c>T1/T2/T3/RPM</c>).
+    /// Robot Mode uses this text as-is unless it is the LFAM <c>$ANOUT</c> MAT header
+    /// (then it falls back to <see cref="KrlExporter.DefaultUrmHeaderTemplate"/>).
+    /// Shop headers that say <c>;FOLD Safety</c> instead of <c>CaracolSafety</c> must still export.
     /// </summary>
     public string? HeaderTemplate { get; init; }
 
     /// <summary>
     /// Custom footer template. Null/empty uses the built-in default.
-    /// Ignored when <see cref="DigitalStartStopEnabled"/> (URM uses
-    /// <see cref="KrlExporter.DefaultUrmFooterTemplate"/>).
+    /// Robot Mode uses this text as-is unless it is the short LFAM <c>$OUT[7/8/9]</c> footer.
     /// </summary>
     public string? FooterTemplate { get; init; }
 }
@@ -220,6 +257,10 @@ public sealed record KrlExportSettings
 public static class KrlExporter
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+    private static readonly Regex Out5IsTrue = new(
+        @"\$OUT\[5\]\s*=\s*TRUE", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex Out5Assign = new(
+        @"\$OUT\[5\]\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     /// <summary>Default KRL header template with {{PLACEHOLDER}} tokens (LFAM ANOUT path).</summary>
     public const string DefaultHeaderTemplate = """
@@ -480,7 +521,8 @@ public static class KrlExporter
         GuardRpmLimit(toolpath, s);
         GuardTemplateRpm(s.HeaderTemplate, "header");
         GuardTemplateRpm(s.FooterTemplate, "footer");
-        return ExportCore(toolpath, s).ReplaceLineEndings("\r\n");
+        string body = ExportCore(toolpath, s);
+        return body.ReplaceLineEndings("\r\n");
     }
 
     /// <summary>
@@ -553,9 +595,12 @@ public static class KrlExporter
         // Exact stop at the touch-down point so the RPM-on TRIGGER fires at the
         // correct physical position (not inside a C_VEL blend zone).
         sb.AppendLine(FormatLinExact(p0, a0, b0, c0, e1Approach));
-        // Caracol URM (MTruck): approach ends with ";travel end" before first ";rpm change".
-        if (s.DigitalStartStopEnabled)
+        // Approach ends with ";travel end" then first bead writes RPM =.
+        if (s.UseTravelStartStop)
+        {
+            sb.AppendLine(FormatTravelRpmOn(s, 1f));
             sb.AppendLine(";travel end");
+        }
         sb.AppendLine();
 
         Vector3 lastPos = p0;
@@ -608,16 +653,13 @@ public static class KrlExporter
                     {
                         if (!inZHopSequence)
                         {
-                            sb.AppendLine(";z-hop");
-                            if (s.DigitalStartStopEnabled && !ssStopActive)
+                            if (s.UseTravelStartStop && !ssStopActive)
                             {
-                                var (za0, zb0, zc0) = lastAbc;
-                                EmitCaracolSsPreTravel(sb, s, lastPos, za0, zb0, zc0,
-                                    E1ForMove(move, to, s, ref lastE1),
-                                    lastExtrudeSpeedMps > 0f ? lastExtrudeSpeedMps : s.PrintSpeedMps);
+                                WriteTravelStart(sb, s);
                                 ssStopActive = true;
                             }
-                            else if (!s.DigitalStartStopEnabled)
+                            sb.AppendLine(";z-hop");
+                            if (!s.UseTravelStartStop)
                                 sb.AppendLine(FormatExtruderOff(s, "extruder off"));
                             inZHopSequence = true;
                         }
@@ -625,7 +667,7 @@ public static class KrlExporter
                         var zHopSpeed = move.TravelSpeedMps ?? s.TravelSpeedMps;
                         sb.AppendLine($"$VEL.CP = {zHopSpeed.ToString("F6", Inv)}");
                         var (za, zb, zc) = lastAbc;
-                        if (s.DigitalStartStopEnabled)
+                        if (s.UseTravelStartStop)
                             sb.AppendLine(FormatLin(to, za, zb, zc, E1ForMove(move, to, s, ref lastE1)));
                         else
                             sb.AppendLine(FormatLinExact(to, za, zb, zc, E1ForMove(move, to, s, ref lastE1)));
@@ -639,22 +681,24 @@ public static class KrlExporter
                     float e1Travel = E1ForMove(move, to, s, ref lastE1);
                     var travelSpeed = move.TravelSpeedMps ?? s.TravelSpeedMps;
 
-                    if (s.DigitalStartStopEnabled)
+                    if (s.UseTravelStartStop)
                     {
-                        // Caracol S&S injector (travel_ss-post / Handover V2).
+                        // Wipe/z-hop may already have opened ;travel start + RPM = 0.
                         if (!ssStopActive)
                         {
-                            EmitCaracolSsPreTravel(sb, s, lastPos, ta, tb, tc, e1Travel,
-                                lastExtrudeSpeedMps > 0f ? lastExtrudeSpeedMps : s.PrintSpeedMps);
+                            WriteTravelStart(sb, s);
                             ssStopActive = true;
                         }
-                        string tag = move.IsLayerChange ? ";layer change"
-                            : move.IsMergeConnector ? ";merge travel" : ";travel start";
-                        sb.AppendLine(tag);
+                        if (move.IsLayerChange)
+                            sb.AppendLine(";layer change");
+                        else if (move.IsMergeConnector)
+                            sb.AppendLine(";merge travel");
                         sb.AppendLine($"$VEL.CP = {travelSpeed.ToString("F6", Inv)}");
-                        sb.AppendLine(FormatLin(to, ta, tb, tc, e1Travel));
-                        sb.AppendLine(";travel end");
+                        sb.AppendLine(FormatLinExact(to, ta, tb, tc, e1Travel));
+                        float resumeScale = lastExtrudeRpmScale > 0f ? lastExtrudeRpmScale : 1f;
+                        WriteTravelEnd(sb, s, resumeScale);
                         sb.AppendLine();
+                        ssStopActive = false;
                     }
                     else
                     {
@@ -686,18 +730,16 @@ public static class KrlExporter
 
                     if (move.IsWipe)
                     {
-                        // Wipe is Caracol S&S step 5 — ensure stop block already fired.
+                        // Wipe opens a travel: RPM = 0 at ;travel start.
+                        if (s.UseTravelStartStop && !ssStopActive)
+                        {
+                            WriteTravelStart(sb, s);
+                            ssStopActive = true;
+                        }
                         sb.AppendLine(";wipe");
                         if (move.ResumeWaitSec is { } ww)
                             pendingResumeWaitSec = ww;
-                        if (s.DigitalStartStopEnabled && !ssStopActive)
-                        {
-                            EmitCaracolSsPreTravel(sb, s, lastPos, ma, mb, mc,
-                                E1ForMove(move, to, s, ref lastE1),
-                                lastExtrudeSpeedMps > 0f ? lastExtrudeSpeedMps : s.PrintSpeedMps);
-                            ssStopActive = true;
-                        }
-                        else if (!s.DigitalStartStopEnabled)
+                        if (!s.UseTravelStartStop)
                             sb.AppendLine(FormatExtruderOff(s, "extruder off (wipe)"));
                         sb.AppendLine($"$VEL.CP = {s.WipeSpeedMps.ToString("F6", Inv)}");
                         sb.AppendLine(FormatLin(to, ma, mb, mc, E1ForMove(move, to, s, ref lastE1)));
@@ -709,17 +751,21 @@ public static class KrlExporter
 
                     if (move.IsResumeRamp)
                     {
-                        float rpmScale  = EffectiveRpmScale(move);
+                        float rpmScale  = EffectiveRpmScale(move, layerS);
                         float speedMps  = EffectivePrintSpeedMps(move, layerS);
                         if (needsRpmOn)
                         {
                             float waitSec = ResolveResumeWaitSec(
                                 isFirstPrintStart, s, pendingResumeWaitSec, move.ResumeWaitSec);
                             pendingResumeWaitSec = null;
-                            if (s.DigitalStartStopEnabled)
+                            if (s.UseTravelStartStop)
                             {
-                                EmitCaracolSsPostTravel(sb, layerS, waitSec, rpmScale, isFirstPrintStart);
-                                ssStopActive = false;
+                                if (ssStopActive)
+                                {
+                                    WriteTravelEnd(sb, layerS, rpmScale);
+                                    ssStopActive = false;
+                                }
+                                sb.AppendLine(FormatExtruderOn(layerS, rpmScale, "RPM ramp", useTrigger: false));
                             }
                             else
                             {
@@ -730,7 +776,7 @@ public static class KrlExporter
                             isFirstPrintStart = false;
                             needsRpmOn = false;
                         }
-                        else if (!s.DigitalStartStopEnabled)
+                        else if (!s.UseTravelStartStop)
                         {
                             sb.AppendLine(FormatExtruderOn(layerS, rpmScale, "RPM ramp", useTrigger: false));
                         }
@@ -744,7 +790,7 @@ public static class KrlExporter
                         continue;
                     }
 
-                    float extrudeRpmScale = EffectiveRpmScale(move);
+                    float extrudeRpmScale = EffectiveRpmScale(move, layerS);
                     float extrudeSpeedMps = EffectivePrintSpeedMps(move, layerS);
                     // Compare the *emitted* KRL text, not raw floats. Multi-planar HeightScale
                     // and layer-speed scales jitter every bead; if ANOUT/VEL round to the same
@@ -761,11 +807,14 @@ public static class KrlExporter
                         float waitSec = ResolveResumeWaitSec(
                             isFirstPrintStart, s, pendingResumeWaitSec, move.ResumeWaitSec);
                         pendingResumeWaitSec = null;
-                        // Caracol S&S post-travel (steps 8-10) or first start; non-URM = ANOUT path.
-                        if (s.DigitalStartStopEnabled)
+                        if (s.UseTravelStartStop)
                         {
-                            EmitCaracolSsPostTravel(sb, layerS, waitSec, extrudeRpmScale, isFirstPrintStart);
-                            ssStopActive = false;
+                            if (ssStopActive)
+                            {
+                                WriteTravelEnd(sb, layerS, extrudeRpmScale);
+                                ssStopActive = false;
+                            }
+                            sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "RPM on", useTrigger: false));
                         }
                         else if (waitSec > 0f)
                         {
@@ -783,9 +832,9 @@ public static class KrlExporter
                     }
                     else if (anoutChanged || velChanged)
                     {
-                        if (anoutChanged && !s.DigitalStartStopEnabled)
+                        if (anoutChanged && !s.UseRobotMode)
                             sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "layer speed", useTrigger: false));
-                        else if (anoutChanged && s.DigitalStartStopEnabled)
+                        else if (anoutChanged && s.UseRobotMode)
                             sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "", useTrigger: false));
                         if (velChanged)
                             sb.AppendLine($"$VEL.CP = {velText}");
@@ -804,6 +853,8 @@ public static class KrlExporter
         }
 
         // -- Final retreat --------------------------------------------------------
+        if (s.UseTravelStartStop && ssStopActive)
+            sb.AppendLine(";travel end");
         var (fa, fb, fc) = lastAbc;
         sb.AppendLine(";retreat");
         sb.AppendLine(FormatExtruderOff(s, "extruder off"));
@@ -825,17 +876,30 @@ public static class KrlExporter
         string template;
         if (s.IsMilling)
             template = string.IsNullOrWhiteSpace(s.HeaderTemplate) ? DefaultMillHeaderTemplate : s.HeaderTemplate!;
-        else if (s.DigitalStartStopEnabled)
-            // Honor an edited URM header (gear menu) as long as it is still URM-shaped;
-            // otherwise fall back so URM mode never exports an ANOUT header by mistake.
-            template = !string.IsNullOrWhiteSpace(s.HeaderTemplate)
-                       && s.HeaderTemplate!.Contains("CaracolSafety", System.StringComparison.Ordinal)
+        else if (s.UseRobotMode)
+            // Settings-menu / Lab header wins. Only reject the LFAM $ANOUT MAT
+            // so Robot Mode never ships analog temps instead of T1/T2/T3/RPM.
+            // Do NOT require the string "CaracolSafety" — shop headers use ";FOLD Safety".
+            template = !string.IsNullOrWhiteSpace(s.HeaderTemplate) && !IsLfamAnoutHeader(s.HeaderTemplate)
                 ? s.HeaderTemplate!
                 : DefaultUrmHeaderTemplate;
         else
             template = string.IsNullOrWhiteSpace(s.HeaderTemplate) ? DefaultHeaderTemplate : s.HeaderTemplate!;
         AppendRenderedTemplate(sb, RenderHeaderTemplate(template, name, s));
+        ApplyExtruderAirHeader(sb, s);
     }
+
+    /// <summary>True when the template is the LFAM analog MAT (must not export in Robot Mode).</summary>
+    public static bool IsLfamAnoutHeader(string? header)
+        => !string.IsNullOrWhiteSpace(header)
+           && header.Contains("$ANOUT[1]", StringComparison.Ordinal);
+
+    /// <summary>True when the template is the short LFAM OUT-only footer (no Caracol air/RPM shutdown).</summary>
+    public static bool IsLfamAnoutFooter(string? footer)
+        => !string.IsNullOrWhiteSpace(footer)
+           && footer.Contains("$OUT[7]", StringComparison.Ordinal)
+           && !footer.Contains("EXTRUDER MOTOR COMMAND", StringComparison.Ordinal)
+           && !footer.Contains("RPM =", StringComparison.Ordinal);
 
 
 
@@ -854,57 +918,6 @@ public static class KrlExporter
         return s.ExtrusionResumeWaitSec;
     }
 
-    /// <summary>
-    /// Caracol S&amp;S steps 1–4 (travel_ss-post / Handover V2): enable URM, stop screw,
-    /// slow approach at half print speed, wait before travel motion.
-    /// OUT[8] (URM request) is only TRUE during this window — not for the whole job.
-    /// </summary>
-    private static void EmitCaracolSsPreTravel(
-        StringBuilder sb,
-        KrlExportSettings s,
-        Vector3 lastPos,
-        float a, float b, float c,
-        float e1,
-        float printSpeedMps)
-    {
-        sb.AppendLine(";digital start/stop - stop (Caracol URM)");
-        // Fire TRIGGERs at current pose (DISTANCE=0 on next motion).
-        sb.AppendLine("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = TRUE");
-        sb.AppendLine("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[7] = FALSE");
-        float scale = s.SsApproachSpeedScale > 0.05f && s.SsApproachSpeedScale <= 1f
-            ? s.SsApproachSpeedScale : 0.5f;
-        float approach = Math.Max(0.005f, printSpeedMps * scale);
-        sb.AppendLine($"$VEL.CP = {approach.ToString("F6", Inv)}");
-        // Re-issue current pose so TRIGGERs execute, then dwell.
-        sb.AppendLine(FormatLinExact(lastPos, a, b, c, e1));
-        float preWait = s.SsPreTravelWaitSec >= 0f ? s.SsPreTravelWaitSec : 0.5f;
-        if (preWait > 0f)
-            sb.AppendLine(FormatWaitSec(preWait));
-    }
-
-    /// <summary>
-    /// Caracol S&amp;S steps 8–10: re-enable screw, resume wait, disable URM, set RPM for print.
-    /// </summary>
-    private static void EmitCaracolSsPostTravel(
-        StringBuilder sb,
-        KrlExportSettings s,
-        float waitSec,
-        float rpmScale,
-        bool isFirstPrintStart)
-    {
-        sb.AppendLine(";digital start/stop - start (Caracol URM)");
-        sb.AppendLine("$OUT[7] = TRUE");
-        float primePct = Math.Clamp(
-            s.SsResumePrimePercent <= 0f ? 100f : s.SsResumePrimePercent, 5f, 100f);
-        if (waitSec > 0f && primePct < 99.5f && !isFirstPrintStart)
-            sb.AppendLine(FormatExtruderOn(s, rpmScale * primePct / 100f, "resume prime", useTrigger: false));
-        if (waitSec > 0f)
-            sb.AppendLine(FormatWaitSec(waitSec));
-        sb.AppendLine("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = FALSE");
-        // Keep screw speed command (material RPM%) for the print segment.
-        sb.AppendLine(FormatExtruderOn(s, rpmScale, isFirstPrintStart ? "RPM on" : "", useTrigger: false));
-    }
-
     /// <summary>Emits a relief-milling body: LIN cuts at the cutting feed, rapids/plunges for
     /// repositioning. No extruder/temperature/wipe logic. Top-down spindle (layer PlaneNormal).</summary>
     private static void WriteMillBody(StringBuilder sb, Toolpath toolpath, KrlExportSettings s)
@@ -915,7 +928,7 @@ public static class KrlExporter
 
         // Rapid to safe Z above the first cut.
         var first = FindFirstExtrude(toolpath)!.Value;
-        var (a0, b0, c0) = KukaAbc(first.layer.PlaneNormal, s);
+        var (a0, b0, c0) = MillAbc(first.move, first.layer, s, 0, 0, 0);
         var p0 = ToBase(first.move.From, s);
         float lastE1 = float.IsNaN(s.HomeE1Mm) ? 0f : s.HomeE1Mm;
         sb.AppendLine($"$VEL.CP = {rapidV}");
@@ -924,15 +937,13 @@ public static class KrlExporter
 
         foreach (var layer in toolpath.Layers)
         {
-            var (la, lb, lc) = KukaAbc(layer.PlaneNormal, s);
+            var (la, lb, lc) = KukaOrientation.AbcFromMillNormal(
+                layer.PlaneNormal, 0f, s.ToolheadOffsetA, s.ToolheadOffsetB, s.ToolheadOffsetC);
             foreach (var move in layer.Moves)
             {
                 var to = ToBase(move.To, s);
-                // Multi-axis: orient the spindle to the per-move tool axis (surface normal) when
-                // present; fall back to the layer plane normal (top-down) otherwise.
-                var (a, b, c) = move.Normal != Vector3.Zero ? KukaAbc(move.Normal, s, move.TcpYawDeg)
-                    : move.TcpYawDeg != 0f ? KukaAbc(layer.PlaneNormal, s, move.TcpYawDeg)
-                    : (la, lb, lc);
+                // Multi-axis: spindle tool Z follows the per-move surface normal.
+                var (a, b, c) = MillAbc(move, layer, s, la, lb, lc);
                 if (move.Kind == MoveKind.Mill)
                 {
                     sb.AppendLine($"$VEL.CP = {cutV}");
@@ -955,14 +966,39 @@ public static class KrlExporter
         // Same rule as header: URM ignores LFAM post-process footer ($OUT only) and uses
         // Caracol air / temp / RPM shutdown (MTruck footer).
         string template;
-        if (s.DigitalStartStopEnabled && !s.IsMilling)
-            template = !string.IsNullOrWhiteSpace(s.FooterTemplate)
-                       && s.FooterTemplate!.Contains("EXTRUDER MOTOR COMMAND", System.StringComparison.Ordinal)
+        if (s.UseRobotMode && !s.IsMilling)
+            template = !string.IsNullOrWhiteSpace(s.FooterTemplate) && !IsLfamAnoutFooter(s.FooterTemplate)
                 ? s.FooterTemplate!
                 : DefaultUrmFooterTemplate;
         else
             template = string.IsNullOrWhiteSpace(s.FooterTemplate) ? DefaultFooterTemplate : s.FooterTemplate!;
-        AppendRenderedTemplate(sb, template.TrimEnd());
+        AppendRenderedTemplate(sb, ApplyExtruderAirFooter(template.TrimEnd(), s));
+    }
+
+    /// <summary>Header: latch cooling air on. Comment has no CadCommands tokens.</summary>
+    private static void ApplyExtruderAirHeader(StringBuilder sb, KrlExportSettings s)
+    {
+        if (!s.ExtruderAirEnabled || s.IsMilling)
+            return;
+        if (Out5IsTrue.IsMatch(sb.ToString()))
+            return;
+        sb.AppendLine(";extruder air on");
+        sb.AppendLine("$OUT[5] = TRUE");
+        sb.AppendLine();
+    }
+
+    /// <summary>Footer: latch cooling air off. Skip if the template already writes OUT[5].</summary>
+    private static string ApplyExtruderAirFooter(string footer, KrlExportSettings s)
+    {
+        if (!s.ExtruderAirEnabled || s.IsMilling)
+            return footer;
+        if (Out5Assign.IsMatch(footer))
+            return footer;
+        const string block = ";extruder air off\n$OUT[5] = FALSE\n";
+        int end = footer.LastIndexOf("END", StringComparison.Ordinal);
+        if (end >= 0)
+            return footer.Insert(end, block);
+        return footer + "\n" + block;
     }
 
     private static void AppendRenderedTemplate(StringBuilder sb, string text)
@@ -1012,6 +1048,8 @@ public static class KrlExporter
             .Replace("{{APO_CVEL}}",      s.ApoCvel.ToString(Inv))
             .Replace("{{HOME_PTP}}",      homePtp);
 
+        rendered = InjectExportCommentBlock(rendered, s);
+
         if (s.RotaryExternalKinematic && !rendered.Contains("EK(", System.StringComparison.Ordinal))
         {
             // A user-overridden header may predate the {{EK_BASE}} placeholder. Inject the
@@ -1036,6 +1074,93 @@ public static class KrlExporter
         return rendered;
     }
 
+    /// <summary>
+    /// ASCII comment block after DEF so print / URM / mill / custom headers all carry
+    /// the slicer version, preset, and the numbers the software actually exported.
+    /// </summary>
+    internal static string BuildExportCommentBlock(KrlExportSettings s)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(";FOLD MassiveSLICER export");
+        sb.AppendLine($"; MassiveSLICER {SanitizeComment(s.SlicerVersion)}");
+        sb.AppendLine($"; Exported {DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", Inv)} UTC");
+        if (!string.IsNullOrWhiteSpace(s.CellName))
+            sb.AppendLine($"; Cell {SanitizeComment(s.CellName)}");
+        sb.AppendLine($"; TOOL {s.ToolDataIndex}  BASE {s.BaseDataIndex}");
+
+        if (s.IsMilling)
+        {
+            sb.AppendLine("; Mode mill");
+            sb.AppendLine($"; Spindle RPM {s.SpindleRpm.ToString("F0", Inv)}");
+            sb.AppendLine($"; Cutting feed {s.CuttingFeedMmMin.ToString("F0", Inv)} mm/min");
+            sb.AppendLine($"; Plunge feed {s.PlungeFeedMmMin.ToString("F0", Inv)} mm/min");
+            sb.AppendLine($"; Rapid {Mms(s.TravelSpeedMps)} mm/s");
+            sb.AppendLine($"; Approach Z {s.ApproachZMm.ToString("F1", Inv)} mm");
+        }
+        else
+        {
+            sb.AppendLine("; Mode print");
+            if (!string.IsNullOrWhiteSpace(s.MaterialPresetName))
+                sb.AppendLine($"; Material preset {SanitizeComment(s.MaterialPresetName)}");
+            else
+                sb.AppendLine("; Material preset (none)");
+            if (!string.IsNullOrWhiteSpace(s.MaterialType) || !string.IsNullOrWhiteSpace(s.MaterialColor))
+            {
+                var type = string.IsNullOrWhiteSpace(s.MaterialType) ? "-" : SanitizeComment(s.MaterialType);
+                var color = string.IsNullOrWhiteSpace(s.MaterialColor) ? "-" : SanitizeComment(s.MaterialColor);
+                sb.AppendLine($"; Material {type} {color}");
+            }
+            sb.AppendLine($"; Extruder {(s.ExtruderIsHf ? "HF" : "HV")}");
+            sb.AppendLine($"; Layer height {s.LayerHeightMm.ToString("F2", Inv)} mm");
+            sb.AppendLine($"; Bead width {s.BeadWidthMm.ToString("F2", Inv)} mm");
+            sb.AppendLine($"; Extrusion flow {s.FlowRate.ToString("F4", Inv)} rev/cm3");
+            sb.AppendLine($"; Print speed {Mms(s.PrintSpeedMps)} mm/s");
+            sb.AppendLine($"; Travel speed {Mms(s.TravelSpeedMps)} mm/s");
+            sb.AppendLine($"; Wipe speed {Mms(s.WipeSpeedMps)} mm/s");
+            if (s.FirstLayerSpeedMps > 0f)
+                sb.AppendLine($"; First layer speed {Mms(s.FirstLayerSpeedMps)} mm/s");
+            if (s.ExtrusionRpmPercent is { } rpm)
+                sb.AppendLine($"; Extrusion RPM {rpm.ToString("F1", Inv)} %");
+            if (s.FirstLayerRpmPercent > 0f)
+                sb.AppendLine($"; First layer RPM {s.FirstLayerRpmPercent.ToString("F1", Inv)} %");
+            sb.AppendLine($"; T1 {s.Temperature1.ToString("F0", Inv)} C  T2 {s.Temperature2.ToString("F0", Inv)} C  T3 {s.Temperature3.ToString("F0", Inv)} C");
+            sb.AppendLine($"; Approach Z {s.ApproachZMm.ToString("F1", Inv)} mm");
+        }
+
+        sb.AppendLine(";ENDFOLD (MassiveSLICER export)");
+        return sb.ToString().TrimEnd();
+    }
+
+    static string Mms(float mps) => (mps * 1000f).ToString("F1", Inv);
+
+    static string SanitizeComment(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "(unknown)";
+        var t = raw.Trim();
+        var sb = new StringBuilder(t.Length);
+        foreach (var ch in t)
+        {
+            if (ch == '\n' || ch == '\t' || ch == ';' || ch == (char)13) sb.Append(' ');
+            else if (ch < 32 || ch > 126) sb.Append('?');
+            else sb.Append(ch);
+        }
+        return sb.ToString();
+    }
+
+    static string InjectExportCommentBlock(string rendered, KrlExportSettings s)
+    {
+        var block = BuildExportCommentBlock(s);
+        var crlf = ((char)13).ToString() + "\n";
+        var text = rendered.Replace(crlf, "\n").Replace(((char)13).ToString(), "");
+        int def = text.IndexOf("DEF ", StringComparison.Ordinal);
+        if (def < 0)
+            return block + "\n" + rendered;
+        int eol = text.IndexOf('\n', def);
+        if (eol < 0)
+            return rendered + "\n" + block;
+        return text[..(eol + 1)] + "\n" + block + "\n" + text[(eol + 1)..];
+    }
+
     private static (ToolpathMove move, ToolpathLayer layer)? FindFirstExtrude(Toolpath tp)
     {
         foreach (var layer in tp.Layers)
@@ -1047,15 +1172,39 @@ public static class KrlExporter
 
     // -- Coordinate transform --------------------------------------------------
 
+    /// <summary>
+    /// World-space point that KRL <c>{X 0, Y 0, Z 0}</c> maps to: BASE XY on the
+    /// visual print-bed surface (<paramref name="sliceBedWorldZ"/>), not KUKA BASE Z
+    /// when those differ (LFAM 1). Inverse of <see cref="WorldToBase"/>.
+    /// </summary>
+    public static Vector3 ImportWorldOffset(Vector3 robroot, Vector3 baseData, float sliceBedWorldZ)
+        => BaseToWorld(Vector3.Zero, robroot, baseData, sliceBedWorldZ);
+
+    /// <summary>KRL BASE frame → scene/world. Inverse of <see cref="WorldToBase"/>.</summary>
+    public static Vector3 BaseToWorld(Vector3 krl, Vector3 robroot, Vector3 baseData, float sliceBedWorldZ)
+    {
+        var world = krl + robroot + baseData;
+        float kukaBedZ = robroot.Z + baseData.Z;
+        if (!float.IsNaN(sliceBedWorldZ) && MathF.Abs(sliceBedWorldZ - kukaBedZ) > 0.5f)
+            world.Z -= kukaBedZ - sliceBedWorldZ;
+        return world;
+    }
+
+    /// <summary>Scene/world → KRL BASE frame (zero BASE rotation).</summary>
+    public static Vector3 WorldToBase(Vector3 world, Vector3 robroot, Vector3 baseData, float sliceBedWorldZ)
+    {
+        float kukaBedZ = robroot.Z + baseData.Z;
+        if (!float.IsNaN(sliceBedWorldZ) && MathF.Abs(sliceBedWorldZ - kukaBedZ) > 0.5f)
+            world.Z += kukaBedZ - sliceBedWorldZ;
+        return world - robroot - baseData;
+    }
+
     private static Vector3 ToBase(Vector3 stored, KrlExportSettings s)
     {
         // stored positions are in original slice world space;
         // (stored - origin) * wt maps them to current world space.
         var world = Vector3.Transform(stored - s.NodeOrigin, s.NodeWorldTransform);
-        float kukaBedZ = s.RobrootWorldPos.Z + s.BaseDataOffset.Z;
-        if (!float.IsNaN(s.SliceBedWorldZ) && MathF.Abs(s.SliceBedWorldZ - kukaBedZ) > 0.5f)
-            world.Z += kukaBedZ - s.SliceBedWorldZ;
-        return world - s.RobrootWorldPos - s.BaseDataOffset;
+        return WorldToBase(world, s.RobrootWorldPos, s.BaseDataOffset, s.SliceBedWorldZ);
     }
 
     // -- ABC orientation -------------------------------------------------------
@@ -1160,6 +1309,17 @@ public static class KrlExporter
             s.ToolheadOffsetC,
             tcpYawDeg);
 
+    /// <summary>Mill LIN ABC: cutter (tool Z) along −surface normal, not the extruder X-approach.</summary>
+    private static (float a, float b, float c) MillAbc(
+        ToolpathMove move, ToolpathLayer layer, KrlExportSettings s, float fa, float fb, float fc)
+    {
+        var n = move.Normal != Vector3.Zero ? move.Normal : layer.PlaneNormal;
+        if (n == Vector3.Zero)
+            return (fa, fb, fc);
+        return KukaOrientation.AbcFromMillNormal(
+            n, move.TcpYawDeg, s.ToolheadOffsetA, s.ToolheadOffsetB, s.ToolheadOffsetC);
+    }
+
 
     // -- Line formatting -------------------------------------------------------
 
@@ -1238,12 +1398,39 @@ public static class KrlExporter
             : $"$ANOUT[4] = {text} ; {comment}";
 
     /// <summary>
+    /// Travel start: comment + <c>RPM = 0.00</c>. Screw off for the hop.
+    /// </summary>
+    private static void WriteTravelStart(StringBuilder sb, KrlExportSettings s)
+    {
+        _ = s;
+        sb.AppendLine(";travel start");
+        sb.AppendLine(FormatTravelRpmOff());
+    }
+
+    /// <summary>
+    /// Right before print resumes: <c>RPM =</c> print value, then <c>;travel end</c>.
+    /// </summary>
+    private static void WriteTravelEnd(StringBuilder sb, KrlExportSettings s, float rpmScale)
+    {
+        sb.AppendLine(FormatTravelRpmOn(s, rpmScale));
+        sb.AppendLine(";travel end");
+    }
+
+    private static string FormatTravelRpmOff() => "RPM = 0.00";
+
+    private static string FormatTravelRpmOn(KrlExportSettings s, float rpmScale)
+    {
+        float rpmPercent = ResolveRpmPercent(s, rpmScale <= 0f ? 1f : rpmScale);
+        return $"RPM = {FormatCaracolRpm(rpmPercent)}";
+    }
+
+    /// <summary>
     /// Extruder off. Normal export: <c>$ANOUT[4] = 0</c>.
-    /// URM / Digital Start-Stop: Caracol Eidos <c>RPM = 0.00</c> (MTruck Wheel style; used on wipe/retreat/footer).
+    /// Robot Mode: Caracol <c>RPM = 0.00</c>.
     /// </summary>
     private static string FormatExtruderOff(KrlExportSettings s, string comment)
     {
-        if (s.DigitalStartStopEnabled)
+        if (s.UseRobotMode)
             return string.IsNullOrEmpty(comment) ? "RPM = 0.00" : $"RPM = 0.00 ; {comment}";
         return FormatDirectAnout4("0.000", comment);
     }
@@ -1255,7 +1442,7 @@ public static class KrlExporter
     private static string FormatExtruderOn(
         KrlExportSettings s, float rpmScale, string comment, bool useTrigger)
     {
-        if (s.DigitalStartStopEnabled)
+        if (s.UseRobotMode)
         {
             float rpmPercent = ResolveRpmPercent(s, rpmScale);
             string val = FormatCaracolRpm(rpmPercent);
@@ -1324,7 +1511,23 @@ public static class KrlExporter
         return s.PrintSpeedMps * scale;
     }
 
-    private static float EffectiveRpmScale(ToolpathMove move) => ToolpathRpm.MoveScale(move);
+    /// <summary>
+    /// Scale chosen so that <c>BasePercent(s) * scale</c> equals
+    /// <see cref="ToolpathRpm.MovePercent"/> for this move — the written program, the export
+    /// gate and the viewport then cannot disagree.
+    ///
+    /// An absolute <see cref="ToolpathMove.RpmPercentOverride"/> (the brim) is re-expressed as
+    /// a scale here rather than threaded through every emit site, which keeps the ANOUT/VEL
+    /// change-detection keys downstream working on a single number. The re-expression is exact
+    /// unless the nominal is itself zero — a config with no flow at all, where no scale could
+    /// express an absolute demand anyway.
+    /// </summary>
+    private static float EffectiveRpmScale(ToolpathMove move, KrlExportSettings s)
+    {
+        if (move.RpmPercentOverride is not { } abs) return ToolpathRpm.MoveScale(move);
+        float nominal = ToolpathRpm.BasePercent(s);
+        return nominal > 1e-6f ? Math.Max(abs, 0f) / nominal : 0f;
+    }
 
     private static string ResolveAnout4ExtrudeText(KrlExportSettings s, float rpmScale = 1f)
         => KrlAnout.RpmPercentToAnoutText(ResolveRpmPercent(s, rpmScale));

@@ -4,177 +4,284 @@
              x:Class="MassiveSlicer.App.Views.ErpDockPanelView"
              x:CompileBindings="False">
 
-    <!-- DataContext = ErpViewModel -->
-    <StackPanel Spacing="8" Width="300">
+    <!-- DataContext = ErpViewModel. Hosted in left sidebar MassiveLAB StepCard. -->
+    <StackPanel Spacing="6">
 
-        <Grid ColumnDefinitions="*,Auto">
-            <TextBlock Grid.Column="0" Text="PROJECT ATTACHMENT"
-                       Classes="LabelMuted" FontSize="10" LetterSpacing="1"
-                       VerticalAlignment="Center"/>
-            <Button Grid.Column="1"
-                    Background="Transparent" BorderThickness="0" Padding="4,2"
-                    Command="{Binding OpenPreferencesCommand}"
-                    ToolTip.Tip="Connection settings (Preferences → Connections)">
-                <ia:Icon Value="mdi-cog-outline" FontSize="12" Foreground="{DynamicResource TextMuted}"/>
-            </Button>
-        </Grid>
+        <!-- Connection strip -->
+        <Border Background="#E6242424"
+                BorderBrush="#363636"
+                BorderThickness="1"
+                CornerRadius="5"
+                Padding="8,6">
+            <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
+                <Border Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                        Width="10" Height="10"
+                        CornerRadius="5"
+                        VerticalAlignment="Center"
+                        Margin="0,0,10,0"
+                        Background="{Binding ConnectionDotBrush}"/>
+                <TextBlock Grid.Column="1" Grid.Row="0"
+                           Text="{Binding ConnectionTitle}"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextPrimary}"
+                           VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1" Grid.Row="1"
+                           Text="{Binding Status}"
+                           FontSize="10"
+                           Foreground="{DynamicResource TextMuted}"
+                           TextWrapping="Wrap"
+                           Margin="0,2,0,0"
+                           IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                <StackPanel Grid.Column="2" Grid.Row="0" Grid.RowSpan="2"
+                            Orientation="Horizontal" Spacing="4"
+                            VerticalAlignment="Center">
+                    <Button Background="Transparent" BorderThickness="0" Padding="6,4"
+                            Command="{Binding ConnectCommand}"
+                            ToolTip.Tip="Reconnect to MassiveLAB">
+                        <ia:Icon Value="mdi-refresh" FontSize="14"
+                                 Foreground="{DynamicResource TextMuted}"/>
+                    </Button>
+                    <Button Background="Transparent" BorderThickness="0" Padding="6,4"
+                            Command="{Binding OpenPreferencesCommand}"
+                            ToolTip.Tip="Connection settings (Preferences → Connections)">
+                        <ia:Icon Value="mdi-cog-outline" FontSize="14"
+                                 Foreground="{DynamicResource TextMuted}"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
 
-        <!-- Not connected: credentials live in Preferences → Connections -->
-        <StackPanel Spacing="6" IsVisible="{Binding ShowSettings}">
-            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.7"
-                       Text="The ERP URL and API token are set in Preferences → Connections and connect automatically at launch. Generate a token in ERP Settings → Slicer Access."/>
-            <Button Content="Open Preferences…" HorizontalAlignment="Stretch"
+        <!-- Not connected -->
+        <StackPanel Spacing="5" IsVisible="{Binding ShowSettings}">
+            <TextBlock TextWrapping="Wrap" FontSize="11"
+                       Foreground="{DynamicResource TextSecondary}"
+                       Text="Sign in to lab.massivemake.com so this workspace can attach to a Project or Lead, pull shared presets, and send slices."/>
+            <Button Content="Open Connections…"
+                    HorizontalAlignment="Stretch"
+                    Classes="ToolbarButton"
+                    Padding="8,7"
                     Command="{Binding OpenPreferencesCommand}"/>
-            <Button Content="Retry Connect" HorizontalAlignment="Stretch"
+            <Button Content="Retry Connect"
+                    HorizontalAlignment="Stretch"
+                    Classes="ToolbarButton"
+                    Padding="8,6"
                     Command="{Binding ConnectCommand}"/>
         </StackPanel>
 
         <!-- Search + attach -->
-        <StackPanel Spacing="6" IsVisible="{Binding ShowSearch}">
+        <StackPanel Spacing="5" IsVisible="{Binding ShowSearch}">
+            <TextBlock Text="LINK PROJECT OR LEAD"
+                       Classes="LabelMuted" FontSize="10" LetterSpacing="0.8"/>
             <TextBox Classes="PanelTextBox"
                      Text="{Binding SearchText, Mode=TwoWay}"
-                     Watermark="Search project # or title…"/>
-            <ListBox ItemsSource="{Binding SearchResults}"
-                     SelectedItem="{Binding SelectedResult, Mode=TwoWay}"
-                     MaxHeight="180"
-                     Background="Transparent" BorderThickness="0" Padding="0"
-                     ScrollViewer.VerticalScrollBarVisibility="Auto">
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <Grid ColumnDefinitions="Auto,*,Auto" Margin="4,2">
-                            <TextBlock Grid.Column="0" Text="{Binding Number}"
-                                       FontSize="11" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource Accent}"
-                                       Margin="0,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="11"
-                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="2" Text="{Binding Type}" FontSize="9"
-                                       Foreground="{DynamicResource TextMuted}"
-                                       Margin="8,0,0,0" VerticalAlignment="Center"/>
-                        </Grid>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+                     PlaceholderText="Search project # or title…"/>
 
-            <StackPanel Spacing="2" IsVisible="{Binding HasElements}">
-                <TextBlock Text="ELEMENT (optional)" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
-                <ListBox ItemsSource="{Binding Elements}"
-                         SelectedItem="{Binding SelectedElement, Mode=TwoWay}"
-                         MaxHeight="120"
+            <Border Background="#E61c1c1c"
+                    BorderBrush="#2e2e2e"
+                    BorderThickness="1"
+                    CornerRadius="5"
+                    Padding="4"
+                    IsVisible="{Binding HasSearchResults}"
+                    MaxHeight="200">
+                <ListBox ItemsSource="{Binding SearchResults}"
+                         SelectedItem="{Binding SelectedResult, Mode=TwoWay}"
                          Background="Transparent" BorderThickness="0" Padding="0"
                          ScrollViewer.VerticalScrollBarVisibility="Auto">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <Grid ColumnDefinitions="Auto,*,Auto" Margin="4,1">
-                                <TextBlock Grid.Column="0" Text="{Binding ElementNumber}"
-                                           FontSize="10" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource Accent}"
-                                           Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="10"
-                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-                                <TextBlock Grid.Column="2"
-                                           Text="{Binding RevisionCount, StringFormat=Rev {0}}"
-                                           FontSize="9" Foreground="{DynamicResource TextMuted}"
-                                           Margin="8,0,0,0" VerticalAlignment="Center"/>
-                            </Grid>
+                            <Border Margin="2" Padding="8,7" CornerRadius="5"
+                                    Background="#E6242424">
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <TextBlock Grid.Column="0" Text="{Binding Number}"
+                                               FontSize="11" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Accent}"
+                                               Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="11"
+                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                    <Border Grid.Column="2" CornerRadius="6" Padding="6,2"
+                                            Background="#2a2a2a" Margin="8,0,0,0"
+                                            VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Type}" FontSize="9"
+                                                   Foreground="{DynamicResource TextMuted}"/>
+                                    </Border>
+                                </Grid>
+                            </Border>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
+            </Border>
+
+            <StackPanel Spacing="6" IsVisible="{Binding HasElements}">
+                <TextBlock Text="ELEMENT (OPTIONAL)"
+                           Classes="LabelMuted" FontSize="10" LetterSpacing="0.8"/>
+                <Border Background="#E61c1c1c"
+                        BorderBrush="#2e2e2e"
+                        BorderThickness="1"
+                        CornerRadius="5"
+                        Padding="4"
+                        MaxHeight="140">
+                    <ListBox ItemsSource="{Binding Elements}"
+                             SelectedItem="{Binding SelectedElement, Mode=TwoWay}"
+                             Background="Transparent" BorderThickness="0" Padding="0"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="2" Padding="8,6" CornerRadius="5"
+                                        Background="#E6242424">
+                                    <Grid ColumnDefinitions="Auto,*,Auto">
+                                        <TextBlock Grid.Column="0" Text="{Binding ElementNumber}"
+                                                   FontSize="10" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Accent}"
+                                                   Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="10"
+                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{Binding RevisionCount, StringFormat=Rev {0}}"
+                                                   FontSize="9" Foreground="{DynamicResource TextMuted}"
+                                                   Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Border>
             </StackPanel>
 
             <!-- New element on the selected project/lead -->
-            <StackPanel Spacing="4"
+            <StackPanel Spacing="6"
                         IsVisible="{Binding SelectedResult, Converter={x:Static ObjectConverters.IsNotNull}}">
-                <TextBlock Text="NEW ELEMENT" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
-                <Grid ColumnDefinitions="*,6,Auto">
+                <TextBlock Text="NEW ELEMENT"
+                           Classes="LabelMuted" FontSize="10" LetterSpacing="0.8"/>
+                <Grid ColumnDefinitions="*,8,Auto">
                     <TextBox Grid.Column="0" Classes="PanelTextBox"
                              Text="{Binding NewElementName, Mode=TwoWay}"
-                             Watermark="Element name…"/>
+                             PlaceholderText="Element name…"/>
                     <Button Grid.Column="2" Content="Create"
+                            Classes="ToolbarButton" Padding="8,6"
                             Command="{Binding CreateElementCommand}"
-                            ToolTip.Tip="Create this element on the ERP and select it"/>
+                            ToolTip.Tip="Create this element on MassiveLAB and select it"/>
                 </Grid>
             </StackPanel>
 
-            <Button Content="Attach Workspace" HorizontalAlignment="Stretch"
+            <Button Content="Attach Workspace"
+                    HorizontalAlignment="Stretch"
                     Classes="ExportCta"
+                    Padding="8,8"
                     Command="{Binding AttachCommand}"/>
         </StackPanel>
 
         <!-- Attached -->
-        <StackPanel Spacing="6" IsVisible="{Binding ShowAttachment}">
-            <Border Background="#3f3f3f" CornerRadius="5" Padding="8,6">
-                <StackPanel Spacing="2">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <ia:Icon Value="mdi-link-variant" FontSize="12" Foreground="#40b840"
+        <StackPanel Spacing="5" IsVisible="{Binding ShowAttachment}">
+            <Border Background="#E61a2a1a"
+                    BorderBrush="#40b84066"
+                    BorderThickness="1"
+                    CornerRadius="5"
+                    Padding="8,7">
+                <StackPanel Spacing="4">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <ia:Icon Value="mdi-link-variant" FontSize="14" Foreground="#40b840"
                                  VerticalAlignment="Center"/>
-                        <TextBlock Text="Attached" FontSize="10" FontWeight="SemiBold"
+                        <TextBlock Text="Workspace linked"
+                                   FontSize="11" FontWeight="SemiBold"
                                    Foreground="#40b840" VerticalAlignment="Center"/>
                     </StackPanel>
-                    <TextBlock Text="{Binding AttachmentSummary}" FontSize="11" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding AttachmentSummary}"
+                               FontSize="12" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimary}"
+                               TextWrapping="Wrap"/>
                 </StackPanel>
             </Border>
-            <!-- The attached project/lead has no element yet — create + link one -->
-            <StackPanel Spacing="4" IsVisible="{Binding ShowAttachmentElementCreate}">
-                <TextBlock Text="NO ELEMENT LINKED — CREATE ONE" Classes="LabelMuted"
-                           FontSize="9" LetterSpacing="1"/>
-                <Grid ColumnDefinitions="*,6,Auto">
+
+            <StackPanel Spacing="6" IsVisible="{Binding ShowAttachmentElementCreate}">
+                <TextBlock Text="NO ELEMENT — CREATE ONE"
+                           Classes="LabelMuted" FontSize="10" LetterSpacing="0.8"/>
+                <Grid ColumnDefinitions="*,8,Auto">
                     <TextBox Grid.Column="0" Classes="PanelTextBox"
                              Text="{Binding AttachmentElementName, Mode=TwoWay}"
-                             Watermark="Element name…"/>
+                             PlaceholderText="Element name…"/>
                     <Button Grid.Column="2" Content="Create"
+                            Classes="ToolbarButton" Padding="8,6"
                             Command="{Binding CreateAttachmentElementCommand}"
-                            ToolTip.Tip="Create this element on the ERP and link the workspace to it"/>
+                            ToolTip.Tip="Create this element on MassiveLAB and link the workspace"/>
                 </Grid>
             </StackPanel>
 
-            <!-- Lead was converted to a project — offer one-click re-attach -->
-            <Button Content="Attach to Converted Project" HorizontalAlignment="Stretch"
+            <Button Content="Attach to Converted Project"
+                    HorizontalAlignment="Stretch"
+                    Classes="ToolbarButton"
+                    Padding="8,7"
                     IsVisible="{Binding ShowReattachOffer}"
                     Command="{Binding ReattachToProjectCommand}"
-                    ToolTip.Tip="This lead was converted to a project on the ERP — re-attach the workspace to that project"/>
+                    ToolTip.Tip="This lead was converted to a project — re-attach the workspace"/>
 
-            <Button Content="Send Slice to ERP" HorizontalAlignment="Stretch"
+            <Button Content="Send Slice to MassiveLAB"
+                    HorizontalAlignment="Stretch"
                     Classes="ExportCta"
+                    Padding="8,8"
                     Command="{Binding SendSliceCommand}"
-                    ToolTip.Tip="Register this slice on the linked element — preview + stats; heavy files stay on the UNAS and are linked by path"/>
+                    ToolTip.Tip="Register this slice on the linked element — preview + stats; heavy files stay on the UNAS"/>
 
-            <Grid ColumnDefinitions="*,6,*">
-                <Button Grid.Column="0" Content="Change" HorizontalAlignment="Stretch"
+            <Grid ColumnDefinitions="*,8,*">
+                <Button Grid.Column="0" Content="Change"
+                        HorizontalAlignment="Stretch"
+                        Classes="ToolbarButton" Padding="8,6"
                         Command="{Binding ChangeCommand}"
                         ToolTip.Tip="Pick a different project/lead"/>
-                <Button Grid.Column="2" Content="Detach" HorizontalAlignment="Stretch"
+                <Button Grid.Column="2" Content="Detach"
+                        HorizontalAlignment="Stretch"
+                        Classes="ToolbarButton" Padding="8,6"
                         Command="{Binding DetachCommand}"/>
             </Grid>
         </StackPanel>
 
-        <!-- Saved workspaces in the attached project's folder — open to iterate an element -->
-        <StackPanel IsVisible="{Binding HasWorkspaceCandidates}" Spacing="2" Margin="0,4,0,0">
-            <TextBlock Text="PROJECT WORKSPACES" FontSize="9" LetterSpacing="1" Opacity="0.6"/>
-            <!-- Open command lives on ErpViewModel; do NOT use ((vm:ErpViewModel)DataContext)
-                 casts here — Avalonia deferred DataTemplates cannot resolve the vm: xmlns
-                 prefix at runtime and throw ArgumentException (app abort) when candidates appear. -->
+        <!-- Saved workspaces in the attached project's folder -->
+        <StackPanel IsVisible="{Binding HasWorkspaceCandidates}" Spacing="6">
+            <TextBlock Text="PROJECT WORKSPACES"
+                       Classes="LabelMuted" FontSize="10" LetterSpacing="0.8"/>
             <ItemsControl ItemsSource="{Binding WorkspaceCandidates}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <Grid ColumnDefinitions="*,Auto" Margin="0,1">
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Text="{Binding Name}" FontSize="10" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock Text="{Binding Detail}" FontSize="9" Opacity="0.55"/>
-                            </StackPanel>
-                            <Button Grid.Column="1" Content="Open" FontSize="10" Padding="8,2" VerticalAlignment="Center"
-                                    Command="{Binding $parent[UserControl].DataContext.OpenWorkspaceCandidateCommand}"
-                                    CommandParameter="{Binding}"
-                                    ToolTip.Tip="Open this saved workspace — its elements, toolpaths and ERP link load into the app so you can iterate (the next send registers a new rev)."/>
-                        </Grid>
+                        <Border Margin="0,0,0,6" Padding="8,6" CornerRadius="5"
+                                Background="#E6242424"
+                                BorderBrush="#323232"
+                                BorderThickness="1">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <StackPanel Grid.Column="0" Spacing="2">
+                                    <TextBlock Text="{Binding Name}" FontSize="11"
+                                               FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding Detail}" FontSize="10"
+                                               Foreground="{DynamicResource TextMuted}"/>
+                                </StackPanel>
+                                <Button Grid.Column="1" Content="Open"
+                                        Classes="ToolbarButton"
+                                        FontSize="11" Padding="8,5"
+                                        VerticalAlignment="Center"
+                                        Command="{Binding $parent[UserControl].DataContext.OpenWorkspaceCandidateCommand}"
+                                        CommandParameter="{Binding}"
+                                        ToolTip.Tip="Open this saved workspace so you can iterate (next send registers a new rev)."/>
+                            </Grid>
+                        </Border>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
         </StackPanel>
 
-        <TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontSize="10" Opacity="0.7"/>
-        <TextBlock Text="{Binding PricingSummary}" TextWrapping="Wrap" FontSize="10" Opacity="0.55"
-                   IsVisible="{Binding PricingSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                   ToolTip.Tip="Rates in effect from the ERP Printing Cost Basis page. The stats panel cost uses these when connected; sendslice returns the authoritative cost for the revision."/>
+        <!-- Pricing footer -->
+        <Border Background="#E61c1c1c"
+                BorderBrush="#2a2a2a"
+                BorderThickness="1"
+                CornerRadius="5"
+                Padding="8,6"
+                IsVisible="{Binding PricingSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <StackPanel Spacing="2">
+                <TextBlock Text="PRICING"
+                           Classes="LabelMuted" FontSize="9" LetterSpacing="0.8"/>
+                <TextBlock Text="{Binding PricingSummary}"
+                           TextWrapping="Wrap" FontSize="10"
+                           Foreground="{DynamicResource TextSecondary}"
+                           ToolTip.Tip="Rates from MassiveLAB Printing Cost Basis. Stats cost uses these when connected; sendslice returns the authoritative cost."/>
+            </StackPanel>
+        </Border>
     </StackPanel>
 </UserControl>

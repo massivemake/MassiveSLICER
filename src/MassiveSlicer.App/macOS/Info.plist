@@ -24,5 +24,29 @@
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.massivemake.massiveslicer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>massiveslicer</string>
+            </array>
+        </dict>
+    </array>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>MassiveSLICER Workspace</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>mass</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Avalonia.Threading;
+using MassiveSlicer.Core.Models;
 using MassiveSlicer.ViewModels;
 
 namespace MassiveSlicer.App.Console;
@@ -19,6 +21,10 @@ namespace MassiveSlicer.App.Console;
 ///   GET  /screenshot                -> { ok, path, bytes }  (full-window PNG under %LOCALAPPDATA%/MassiveSlicer/screenshots/)
 ///   GET  /screenshot?format=png     -> raw image/png body
 ///   GET  /materials                 -> PBR shader mode, lighting, layer toggles, active mesh maps
+///   GET  /reveal?path=P             -> open Explorer (Windows) / Finder at that MassiveFILES folder
+///   POST /reveal                    -> same, JSON or raw path body
+///   GET  /open?path=P               -> open a .mass workspace in the running app
+///   POST /open                      -> same, JSON or raw path body
 ///   POST /materials  {..}           -> partial update of PBR/material viewport state
 ///   POST /command   {"command":".."} -> { ok, ran, output:[ ".." ] }   (or raw body = the command)
 ///
@@ -41,14 +47,42 @@ public sealed class LocalControlBridge : IDisposable
         _preferredPort = preferredPort;
     }
 
-    /// <summary>Binds the first free port in [preferred, preferred+5] on 127.0.0.1. Returns the port, or 0 on failure.</summary>
+    /// <summary>
+    /// True when shop LAN clients (Hermes on another PC) may hit the bridge.
+    /// Opt-in: env <c>MASSIVESLICER_BRIDGE_LAN=1</c> or file
+    /// <c>%LOCALAPPDATA%/MassiveSlicer/bridge.lan</c> containing 1/true.
+    /// Default stays loopback — POST /command can move the robot.
+    /// </summary>
+    public static bool ListenOnLan()
+    {
+        string? env = Environment.GetEnvironmentVariable("MASSIVESLICER_BRIDGE_LAN");
+        if (!string.IsNullOrWhiteSpace(env))
+        {
+            env = env.Trim();
+            if (env is "0" or "false" or "no" or "off") return false;
+            if (env is "1" or "true" or "yes" or "on") return true;
+        }
+        try
+        {
+            string path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MassiveSlicer", "bridge.lan");
+            if (!File.Exists(path)) return false;
+            string raw = File.ReadAllText(path).Trim();
+            return raw is "" or "1" or "true" or "yes" or "on";
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Binds the first free port in [preferred, preferred+5]. Loopback unless ListenOnLan.</summary>
     public int Start()
     {
+        var bind = ListenOnLan() ? IPAddress.Any : IPAddress.Loopback;
         for (int p = _preferredPort; p <= _preferredPort + 5; p++)
         {
             try
             {
-                var listener = new TcpListener(IPAddress.Loopback, p);
+                var listener = new TcpListener(bind, p);
                 listener.Start();
                 _listener = listener;
                 Port = p;
@@ -172,6 +206,15 @@ public sealed class LocalControlBridge : IDisposable
         int qi = rawPath.IndexOf('?');
         if (qi >= 0) { path = rawPath[..qi]; query = rawPath[(qi + 1)..]; }
 
+        if (method == "OPTIONS")
+            return JsonSerializer.Serialize(new { ok = true }, Json);
+
+        if ((method == "GET" || method == "POST") && path == "/reveal")
+            return RevealPath(method == "GET" ? QueryValue(query, "path") : ParsePathBody(body));
+
+        if ((method == "GET" || method == "POST") && path == "/open")
+            return await OpenWorkspacePathAsync(method == "GET" ? QueryValue(query, "path") : ParsePathBody(body));
+
         if (method == "GET" && (path == "/ping" || path == "/"))
             return JsonSerializer.Serialize(new { ok = true, app = "MassiveSlicer", port = Port }, Json);
 
@@ -186,6 +229,9 @@ public sealed class LocalControlBridge : IDisposable
                     tool = r.KrlToolIndex,
                     @base = r.KrlBaseIndex,
                     pose = new { x = r.TcpX, y = r.TcpY, z = r.TcpZ, a = r.TcpA, b = r.TcpB, c = r.TcpC },
+                    workspace = _main.AppPreferences.LastWorkspacePath,
+                    lan = ListenOnLan(),
+                    port = Port,
                 }, Json);
             });
 
@@ -268,6 +314,138 @@ public sealed class LocalControlBridge : IDisposable
         }
         catch { /* not JSON — treat the raw body as the command */ }
         return body.Trim();
+    }
+
+    private static string QueryValue(string query, string key)
+    {
+        foreach (string kv in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string[] p = kv.Split('=', 2);
+            if (p.Length == 2 && p[0].Equals(key, StringComparison.OrdinalIgnoreCase))
+                return Uri.UnescapeDataString(p[1].Replace('+', ' '));
+        }
+        return "";
+    }
+
+    private static string ParsePathBody(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return "";
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                if (doc.RootElement.TryGetProperty("path", out var p))
+                    return p.GetString() ?? "";
+                if (doc.RootElement.TryGetProperty("folder", out var f))
+                    return f.GetString() ?? "";
+            }
+        }
+        catch { /* raw path */ }
+        return body.Trim().Trim('"');
+    }
+
+    private static string RevealPath(string raw)
+    {
+        string requested = (raw ?? "").Trim();
+        if (requested.Length == 0)
+            return JsonSerializer.Serialize(new { ok = false, error = "path required" });
+
+        string local = ToLocalOsPath(requested);
+        if (!AllowedRevealPath(local) && !AllowedRevealPath(requested))
+            return JsonSerializer.Serialize(new { ok = false, error = "path not on MassiveFILES" });
+
+        string target = local;
+        try
+        {
+            if (File.Exists(target))
+                target = Path.GetDirectoryName(target) ?? target;
+            else if (!Directory.Exists(target))
+            {
+                string parent = Path.GetDirectoryName(target) ?? "";
+                if (Directory.Exists(parent)) target = parent;
+            }
+        }
+        catch { /* use as-is */ }
+
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = "\"" + target + "\"",
+                    UseShellExecute = true,
+                });
+            }
+            else
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "open",
+                    Arguments = target,
+                    UseShellExecute = false,
+                });
+            }
+            return JsonSerializer.Serialize(new { ok = true, folder = target, path = local });
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new { ok = false, error = ex.Message, folder = target });
+        }
+    }
+
+    private async Task<string> OpenWorkspacePathAsync(string raw)
+    {
+        string requested = MassiveSlicer.Core.IO.ProtocolUri.ResolveWorkspacePath(raw) ?? (raw ?? "").Trim().Trim('"');
+        if (requested.Length == 0)
+            return JsonSerializer.Serialize(new { ok = false, error = "path required" });
+        if (!requested.EndsWith(".mass", StringComparison.OrdinalIgnoreCase))
+            return JsonSerializer.Serialize(new { ok = false, error = "not a .mass file" });
+
+        string local = ToLocalOsPath(requested);
+        if (!AllowedRevealPath(local) && !AllowedRevealPath(requested))
+            return JsonSerializer.Serialize(new { ok = false, error = "path not on MassiveFILES" });
+
+        try
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => _main.OpenWorkspace(local));
+            return JsonSerializer.Serialize(new { ok = true, opened = local });
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new { ok = false, error = ex.Message, path = local });
+        }
+    }
+
+    private static string ToLocalOsPath(string p)
+    {
+        string n = p.Replace('/', Path.DirectorySeparatorChar);
+        if (OperatingSystem.IsWindows())
+        {
+            const string macRoot = "/Volumes/MassiveFILES/";
+            if (p.StartsWith(macRoot, StringComparison.OrdinalIgnoreCase))
+                return "Z:\\" + p[macRoot.Length..].Replace('/', '\\');
+            if (p.StartsWith("/Volumes/MassiveFILES", StringComparison.OrdinalIgnoreCase))
+                return "Z:\\";
+        }
+        return n;
+    }
+
+    private static bool AllowedRevealPath(string p)
+    {
+        if (string.IsNullOrWhiteSpace(p)) return false;
+        string n = p.Replace('\\', '/');
+        if (n.Contains("/MassiveFILES/", StringComparison.OrdinalIgnoreCase)) return true;
+        if (n.StartsWith("/Volumes/MassiveFILES", StringComparison.OrdinalIgnoreCase)) return true;
+        if (n.Length >= 3 && (n[0] is 'Z' or 'z') && n[1] == ':' &&
+            (n.StartsWith("Z:/Projects/", StringComparison.OrdinalIgnoreCase)
+             || n.StartsWith("Z:/Research/", StringComparison.OrdinalIgnoreCase)
+             || n.Equals("Z:/Projects", StringComparison.OrdinalIgnoreCase)
+             || n.Equals("Z:/Research", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        return false;
     }
 
     private static async Task WriteBinaryAsync(NetworkStream s, int code, string contentType, byte[] body, CancellationToken ct)

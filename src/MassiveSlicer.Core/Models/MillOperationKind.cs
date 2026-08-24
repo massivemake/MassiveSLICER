@@ -74,14 +74,14 @@ public sealed class MillOperationInfo
             Kind = MillOperationKind.PlanarFacing,
             DisplayName = "Planar facing",
             Icon = "mdi-arrow-collapse-down",
-            Description = "Face a planar region flat. Parameters coming next.",
+            Description = "Face a planar region flat. Set TOOL AXIS / tilt so the path and T12 are not locked to world -Z.",
         },
         new()
         {
             Kind = MillOperationKind.PlanarClearing,
             DisplayName = "Planar clearing",
             Icon = "mdi-arrow-expand-all",
-            Description = "2.5D area clear / pocket roughing on a plane. Parameters coming next.",
+            Description = "2.5D area clear / pocket roughing on a plane. Shares TOOL AXIS with planar facing.",
         },
         new()
         {

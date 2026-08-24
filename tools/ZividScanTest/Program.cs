@@ -12,7 +12,7 @@ if (result.SavedZdfPath is not null)
     Console.WriteLine($"Saved {result.SavedZdfPath}");
 
 sw.Restart();
-var node = PointCloudMesher.Build(result.PointsXYZ, result.Width, result.Height, "Scan");
+var node = PointCloudMesher.Build(result, "Scan");
 if (node?.PendingMesh is not { } mesh)
 {
     Console.WriteLine("Meshing produced no geometry!");

@@ -28,6 +28,11 @@ public class WorkspaceSaveTest
                 SelectToolpath         = true,
                 ScrubModelName         = "Curtain",
                 ScrubToolpathName      = "Toolpath 1",
+                KrlToolIndex           = 12,
+                KrlBaseIndex           = 1,
+                Lfam3WorkflowPhase     = "Mill",
+                HasPrePrintScanStep    = false,
+                MountedToolName        = "Tool 12",
             },
         };
 
@@ -53,6 +58,11 @@ public class WorkspaceSaveTest
             Assert.True(s.SelectToolpath);
             Assert.Equal("Curtain", s.ScrubModelName);
             Assert.Equal("Toolpath 1", s.ScrubToolpathName);
+            Assert.Equal(12, s.KrlToolIndex);
+            Assert.Equal(1, s.KrlBaseIndex);
+            Assert.Equal("Mill", s.Lfam3WorkflowPhase);
+            Assert.Equal(false, s.HasPrePrintScanStep);
+            Assert.Equal("Tool 12", s.MountedToolName);
         }
         finally
         {
@@ -182,6 +192,48 @@ public class WorkspaceSaveTest
             Assert.Single(loaded!.Models);
             Assert.Single(loaded.Models[0].Toolpaths);
             Assert.Equal(20_000, loaded.Models[0].Toolpaths[0].RawData!.Layers[0].Moves.Count);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Mill_sidebar_round_trips_with_workspace()
+    {
+        var doc = new WorkspaceDocument
+        {
+            Settings = new AppPreferences
+            {
+                Mill = new MillSidebarSettings
+                {
+                    SelectedOperation = nameof(MillOperationKind.PlanarFacing),
+                    AreaSelectTool    = nameof(MillAreaSelectTool.Box),
+                    SelectedBitId     = "bit-ap90",
+                    PlanarToolAxis    = nameof(MillPlanarAxisKind.WorldNegZ),
+                    PlanarTiltDeg     = 15,
+                    OffsetDistanceMm  = 2.5,
+                    StepoverMm        = 6.5,
+                    SpindleRpm        = 1800,
+                },
+            },
+        };
+
+        var path = Path.Combine(Path.GetTempPath(), $"massive-mill-sidebar-{Guid.NewGuid():N}.mass");
+        try
+        {
+            WorkspaceLoader.Save(doc, path);
+            var loaded = WorkspaceLoader.Load(path);
+            var mill = loaded!.Settings.Mill;
+            Assert.NotNull(mill);
+            Assert.Equal(nameof(MillOperationKind.PlanarFacing), mill!.SelectedOperation);
+            Assert.Equal(nameof(MillAreaSelectTool.Box), mill.AreaSelectTool);
+            Assert.Equal("bit-ap90", mill.SelectedBitId);
+            Assert.Equal(15, mill.PlanarTiltDeg, 4);
+            Assert.Equal(2.5, mill.OffsetDistanceMm, 4);
+            Assert.Equal(6.5, mill.StepoverMm, 4);
+            Assert.Equal(1800, mill.SpindleRpm, 4);
         }
         finally
         {

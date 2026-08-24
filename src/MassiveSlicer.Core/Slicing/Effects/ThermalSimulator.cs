@@ -123,7 +123,9 @@ public static class ThermalSimulator
         {
             float len = 0f;
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Extrude)
+                // Brim excluded for the same reason as in LayerSpeedPostProcessor: it is not
+                // part of the object, so its length must not set the layer-time endpoints.
+                if (move.Kind == MoveKind.Extrude && !move.IsBrim)
                     len += Vector3.Distance(move.From, move.To);
             if (len <= 0.1f) continue;
             lMin = MathF.Min(lMin, len);

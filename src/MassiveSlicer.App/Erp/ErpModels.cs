@@ -129,3 +129,30 @@ public sealed record ErpProjectInfo(
     string Number,
     string Title,
     IReadOnlyList<ErpElement> Elements);
+
+// ── Shared print / material preset library (ERP source of truth) ─────────────
+
+/// <summary>
+/// One library entry from GET/POST/PUT print-presets or material-presets.
+/// <see cref="PayloadJson"/> is the raw desktop record (PrintPresetRecord or MaterialPreset)
+/// as JSON text so unknown future fields round-trip without a hard schema lock.
+/// </summary>
+public sealed record ErpPresetEntry(
+    string Id,
+    DateTime? UpdatedAt,
+    string? UpdatedBy,
+    string PayloadJson);
+
+/// <summary>GET /presets-bundle — print, material, mill tools, optional KRL post-process default.</summary>
+public sealed record ErpPresetsBundle(
+    string Version,
+    IReadOnlyList<ErpPresetEntry> PrintPresets,
+    IReadOnlyList<ErpPresetEntry> MaterialPresets,
+    IReadOnlyList<ErpPresetEntry> MillTools,
+    ErpPresetEntry? KrlPostProcess = null);
+
+/// <summary>
+/// Result of POST /api/slicer/v1/login (email + password). The token is the same
+/// bearer used on every other slicer route (Settings → Slicer Access today).
+/// </summary>
+public sealed record ErpLoginResult(string Token, string? Email, string? DisplayName, DateTime? ExpiresAt);

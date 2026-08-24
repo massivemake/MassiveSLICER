@@ -263,6 +263,12 @@ public sealed class AppPreferences
     /// <summary>Number of brim offset loops.</summary>
     public int BrimLoops { get; set; } = 3;
 
+    /// <summary>Fixed brim print speed (mm/s), independent of print speed and Adaptive Speed.</summary>
+    public double BrimSpeedMmS { get; set; } = 60.0;
+
+    /// <summary>Absolute brim extrusion RPM (%). 0 = let RPM follow brim speed.</summary>
+    public double BrimRpmPercent { get; set; }
+
     /// <summary>X-Bracing Wall: cut dual-wall X notches for structural back-support.</summary>
     public bool XBracingEnabled { get; set; }
 
@@ -340,6 +346,10 @@ public sealed class AppPreferences
 
     /// <summary>Pattern distribution: "Wavelength (mm)", "Even (path length)", or "Radial (angle)".</summary>
     public string PatternMapping { get; set; } = "Wavelength (mm)";
+    /// <summary>How far Wave/Pattern reach: Everything / Walls only / Visible skin (raycast).
+    /// An unrecognised value falls back to Everything, so workspaces saved with a retired
+    /// option still load.</summary>
+    public string PatternScope { get; set; } = "Everything";
 
     public double PatternWavelengthMm { get; set; } = 60.0;
     public double PatternAmplitude { get; set; }
@@ -407,11 +417,11 @@ public sealed class AppPreferences
     public double ZHopMm { get; set; }
 
     /// <summary>Wipe mode display: Off, Retrace, Same-Direction.</summary>
-    public string WipeModeDisplay { get; set; } = "Off";
+    public string WipeModeDisplay { get; set; } = "Same-Direction";
 
-    public double WipeLengthMm { get; set; } = 10.0;
+    public double WipeLengthMm { get; set; } = 35.0;
     public double WipeRampMm { get; set; } = 5.0;
-    public double WipeSpeed { get; set; } = 120.0;
+    public double WipeSpeed { get; set; } = 600.0;
     /// <summary>Skip wipe when the following travel is shorter than 2× layer height.</summary>
     public bool WipeSkipShortTravels { get; set; }
     public double ExtrusionStartWaitSec { get; set; }
@@ -429,7 +439,17 @@ public sealed class AppPreferences
     /// then screw on + wait + URM off on resume. When false, <c>$OUT[9]</c> stays on for the whole job
     /// (legacy MassiveSLICER behaviour).
     /// </summary>
-    public bool DigitalStartStopEnabled { get; set; }
+    public bool DigitalStartStopEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Robot Mode MAT (T1/T2/T3/RPM). Null = not in file (pre-split) — load migrates
+    /// from <see cref="DigitalStartStopEnabled"/>. New prefs set this to false so
+    /// Travel Moves can default on without also turning on Caracol MAT.
+    /// </summary>
+    public bool? RobotModeEnabled { get; set; }
+
+    /// <summary>Extruder cooling air: $OUT[5] on in header, off in footer.</summary>
+    public bool ExtruderAirEnabled { get; set; }
 
     public bool ResumeRampEnabled { get; set; }
     public double ResumeRampStartSpeed { get; set; } = 0.5;
@@ -514,8 +534,8 @@ public sealed class AppPreferences
     /// <summary>Width of the KRL orientation transition ramp (mm).</summary>
     public double OrientationSigmaMm { get; set; } = 30.0;
 
-    /// <summary>KUKA $APO.CVEL value (0–100) used by the simulation velocity profile.</summary>
-    public double ApoCvel { get; set; } = 100.0;
+    /// <summary>KUKA $APO.CVEL value (0–100). Written to the SRC header and used by the simulation velocity profile.</summary>
+    public double ApoCvel { get; set; }
 
     // ── Scan (Zivid) ──────────────────────────────────────────────────────
 
@@ -531,6 +551,12 @@ public sealed class AppPreferences
     /// <summary>KUKA BASE_DATA index used while scanning (1–32).</summary>
     public int ScanBaseDataIndex { get; set; } = 1;
 
+    /// <summary>
+    /// MILL right-sidebar snapshot (operation, Box/Face area tool, bit, feeds, planar axis).
+    /// Null on files saved before this field — do not reset the live mill panel.
+    /// </summary>
+    public MillSidebarSettings? Mill { get; set; }
+
     /// <summary>Path to the last workspace saved via Save As (.mass). Restored on next launch.</summary>
     public string? LastWorkspacePath { get; set; }
 
@@ -544,9 +570,16 @@ public sealed class AppPreferences
     /// or without the /api/slicer/v1 suffix.</summary>
     public string ErpBaseUrl { get; set; } = "https://lab.massivemake.com/api/slicer/v1";
 
-    /// <summary>Bearer token for the ERP slicer API. Kept in local prefs only —
-    /// scrubbed from workspace (.mass) settings snapshots.</summary>
+    /// <summary>Bearer token from ERP Settings → Slicer Access, or from
+    /// <c>POST /api/slicer/v1/login</c>. Local prefs only — never in .mass files.</summary>
     public string? ErpApiToken { get; set; }
+
+    /// <summary>Lab login email. Used with <see cref="ErpPassword"/> to fetch
+    /// <see cref="ErpApiToken"/> automatically. Local prefs only.</summary>
+    public string? ErpEmail { get; set; }
+
+    /// <summary>Lab login password. Local prefs only — scrubbed from .mass files.</summary>
+    public string? ErpPassword { get; set; }
 
     /// <summary>Per-cell SMB credentials for direct Export-to-Robot uploads.
     /// Passwords are scrubbed from workspace (.mass) settings snapshots.</summary>

@@ -1,3 +1,4 @@
+using System.Globalization;
 using MassiveSlicer.Core.C3Bridge;
 using MassiveSlicer.Core.Models;
 
@@ -6,6 +7,8 @@ namespace MassiveSlicer.Core.IO;
 /// <summary>Formats raw poll values for the live I/O monitor UI.</summary>
 public static class LiveIoValueFormatter
 {
+    static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
     public static bool? TryParseBool(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
@@ -51,6 +54,59 @@ public static class LiveIoValueFormatter
             LiveIoValueFormat.Millivolt   => $"{scalar:F2} V",
             _                             => signal.Unit is { } u ? $"{scalar:F2} {u}" : $"{scalar:F3}",
         };
+    }
+
+    /// <summary>Editable engineering value for an analog channel (no unit).</summary>
+    public static string FormatEditValue(LiveIoSignalConfig signal, string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "0";
+        double scalar = KrlVarParser.ParseScalar(raw);
+        return signal.ValueFormat switch
+        {
+            LiveIoValueFormat.TempC      => KrlAnout.AnoutToTempC((float)scalar).ToString("F1", Inv),
+            LiveIoValueFormat.RpmPercent => KrlAnout.AnoutToRpmPercent((float)scalar).ToString("F1", Inv),
+            _                            => scalar.ToString("F4", Inv),
+        };
+    }
+
+    /// <summary>
+    /// Convert UI engineering text to a KRL write string for <c>$ANOUT</c> (or raw REAL).
+    /// O1-O3: C -> ANOUT; O4: % -> ANOUT; Raw: 0-1 ANOUT.
+    /// </summary>
+    public static bool TryParseAnalogWrite(LiveIoSignalConfig signal, string? editText, out string krlValue, out string error)
+    {
+        krlValue = "0";
+        error = "";
+        if (string.IsNullOrWhiteSpace(editText))
+        {
+            error = "Enter a number";
+            return false;
+        }
+
+        var cleaned = editText.Trim()
+            .TrimEnd('%')
+            .Replace("°C", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("C", "", StringComparison.OrdinalIgnoreCase)
+            .Trim();
+
+        if (!double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out double eng)
+            && !double.TryParse(cleaned, NumberStyles.Float, CultureInfo.CurrentCulture, out eng))
+        {
+            error = "Enter a number";
+            return false;
+        }
+
+        float anout = signal.ValueFormat switch
+        {
+            LiveIoValueFormat.TempC      => KrlAnout.TempToAnout((float)eng),
+            LiveIoValueFormat.RpmPercent => KrlAnout.RpmPercentToAnout((float)eng),
+            _                            => (float)Math.Clamp(eng, 0.0, 1.0),
+        };
+
+        krlValue = signal.ValueFormat == LiveIoValueFormat.RpmPercent
+            ? KrlAnout.FormatAnout4(anout)
+            : anout.ToString("0.####", Inv);
+        return true;
     }
 
     /// <summary>Whether the indicator should show the lime active state.</summary>

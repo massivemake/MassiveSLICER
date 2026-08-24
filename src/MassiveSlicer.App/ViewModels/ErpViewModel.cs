@@ -11,11 +11,10 @@ namespace MassiveSlicer.ViewModels;
 public enum ErpConnectionState { Disconnected, Connecting, Connected }
 
 /// <summary>
-/// ERP "Project Attachment" dock (bottom-left of the viewport, phase 1):
-/// connection settings (base URL + bearer token, persisted in prefs),
-/// combined Project/Lead quick-search, element picker, and attaching the
-/// current workspace to the chosen record. The attachment is persisted in
-/// the .mass file and displays offline (independent of connection state).
+/// MassiveLAB (ERP) panel: left sidebar menu between ROBOT and VIEWPORT.
+/// Connection settings (base URL + bearer / login, prefs), Project/Lead search,
+/// element picker, and attaching the workspace. Attachment persists in .mass
+/// and displays offline.
 /// </summary>
 public sealed class ErpViewModel : ViewModelBase
 {
@@ -35,12 +34,17 @@ public sealed class ErpViewModel : ViewModelBase
         _log       = log;
         _baseUrl   = prefs.ErpBaseUrl;
         _apiToken  = prefs.ErpApiToken ?? "";
+        _email     = prefs.ErpEmail ?? "";
+        _password  = prefs.ErpPassword ?? "";
         OnPropertyChanged(nameof(BaseUrl));
         OnPropertyChanged(nameof(ApiToken));
+        OnPropertyChanged(nameof(Email));
+        OnPropertyChanged(nameof(Password));
 
         // Connect automatically at launch when credentials are configured
-        // (URL + token live in Preferences → Connections).
-        if (_baseUrl.Trim().Length > 0 && _apiToken.Trim().Length > 0)
+        // (email+password login, or a pasted API token).
+        if (_baseUrl.Trim().Length > 0 &&
+            (_password.Trim().Length > 0 && _email.Trim().Length > 0 || _apiToken.Trim().Length > 0))
             _ = ConnectAsync();
     }
 
@@ -56,7 +60,7 @@ public sealed class ErpViewModel : ViewModelBase
         new RelayCommand(() => OpenPreferencesRequested?.Invoke());
     private RelayCommand? _openPreferencesCommand;
 
-    // -- Dock chrome ---------------------------------------------------------
+    // -- MassiveLAB chrome (left StepCard header + connection strip) -------------
 
     private bool _isExpanded;
     public bool IsExpanded
@@ -75,12 +79,31 @@ public sealed class ErpViewModel : ViewModelBase
 
     public string ToggleIcon => _isExpanded ? "mdi-chevron-down" : "mdi-briefcase-outline";
 
-    /// <summary>Dock button badge: "ERP" unattached, else "25-114 · Element 3".</summary>
-    public string ToggleLabel => _attachment is null
-        ? "ERP"
+    /// <summary>Legacy badge text; prefer <see cref="HeaderBadge"/>.</summary>
+    public string ToggleLabel => HeaderBadge;
+
+    /// <summary>StepCard pill: Offline / Online / "25-114 · Element 3".</summary>
+    public string HeaderBadge => _attachment is null
+        ? IsConnecting ? "…"
+            : IsConnected ? "Online"
+            : "Offline"
         : _attachment.ElementName is { Length: > 0 } el
             ? $"{_attachment.Number} · {el}"
             : _attachment.Number;
+
+    public string ConnectionTitle => IsConnecting ? "Connecting…"
+        : IsConnected ? "Connected to MassiveLAB"
+        : "MassiveLAB offline";
+
+    /// <summary>Status-dot color for the connection strip (hex for SolidColorBrush parsing).</summary>
+    public string ConnectionDotColor => IsConnected ? "#40b840"
+        : IsConnecting ? "#ffd600"
+        : "#7c7c7c";
+
+    public Avalonia.Media.IBrush ConnectionDotBrush =>
+        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse(ConnectionDotColor));
+
+    public bool HasSearchResults => SearchResults.Count > 0;
 
     // -- Connection settings ---------------------------------------------------
 
@@ -96,6 +119,30 @@ public sealed class ErpViewModel : ViewModelBase
         }
     }
 
+    private string _email = "";
+    public string Email
+    {
+        get => _email;
+        set
+        {
+            if (!SetField(ref _email, value)) return;
+            if (_prefs is not null) { _prefs.ErpEmail = value.Trim().Length > 0 ? value.Trim() : null; _savePrefs?.Invoke(); }
+            ConnectCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private string _password = "";
+    public string Password
+    {
+        get => _password;
+        set
+        {
+            if (!SetField(ref _password, value)) return;
+            if (_prefs is not null) { _prefs.ErpPassword = value.Length > 0 ? value : null; _savePrefs?.Invoke(); }
+            ConnectCommand.RaiseCanExecuteChanged();
+        }
+    }
+
     private string _apiToken = "";
     public string ApiToken
     {
@@ -107,6 +154,9 @@ public sealed class ErpViewModel : ViewModelBase
             InvalidateClient();
         }
     }
+
+    bool HasLogin => _email.Trim().Length > 0 && _password.Length > 0;
+    bool HasToken => _apiToken.Trim().Length > 0;
 
     private void InvalidateClient()
     {
@@ -127,12 +177,19 @@ public sealed class ErpViewModel : ViewModelBase
         {
             if (!SetField(ref _connectionState, value)) return;
             OnPropertyChanged(nameof(IsConnected));
+            OnPropertyChanged(nameof(IsConnecting));
+            OnPropertyChanged(nameof(HeaderBadge));
+            OnPropertyChanged(nameof(ToggleLabel));
+            OnPropertyChanged(nameof(ConnectionTitle));
+            OnPropertyChanged(nameof(ConnectionDotColor));
+            OnPropertyChanged(nameof(ConnectionDotBrush));
             NotifySectionVisibility();
             ConnectCommand.RaiseCanExecuteChanged();
         }
     }
 
     public bool IsConnected => _connectionState == ErpConnectionState.Connected;
+    public bool IsConnecting => _connectionState == ErpConnectionState.Connecting;
 
     private string _status = "Not connected.";
     public string Status
@@ -143,7 +200,7 @@ public sealed class ErpViewModel : ViewModelBase
 
     public RelayCommand ConnectCommand => _connectCommand ??= new RelayCommand(
         () => _ = ConnectAsync(),
-        () => !_busy && _baseUrl.Trim().Length > 0 && _apiToken.Trim().Length > 0);
+        () => !_busy && _baseUrl.Trim().Length > 0 && (HasLogin || HasToken));
     private RelayCommand? _connectCommand;
 
     private async Task ConnectAsync()
@@ -155,6 +212,35 @@ public sealed class ErpViewModel : ViewModelBase
         Status = "Connecting…";
         try
         {
+            if (HasLogin)
+            {
+                Status = "Signing in…";
+                var login = await ErpClient.LoginAsync(_baseUrl, _email, _password, CancellationToken.None);
+                if (!login.Ok)
+                {
+                    ConnectionState = ErpConnectionState.Disconnected;
+                    Status = login.Error!.Kind switch
+                    {
+                        ErpErrorKind.Unauthorized =>
+                            login.Error.HttpStatus is 401 or 403
+                                ? (login.Error.Message is "token invalid or revoked"
+                                    ? "Email or password rejected."
+                                    : login.Error.Message)
+                                : "Email or password rejected.",
+                        ErpErrorKind.Timeout => "ERP unreachable - timed out.",
+                        ErpErrorKind.BadResponse when login.Error.HttpStatus == 404 =>
+                            "Lab has no login route yet (POST /api/slicer/v1/login). Paste an API token, or ship the Lab prompt in docs/ERP-Login-API-Replit-Prompt.md.",
+                        _ => $"Sign-in failed - {login.Error.Message}",
+                    };
+                    _log?.Invoke($"[erp] login failed: {login.Error.Kind} - {login.Error.Message}");
+                    return;
+                }
+
+                ApiToken = login.Value!.Token;
+                var who = login.Value.DisplayName ?? login.Value.Email ?? _email.Trim();
+                _log?.Invoke($"[erp] signed in as {who}");
+            }
+
             _client?.Dispose();
             _client = new ErpClient(_baseUrl, _apiToken);
             var ping = await _client.PingAsync(CancellationToken.None);
@@ -166,6 +252,7 @@ public sealed class ErpViewModel : ViewModelBase
                 _showSettingsRequested = false;
                 NotifySectionVisibility();
                 _ = RefreshPricingAsync();     // ERP is the pricing source of truth
+                _ = SyncPresetsLibraryAsync(); // shared print + material presets
             }
             else
             {
@@ -237,6 +324,7 @@ public sealed class ErpViewModel : ViewModelBase
         if (query.Trim().Length < 2)
         {
             SearchResults.Clear();
+            OnPropertyChanged(nameof(HasSearchResults));
             return;
         }
 
@@ -266,6 +354,7 @@ public sealed class ErpViewModel : ViewModelBase
                             ? "Token invalid or revoked."
                             : $"Search failed — {result.Error.Message}";
                     }
+                    OnPropertyChanged(nameof(HasSearchResults));
                 });
             }
             catch (OperationCanceledException) { /* superseded keystroke */ }
@@ -404,6 +493,7 @@ public sealed class ErpViewModel : ViewModelBase
         OnPropertyChanged(nameof(Attachment));
         OnPropertyChanged(nameof(AttachmentSummary));
         OnPropertyChanged(nameof(ToggleLabel));
+        OnPropertyChanged(nameof(HeaderBadge));
         NotifySectionVisibility();
         RefreshWorkspaceCandidates();
     }
@@ -486,6 +576,36 @@ public sealed class ErpViewModel : ViewModelBase
             Status = $"Element \"{el.Name}\" created and linked.";
             _log?.Invoke($"[erp] created element {el.Name} on {att.Type} {att.Number} and linked the workspace");
             WorkspaceLinked?.Invoke();
+        });
+    }
+
+    /// <summary>
+    /// Pings MassiveLAB with the save path. No-ops when offline. A 404 means Lab
+    /// has not shipped <c>POST /workspace-saves</c> yet — the JSONL log still holds the path.
+    /// Does <b>not</b> create a slice revision.
+    /// </summary>
+    public async Task NotifyWorkspaceSavedAsync(MassiveSlicer.Core.IO.WorkspaceSaveRecord rec)
+    {
+        var client = _client;
+        if (client is null || !IsConnected)
+        {
+            if (rec.ProjectNumber is { Length: > 0 })
+                _log?.Invoke($"[erp] {rec.File} saved ({rec.UnasPath ?? rec.Path}) — Lab offline, log only.");
+            return;
+        }
+
+        var result = await client.NotifyWorkspaceSavedAsync(rec, CancellationToken.None);
+        Post(() =>
+        {
+            if (result.Ok)
+            {
+                _log?.Invoke($"[erp] MassiveLAB noted {rec.File} at {rec.UnasPath ?? rec.Path}");
+                Status = $"Lab: saved {rec.File}";
+            }
+            else if (result.Error!.HttpStatus == 404)
+                _log?.Invoke("[erp] Lab has no workspace-saves endpoint yet — path is in Projects/_slicer/workspace-saves.jsonl");
+            else
+                _log?.Invoke($"[erp] workspace-save notify failed: {result.Error.Kind} — {result.Error.Message}");
         });
     }
 
@@ -603,6 +723,154 @@ public sealed class ErpViewModel : ViewModelBase
 
     /// <summary>Raised when the pricing config changes (stats panel recomputes cost).</summary>
     public event Action? PricingChanged;
+
+    /// <summary>
+    /// Raised after a successful pull of the shared print/material preset libraries so the
+    /// UI can reload from AppData (MainWindowViewModel wires this).
+    /// </summary>
+    public event Action? PresetsLibraryChanged;
+
+    /// <summary>Lab team KRL post-process default was pulled — apply to Additive.</summary>
+    public event Action<KrlPostProcessSettings>? KrlPostProcessPulled;
+
+    public string KrlPostProcessSyncStatus { get; private set; } = "";
+
+    /// <summary>
+    /// Last presets-sync summary (console + optional status). Empty until first connect attempt.
+    /// </summary>
+    public string PresetsSyncStatus { get; private set; } = "";
+
+    /// <summary>
+    /// Pulls the ERP preset libraries into local AppData and uploads any local-only rows.
+    /// No-ops cleanly when the ERP has not shipped the endpoints yet (404).
+    /// </summary>
+    public async Task SyncPresetsLibraryAsync()
+    {
+        var client = _client;
+        if (client is null || !IsConnected) return;
+        try
+        {
+            var summary = await ErpPresetSync.SyncOnConnectAsync(client, _log, CancellationToken.None);
+            var krl = await ErpKrlPostProcessSync.PullAsync(client, _log, CancellationToken.None);
+            Post(() =>
+            {
+                PresetsSyncStatus = summary;
+                OnPropertyChanged(nameof(PresetsSyncStatus));
+                KrlPostProcessSyncStatus = krl.Summary;
+                OnPropertyChanged(nameof(KrlPostProcessSyncStatus));
+                if (!summary.Contains("not available", StringComparison.OrdinalIgnoreCase)
+                    && !summary.Contains("failed", StringComparison.OrdinalIgnoreCase))
+                    PresetsLibraryChanged?.Invoke();
+                else if (summary.Contains("from ERP", StringComparison.OrdinalIgnoreCase)
+                         || summary.Contains("pushed", StringComparison.OrdinalIgnoreCase))
+                    PresetsLibraryChanged?.Invoke();
+                if (krl.Settings is { } recipe)
+                    KrlPostProcessPulled?.Invoke(recipe);
+            });
+        }
+        catch (Exception ex)
+        {
+            _log?.Invoke($"[erp] presets sync exception: {ex.Message}");
+        }
+    }
+
+    /// <summary>Pushes one print preset after a local save (fire-and-forget from the presets card).</summary>
+    public void PushPrintPresetInBackground(PrintPresetRecord record)
+    {
+        var client = _client;
+        if (client is null || !IsConnected) return;
+        _ = Task.Run(async () =>
+        {
+            try { await ErpPresetSync.PushPrintPresetAsync(client, record, _log, CancellationToken.None); }
+            catch (Exception ex) { _log?.Invoke($"[erp] print push exception: {ex.Message}"); }
+        });
+    }
+
+    /// <summary>Pushes one material preset after a local material-library save.</summary>
+    public void PushMaterialPresetInBackground(MaterialPreset record)
+    {
+        var client = _client;
+        if (client is null || !IsConnected) return;
+        _ = Task.Run(async () =>
+        {
+            try { await ErpPresetSync.PushMaterialPresetAsync(client, record, _log, CancellationToken.None); }
+            catch (Exception ex) { _log?.Invoke($"[erp] material push exception: {ex.Message}"); }
+        });
+    }
+
+    /// <summary>Pushes one mill / cutting-tool library row after a local save.</summary>
+    public void PushMillBitInBackground(MillBitTool record)
+    {
+        var client = _client;
+        if (client is null || !IsConnected) return;
+        _ = Task.Run(async () =>
+        {
+            try { await ErpPresetSync.PushMillToolAsync(client, record, _log, CancellationToken.None); }
+            catch (Exception ex) { _log?.Invoke($"[erp] mill-tool push exception: {ex.Message}"); }
+        });
+    }
+
+    /// <summary>Deletes one mill / cutting-tool row from the ERP after a local delete.</summary>
+    public void DeleteMillBitInBackground(MillBitTool record)
+    {
+        var client = _client;
+        if (client is null || !IsConnected) return;
+        _ = Task.Run(async () =>
+        {
+            try { await ErpPresetSync.DeleteMillToolAsync(client, record, _log, CancellationToken.None); }
+            catch (Exception ex) { _log?.Invoke($"[erp] mill-tool delete exception: {ex.Message}"); }
+        });
+    }
+
+    /// <summary>
+    /// Pull Lab team default if connected. Returns the recipe on 200 so the
+    /// caller can apply it on this thread (Dispatcher.Post would race export).
+    /// </summary>
+    public async Task<KrlPostProcessSettings?> TryRefreshKrlPostProcessAsync()
+    {
+        var client = _client;
+        if (client is null || !IsConnected)
+            return null;
+        var krl = await ErpKrlPostProcessSync.PullAsync(client, _log, CancellationToken.None);
+        Post(() =>
+        {
+            KrlPostProcessSyncStatus = krl.Summary;
+            OnPropertyChanged(nameof(KrlPostProcessSyncStatus));
+        });
+        return krl.Settings;
+    }
+
+    /// <summary>Pull Lab team KRL post-process default and apply via <see cref="KrlPostProcessPulled"/>.</summary>
+    public async Task<string> PullKrlPostProcessAsync()
+    {
+        var client = _client;
+        if (client is null || !IsConnected)
+            return "not connected to Lab";
+        var krl = await ErpKrlPostProcessSync.PullAsync(client, _log, CancellationToken.None);
+        Post(() =>
+        {
+            KrlPostProcessSyncStatus = krl.Summary;
+            OnPropertyChanged(nameof(KrlPostProcessSyncStatus));
+            if (krl.Settings is { } recipe)
+                KrlPostProcessPulled?.Invoke(recipe);
+        });
+        return krl.Summary;
+    }
+
+    /// <summary>Publish the current recipe as the Lab team default.</summary>
+    public async Task<string> PublishKrlPostProcessAsync(KrlPostProcessSettings settings)
+    {
+        var client = _client;
+        if (client is null || !IsConnected)
+            return "not connected to Lab";
+        var summary = await ErpKrlPostProcessSync.PublishAsync(client, settings, _log, CancellationToken.None);
+        Post(() =>
+        {
+            KrlPostProcessSyncStatus = summary;
+            OnPropertyChanged(nameof(KrlPostProcessSyncStatus));
+        });
+        return summary;
+    }
 
     /// <summary>Fetches /pricing and caches it. Safe to call repeatedly.</summary>
     public async Task RefreshPricingAsync()

@@ -25,6 +25,9 @@ public sealed class PrintPresetSample
     public bool IsFavorite { get; set; }
     public bool IsSeeded { get; init; }
 
+    /// <summary>ERP library id when synced to lab.massivemake.com; null if local-only.</summary>
+    public string? ErpId { get; set; }
+
     /// <summary>Always captured/applied — not gated by a field-group checkbox (the material
     /// preset library is its own separate concept; see SaveNewPreset/ApplyPresetToAdditive).</summary>
     public string Material { get; init; } = "";
@@ -153,6 +156,7 @@ public sealed class PrintPresetSample
     public string? TemperatureOffset { get; init; }
     public string? ExtrusionSpeedOffset { get; init; }
     public bool? DigitalStartStopEnabled { get; init; }
+    public bool? RobotModeEnabled { get; init; }
     public double? ExtrusionStartWaitSec { get; init; }
     public double? ExtrusionResumeWaitSec { get; init; }
 
@@ -390,7 +394,8 @@ public sealed class PrintPresetSample
             {
                 S(s, "Temperature offset", TemperatureOffset);
                 S(s, "Extrusion speed offset", ExtrusionSpeedOffset);
-                B(s, "Digital start/stop", DigitalStartStopEnabled);
+                B(s, "Robot mode", RobotModeEnabled);
+                B(s, "Travel start/stop", DigitalStartStopEnabled);
                 D(s, "Extrusion start wait", ExtrusionStartWaitSec, " s");
                 D(s, "Extrusion resume wait", ExtrusionResumeWaitSec, " s");
             });
@@ -498,167 +503,6 @@ public sealed class PresetFieldGroupOption : ViewModelBase
     }
 }
 
-/// <summary>
-/// A live min/max range filter over one numeric field (e.g. bead width). Low/High are plain
-/// numeric fields (always show the true bounds, never ambiguous), PLUS draggable handles
-/// rendered directly on the track. (A third "converge to one value" field was tried and dropped —
-/// parked for separate dev later, not part of this control.)
-///
-/// Interaction model (see RightPanelView.axaml.cs's OnRangeTrack* handlers): the two handles are
-/// NOT independent hit-test elements (that was tried twice and failed both times — two overlaid
-/// Sliders let the top one's track swallow every click; two separate Avalonia Thumbs still let
-/// whichever is topmost in z-order win EVERY hit-test once the handles are coincident, which is a
-/// permanent lock — the "stuck together forever" bug, since the losing handle can then never be
-/// grabbed again and the winning handle is itself clamped against the other, so neither can move).
-/// Instead, a single parent Canvas captures the pointer and decides which bound (Lower/Upper) a
-/// gesture controls: by PROXIMITY when the handles are separated (<see cref="IsLowerNearer"/>),
-/// or — when they're exactly coincident, where proximity is a tie — by the DIRECTION of the first
-/// subsequent movement (<see cref="DecideActiveLowerBound"/>): moving right grabs Upper, left
-/// grabs Lower. A fixed tie-break (e.g. "ties always go to Lower") cannot work here: Lower can
-/// never numerically exceed Upper, so if ties always resolved to Lower, a coincident pair could
-/// only ever be pulled apart in one direction. Direction-deferred resolution escapes both ways.
-/// The chosen bound is locked for the rest of that one gesture (see RangeDragState in the view's
-/// code-behind) so a single continuous drag never flips targets mid-motion.
-///
-/// Dataset bounds recompute as presets are added (see <see cref="RecalculateBounds"/>) so the
-/// fields never offer a min/max the loaded data doesn't actually contain, and fall back to real
-/// slicer clamp ranges (not 0-0) when the list is empty.
-/// </summary>
-public sealed class NumericRangeFilterViewModel : ViewModelBase
-{
-    /// <summary>Fixed pixel width the track renders at — keeps value&lt;-&gt;pixel math simple for a comp.</summary>
-    public const double TrackWidthPx = 220.0;
-
-    public required string FieldName { get; init; }
-    public required Func<PrintPresetSample, double> Selector { get; init; }
-    public double DatasetMin { get; internal set; }
-    public double DatasetMax { get; internal set; }
-
-    // Default to +/-infinity-ish bounds (rather than 0) so whichever of LowerValue/UpperValue
-    // gets set first during construction never clamps against the other's un-set default —
-    // that chicken-and-egg ordering previously threw (DatasetMin > 0 > un-set UpperValue).
-    private double _lowerValue = double.MinValue;
-    public double LowerValue
-    {
-        get => _lowerValue;
-        set
-        {
-            if (!SetField(ref _lowerValue, Math.Clamp(value, DatasetMin, Math.Min(_upperValue, DatasetMax)))) return;
-            OnRangeChanged();
-        }
-    }
-
-    private double _upperValue = double.MaxValue;
-    public double UpperValue
-    {
-        get => _upperValue;
-        set
-        {
-            if (!SetField(ref _upperValue, Math.Clamp(value, Math.Max(_lowerValue, DatasetMin), DatasetMax))) return;
-            OnRangeChanged();
-        }
-    }
-
-    public bool IsActive => LowerValue > DatasetMin || UpperValue < DatasetMax;
-
-    /// <summary>Handle X positions (pixels) — a clean 1:1 value<->pixel mapping. The two handles
-    /// can render at the identical position without any cosmetic offset hack, since interaction
-    /// no longer depends on hit-testing them individually — see the class doc comment.</summary>
-    public double LowerThumbX { get; private set; }
-    public double UpperThumbX { get; private set; }
-    public double FillX { get; private set; }
-    public double FillWidth { get; private set; }
-
-    private void OnRangeChanged()
-    {
-        OnPropertyChanged(nameof(IsActive));
-        RecomputeFill();
-    }
-
-    private void RecomputeFill()
-    {
-        var span = DatasetMax - DatasetMin;
-        double Fraction(double v) => span > 0 ? (v - DatasetMin) / span : 0;
-        LowerThumbX = Fraction(LowerValue) * TrackWidthPx;
-        UpperThumbX = Fraction(UpperValue) * TrackWidthPx;
-        FillX       = LowerThumbX;
-        FillWidth   = Math.Max(0, UpperThumbX - LowerThumbX);
-        OnPropertyChanged(nameof(LowerThumbX));
-        OnPropertyChanged(nameof(UpperThumbX));
-        OnPropertyChanged(nameof(FillX));
-        OnPropertyChanged(nameof(FillWidth));
-    }
-
-    /// <summary>True when the two handles render at (essentially) the identical pixel position —
-    /// proximity-based picking is a tie at this point, so callers should defer to drag direction
-    /// instead (see <see cref="DecideActiveLowerBound"/>).</summary>
-    public bool HandlesCoincident => Math.Abs(LowerThumbX - UpperThumbX) < 0.5;
-
-    /// <summary>Which handle is nearer a given track-relative pixel X. Only meaningful when the
-    /// handles are separated — see <see cref="HandlesCoincident"/>.</summary>
-    public bool IsLowerNearer(double trackX) => Math.Abs(trackX - LowerThumbX) <= Math.Abs(trackX - UpperThumbX);
-
-    /// <summary>
-    /// Decides which bound a drag gesture should control. Pass the press-down X as both
-    /// parameters on the initial press (there's no movement yet); pass the original press X and
-    /// the pointer's current X on each subsequent move. Returns true for Lower, false for Upper,
-    /// or null only while the handles are coincident AND the pointer hasn't moved from the press
-    /// point yet (still undecided — ask again on the next move).
-    /// </summary>
-    public bool? DecideActiveLowerBound(double pressX, double currentX)
-    {
-        if (!HandlesCoincident) return IsLowerNearer(pressX);
-        if (currentX > pressX) return false;
-        if (currentX < pressX) return true;
-        return null;
-    }
-
-    /// <summary>Sets a bound directly from an absolute track-relative pixel X (not a delta) — the
-    /// position of the pointer at that pixel IS the value; there's nothing to accumulate, so a
-    /// missed or out-of-order event can't cause drift.</summary>
-    public void SetFromTrackX(bool isLowerBound, double trackX)
-    {
-        var frac  = Math.Clamp(trackX / TrackWidthPx, 0, 1);
-        var value = DatasetMin + frac * (DatasetMax - DatasetMin);
-        if (isLowerBound) LowerValue = value; else UpperValue = value;
-    }
-
-    public bool Matches(PrintPresetSample p)
-    {
-        var v = Selector(p);
-        return v >= LowerValue && v <= UpperValue;
-    }
-
-    public void Reset()
-    {
-        LowerValue = DatasetMin;
-        UpperValue = DatasetMax;
-    }
-
-    /// <summary>
-    /// Recomputes the dataset min/max from the live preset list (called whenever a preset is
-    /// added) so the filter never offers a bound the data doesn't contain. A filter the user
-    /// hasn't touched (still pinned to the old full bounds) tracks the new bounds automatically;
-    /// a filter the user has actively narrowed keeps their chosen values untouched.
-    /// </summary>
-    public void RecalculateBounds(IEnumerable<double> allValues)
-    {
-        var values = allValues.ToList();
-        if (values.Count == 0) return;
-
-        var wasAtMin = _lowerValue <= DatasetMin;
-        var wasAtMax = _upperValue >= DatasetMax;
-
-        DatasetMin = values.Min();
-        DatasetMax = values.Max();
-
-        if (wasAtMin) _lowerValue = DatasetMin;
-        if (wasAtMax) _upperValue = DatasetMax;
-
-        OnRangeChanged();
-    }
-}
-
 /// <summary>A single-choice filter over a non-numeric field (e.g. method, pattern, seam mode).</summary>
 public sealed class ChoiceFilterViewModel : ViewModelBase
 {
@@ -666,6 +510,12 @@ public sealed class ChoiceFilterViewModel : ViewModelBase
 
     public required string FieldName { get; init; }
     public required Func<PrintPresetSample, string> Selector { get; init; }
+
+    /// <summary>Set only for numeric fields (bead width/layer height/print speed) so their Options
+    /// sort by value instead of alphabetically — plain string order would put "10" before "2".
+    /// Left null for genuinely textual fields (Material/Method/...), which keep alphabetical.</summary>
+    public Func<string, double>? NumericSortKey { get; init; }
+
     public ObservableCollection<string> Options { get; } = new();
 
     private string _selectedOption = AnyOption;
@@ -680,10 +530,16 @@ public sealed class ChoiceFilterViewModel : ViewModelBase
     public void Reset() => SelectedOption = AnyOption;
 
     /// <summary>Adds any newly-appeared distinct values (never removes) so a saved/imported preset's
-    /// values become choosable without ever invalidating the currently-selected option.</summary>
+    /// values become choosable without ever invalidating the currently-selected option. A preset
+    /// that doesn't carry this field at all (blank selector result) contributes nothing — there's
+    /// no real value there to pick.</summary>
     public void RefreshOptions(IEnumerable<string> allValues)
     {
-        foreach (var v in allValues.Distinct().OrderBy(v => v, StringComparer.OrdinalIgnoreCase))
+        var candidates = allValues.Where(v => v.Length > 0).Distinct();
+        var ordered = NumericSortKey is { } key
+            ? candidates.OrderBy(key)
+            : candidates.OrderBy(v => v, StringComparer.OrdinalIgnoreCase);
+        foreach (var v in ordered)
             if (!Options.Contains(v)) Options.Add(v);
     }
 }
@@ -700,8 +556,16 @@ public sealed class PresetsCardViewModel : ViewModelBase
     public ObservableCollection<PrintPresetSample> FilteredPresets { get; } = new();
     public ObservableCollection<PresetGroupViewModel> GroupedPresets { get; } = new();
     public ObservableCollection<PresetFieldGroupOption> SaveFieldGroups { get; }
-    public ObservableCollection<NumericRangeFilterViewModel> NumericFilters { get; } = new();
     public ObservableCollection<ChoiceFilterViewModel> ChoiceFilters { get; } = new();
+
+    /// <summary>
+    /// Optional hook: after a local print-preset save, push the record to the ERP
+    /// (wired by MainWindowViewModel from ErpViewModel).
+    /// </summary>
+    public Action<PrintPresetRecord>? PushToErp { get; set; }
+
+    /// <summary>When true, <see cref="PersistUserPresets"/> only writes disk (no ERP push).</summary>
+    private bool _suppressErpPush;
 
     /// <summary>Committed search terms (each removable, all AND'd together — "zigzag" + "7200"
     /// narrows to presets matching both, not either). The live, not-yet-committed text in
@@ -809,6 +673,25 @@ public sealed class PresetsCardViewModel : ViewModelBase
         set => SetField(ref _saveNameText, value);
     }
 
+    /// <summary>The preset a right-click "Rename" targeted — cleared once the rename dialog
+    /// closes (committed or cancelled). Not exposed as a bindable property; only RenameNameText
+    /// and IsRenameDialogOpen drive the view.</summary>
+    private PrintPresetSample? _renameTargetPreset;
+
+    private bool _isRenameDialogOpen;
+    public bool IsRenameDialogOpen
+    {
+        get => _isRenameDialogOpen;
+        set => SetField(ref _isRenameDialogOpen, value);
+    }
+
+    private string _renameNameText = "";
+    public string RenameNameText
+    {
+        get => _renameNameText;
+        set => SetField(ref _renameNameText, value);
+    }
+
     private PrintPresetSample? _selectedPreset;
     public PrintPresetSample? SelectedPreset
     {
@@ -844,6 +727,11 @@ public sealed class PresetsCardViewModel : ViewModelBase
     public ICommand LoadSelectedCommand         { get; }
     public ICommand ToggleFavoriteCommand       { get; }
     public ICommand ClearSeedDataCommand        { get; }
+    public ICommand DeletePresetCommand         { get; }
+    public ICommand UpdatePresetCommand         { get; }
+    public ICommand BeginRenameCommand          { get; }
+    public ICommand CommitRenameCommand         { get; }
+    public ICommand CancelRenameCommand         { get; }
 
     private readonly AdditiveSettingsViewModel _additive;
 
@@ -879,10 +767,12 @@ public sealed class PresetsCardViewModel : ViewModelBase
         SaveFieldGroups = new ObservableCollection<PresetFieldGroupOption>(
             FieldGroupNames.Select(name => new PresetFieldGroupOption { Name = name }));
 
-        NumericFilters.Add(MakeNumericFilter("Bead width (mm)", p => p.BeadWidth ?? 0, fallbackMin: 1, fallbackMax: 100));
-        NumericFilters.Add(MakeNumericFilter("Layer height (mm)", p => p.LayerHeight ?? 0, fallbackMin: 0.5, fallbackMax: 100));
-        NumericFilters.Add(MakeNumericFilter("Print speed (mm/s)", p => p.PrintSpeed ?? 0, fallbackMin: 1, fallbackMax: 2000));
-        foreach (var f in NumericFilters) f.PropertyChanged += (_, _) => Refresh();
+        // Numeric fields are dropdowns over whatever values have actually been saved, same as the
+        // text fields below — not a free-form range, so there's nothing to type/drag that could
+        // land on a value no preset actually uses.
+        ChoiceFilters.Add(MakeNumericChoiceFilter("Bead width (mm)", p => p.BeadWidth));
+        ChoiceFilters.Add(MakeNumericChoiceFilter("Layer height (mm)", p => p.LayerHeight));
+        ChoiceFilters.Add(MakeNumericChoiceFilter("Print speed (mm/s)", p => p.PrintSpeed));
 
         ChoiceFilters.Add(MakeChoiceFilter("Material", p => p.Material));
         ChoiceFilters.Add(MakeChoiceFilter("Method", p => p.Method ?? ""));
@@ -907,6 +797,17 @@ public sealed class PresetsCardViewModel : ViewModelBase
         RemoveSearchTagCommand      = new RelayCommand<string>(RemoveSearchTag);
         ToggleFavoriteCommand       = new RelayCommand<PrintPresetSample>(ToggleFavorite);
         ClearSeedDataCommand        = new RelayCommand(ClearSeedData);
+        // Delete/Update/Rename are reachable from each row's "⋮" button/Flyout (see
+        // RightPanelView), not a right-click ContextMenu — a ContextMenu's Popup proved unreliable
+        // to open reliably on a virtualized ListBox row (sometimes wouldn't open at all, tried
+        // first with a right-click gesture). A Button.Flyout doesn't have that problem (same
+        // mechanism the row's ⓘ info popup already uses), so CommandParameter="{Binding}" here is
+        // trustworthy.
+        DeletePresetCommand         = new RelayCommand<PrintPresetSample>(DeletePreset);
+        UpdatePresetCommand         = new RelayCommand<PrintPresetSample>(UpdatePreset);
+        BeginRenameCommand          = new RelayCommand<PrintPresetSample>(BeginRename);
+        CommitRenameCommand         = new RelayCommand(CommitRename);
+        CancelRenameCommand         = new RelayCommand(CancelRename);
 
         RecomputeSiblingLinks();
         Refresh();
@@ -985,7 +886,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
             Temperature1 = d.Temperature1, Temperature2 = d.Temperature2, Temperature3 = d.Temperature3,
 
             TemperatureOffset = d.TemperatureOffset, ExtrusionSpeedOffset = d.ExtrusionSpeedOffset,
-            DigitalStartStopEnabled = d.DigitalStartStopEnabled, ExtrusionStartWaitSec = d.ExtrusionStartWaitSec,
+            DigitalStartStopEnabled = d.DigitalStartStopEnabled, RobotModeEnabled = d.RobotModeEnabled, ExtrusionStartWaitSec = d.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec = d.ExtrusionResumeWaitSec,
 
             ZHopMm = d.ZHopMm, WipeModeDisplay = d.WipeModeDisplay, WipeLengthMm = d.WipeLengthMm,
@@ -1130,33 +1031,29 @@ public sealed class PresetsCardViewModel : ViewModelBase
         }
     }
 
-    private NumericRangeFilterViewModel MakeNumericFilter(
-        string fieldName, Func<PrintPresetSample, double> selector, double fallbackMin, double fallbackMax)
-    {
-        // Empty dataset (e.g. a brand-new library with nothing saved yet) falls back to the real
-        // clamp range of the matching AdditiveSettingsViewModel property, not a degenerate 0-0 —
-        // there's nothing to search for either way once presets exist, so this only matters for
-        // that one edge case.
-        var min = AllPresets.Count == 0 ? fallbackMin : AllPresets.Min(selector);
-        var max = AllPresets.Count == 0 ? fallbackMax : AllPresets.Max(selector);
-        var filter = new NumericRangeFilterViewModel
-        {
-            FieldName  = fieldName,
-            Selector   = selector,
-            DatasetMin = min,
-            DatasetMax = max,
-        };
-        filter.LowerValue = min;
-        filter.UpperValue = max;
-        return filter;
-    }
-
     private ChoiceFilterViewModel MakeChoiceFilter(string fieldName, Func<PrintPresetSample, string> selector)
     {
         var filter = new ChoiceFilterViewModel { FieldName = fieldName, Selector = selector };
         filter.Options.Add(ChoiceFilterViewModel.AnyOption);
-        foreach (var v in AllPresets.Select(selector).Distinct().OrderBy(v => v, StringComparer.OrdinalIgnoreCase))
-            filter.Options.Add(v);
+        filter.RefreshOptions(AllPresets.Select(selector));
+        return filter;
+    }
+
+    /// <summary>A choice filter over a numeric field — same dropdown-of-saved-values UI as
+    /// MakeChoiceFilter, but sorted by value (NumericSortKey) instead of alphabetically, so bead
+    /// widths like 4/6/8/10 don't end up ordered "10, 4, 6, 8". Presets missing the field entirely
+    /// are excluded from the option list (nothing to pick), same as they'd fail to Match below.</summary>
+    private ChoiceFilterViewModel MakeNumericChoiceFilter(string fieldName, Func<PrintPresetSample, double?> selector)
+    {
+        string Format(PrintPresetSample p) => selector(p) is { } v ? v.ToString("0.##") : "";
+        var filter = new ChoiceFilterViewModel
+        {
+            FieldName      = fieldName,
+            Selector       = Format,
+            NumericSortKey = s => double.TryParse(s, out var d) ? d : double.MaxValue,
+        };
+        filter.Options.Add(ChoiceFilterViewModel.AnyOption);
+        filter.RefreshOptions(AllPresets.Select(Format).Where(s => s.Length > 0));
         return filter;
     }
 
@@ -1168,7 +1065,6 @@ public sealed class PresetsCardViewModel : ViewModelBase
 
     private void ResetFilters()
     {
-        foreach (var f in NumericFilters) f.Reset();
         foreach (var f in ChoiceFilters) f.Reset();
     }
 
@@ -1301,6 +1197,10 @@ public sealed class PresetsCardViewModel : ViewModelBase
         if (p.TemperatureOffset is { } temperatureOffset) _additive.TemperatureOffset = temperatureOffset;
         if (p.ExtrusionSpeedOffset is { } extrusionSpeedOffset) _additive.ExtrusionSpeedOffset = extrusionSpeedOffset;
         if (p.DigitalStartStopEnabled is { } digitalStartStopEnabled) _additive.DigitalStartStopEnabled = digitalStartStopEnabled;
+        if (p.RobotModeEnabled is { } robotModeEnabled)
+            _additive.RobotModeEnabled = robotModeEnabled;
+        else if (p.DigitalStartStopEnabled is { } legacyUrm)
+            _additive.RobotModeEnabled = legacyUrm;
         if (p.ExtrusionStartWaitSec is { } extrusionStartWaitSec) _additive.ExtrusionStartWaitSec = extrusionStartWaitSec;
         if (p.ExtrusionResumeWaitSec is { } extrusionResumeWaitSec) _additive.ExtrusionResumeWaitSec = extrusionResumeWaitSec;
 
@@ -1372,6 +1272,24 @@ public sealed class PresetsCardViewModel : ViewModelBase
         Refresh();
     }
 
+    /// <summary>Deletes one preset — works on both a real (Saved/Imported) preset and a seeded
+    /// sample; the row's own confirm-flyout (see RightPanelView) is the only guard, there's no
+    /// undo. PersistUserPresets no-ops for a seeded preset (never written to disk anyway) but is
+    /// still safe/cheap to call unconditionally here.</summary>
+    private void DeletePreset(PrintPresetSample? p)
+    {
+        if (p is null) return;
+        if (!AllPresets.Remove(p)) return;
+
+        if (ReferenceEquals(SelectedPreset, p)) SelectedPreset = null;
+
+        StatusMessage = $"Deleted \"{p.Name}\"";
+        RefreshFilterBoundsFromData();
+        RecomputeSiblingLinks();
+        PersistUserPresets();
+        Refresh();
+    }
+
     /// <summary>Removes every seeded sample preset in one action (see PrintPresetSample.IsSeeded) —
     /// never touches anything the user actually saved or imported.</summary>
     private void ClearSeedData()
@@ -1390,11 +1308,13 @@ public sealed class PresetsCardViewModel : ViewModelBase
     /// <summary>
     /// Captures the panel's ACTUAL current values — not placeholders — gated group-by-group by
     /// the Save-as-Preset checklist (see SaveFieldGroups): an unchecked group's fields are simply
-    /// left null rather than populated with a value the user didn't ask to save.
+    /// left null rather than populated with a value the user didn't ask to save. Shared by
+    /// SaveNewPreset (new entry) and UpdatePreset (overwrites an existing entry's settings while
+    /// keeping its Name/Folder/CreatedUtc/IsFavorite/LastPrintedUtc).
     /// </summary>
-    private void SaveNewPreset()
+    private PrintPresetSample CapturePresetFromAdditive(
+        string name, string folder, DateTime createdUtc, bool isFavorite, DateTime? lastPrintedUtc)
     {
-        var name = string.IsNullOrWhiteSpace(SaveNameText) ? "Untitled Preset" : SaveNameText.Trim();
         var a = _additive;
 
         var geometry  = IsGroupIncluded("Geometry & layers");
@@ -1416,12 +1336,14 @@ public sealed class PresetsCardViewModel : ViewModelBase
         var stockMaps = IsGroupIncluded("Stock from Maps");
         var brim      = IsGroupIncluded("Brim");
 
-        var preset = new PrintPresetSample
+        return new PrintPresetSample
         {
-            Name       = name,
-            Folder     = "Uncategorized",
-            CreatedUtc = DateTime.UtcNow,
-            Material   = a.SelectedPreset?.Name ?? "",
+            Name           = name,
+            Folder         = folder,
+            CreatedUtc     = createdUtc,
+            IsFavorite     = isFavorite,
+            LastPrintedUtc = lastPrintedUtc,
+            Material       = a.SelectedPreset?.Name ?? "",
 
             BeadWidth = geometry ? a.BeadWidth : null,
             LayerHeight = geometry ? a.LayerHeight : null,
@@ -1529,6 +1451,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
             TemperatureOffset = krlTuning ? a.TemperatureOffset : null,
             ExtrusionSpeedOffset = krlTuning ? a.ExtrusionSpeedOffset : null,
             DigitalStartStopEnabled = krlTuning ? a.DigitalStartStopEnabled : null,
+            RobotModeEnabled = krlTuning ? a.RobotModeEnabled : null,
             ExtrusionStartWaitSec = krlTuning ? a.ExtrusionStartWaitSec : null,
             ExtrusionResumeWaitSec = krlTuning ? a.ExtrusionResumeWaitSec : null,
 
@@ -1562,7 +1485,12 @@ public sealed class PresetsCardViewModel : ViewModelBase
             BrimEnabled = brim ? a.BrimEnabled : null,
             BrimLoops = brim ? a.BrimLoops : null,
         };
+    }
 
+    private void SaveNewPreset()
+    {
+        var name = string.IsNullOrWhiteSpace(SaveNameText) ? "Untitled Preset" : SaveNameText.Trim();
+        var preset = CapturePresetFromAdditive(name, "Uncategorized", DateTime.UtcNow, isFavorite: false, lastPrintedUtc: null);
         AllPresets.Add(preset);
 
         SaveNameText     = "";
@@ -1573,11 +1501,70 @@ public sealed class PresetsCardViewModel : ViewModelBase
         Refresh();
     }
 
+    /// <summary>Overwrites an existing preset's settings with the panel's current values (same
+    /// field-group gating as Save-as-Preset) — Name/Folder/CreatedUtc/IsFavorite/LastPrintedUtc
+    /// carry over unchanged. Promotes a seeded sample to a real, persisted preset (see
+    /// PrintPresetSample.IsSeeded / FromRecord), same as Rename/EnsureMasterDefaultsPreset's
+    /// "edit it like any other" model.</summary>
+    private void UpdatePreset(PrintPresetSample? p)
+    {
+        if (p is null) return;
+        var updated = CapturePresetFromAdditive(p.Name, p.Folder, p.CreatedUtc, p.IsFavorite, p.LastPrintedUtc);
+        if (!ReplacePreset(p, updated)) return;
+        StatusMessage = $"Updated \"{updated.Name}\" from the current panel settings";
+    }
+
+    /// <summary>Swaps one preset object for another at the same index — the only way to change an
+    /// otherwise-init-only PrintPresetSample (see Rename/UpdatePreset). Carries the selection over
+    /// if the replaced preset was selected.</summary>
+    private bool ReplacePreset(PrintPresetSample oldPreset, PrintPresetSample newPreset)
+    {
+        var index = AllPresets.IndexOf(oldPreset);
+        if (index < 0) return false;
+
+        AllPresets[index] = newPreset;
+        if (ReferenceEquals(SelectedPreset, oldPreset)) SelectedPreset = newPreset;
+
+        RefreshFilterBoundsFromData();
+        RecomputeSiblingLinks();
+        PersistUserPresets();
+        Refresh();
+        return true;
+    }
+
+    private void BeginRename(PrintPresetSample? p)
+    {
+        if (p is null) return;
+        _renameTargetPreset = p;
+        RenameNameText = p.Name;
+        IsRenameDialogOpen = true;
+    }
+
+    private void CommitRename()
+    {
+        var target = _renameTargetPreset;
+        var newName = RenameNameText.Trim();
+        IsRenameDialogOpen = false;
+        _renameTargetPreset = null;
+        if (target is null || newName.Length == 0 || newName == target.Name) return;
+
+        var record = ToRecord(target);
+        record.Name = newName;
+        if (!ReplacePreset(target, FromRecord(record))) return;
+        StatusMessage = $"Renamed \"{target.Name}\" to \"{newName}\"";
+    }
+
+    private void CancelRename()
+    {
+        IsRenameDialogOpen = false;
+        _renameTargetPreset = null;
+    }
+
     /// <summary>Converts one PrintPresetSample to the persisted record shape.</summary>
     private static PrintPresetRecord ToRecord(PrintPresetSample p) => new()
     {
         Name = p.Name, Folder = p.Folder, CreatedUtc = p.CreatedUtc, LastPrintedUtc = p.LastPrintedUtc,
-        IsFavorite = p.IsFavorite, Material = p.Material,
+        IsFavorite = p.IsFavorite, ErpId = p.ErpId, Material = p.Material,
 
         BeadWidth = p.BeadWidth, LayerHeight = p.LayerHeight, TiltAngle = p.TiltAngle, TiltAngleX = p.TiltAngleX,
         MultiPlanarAxisX = p.MultiPlanarAxisX,
@@ -1631,7 +1618,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         Temperature1 = p.Temperature1, Temperature2 = p.Temperature2, Temperature3 = p.Temperature3,
 
         TemperatureOffset = p.TemperatureOffset, ExtrusionSpeedOffset = p.ExtrusionSpeedOffset,
-        DigitalStartStopEnabled = p.DigitalStartStopEnabled, ExtrusionStartWaitSec = p.ExtrusionStartWaitSec,
+        DigitalStartStopEnabled = p.DigitalStartStopEnabled, RobotModeEnabled = p.RobotModeEnabled, ExtrusionStartWaitSec = p.ExtrusionStartWaitSec,
         ExtrusionResumeWaitSec = p.ExtrusionResumeWaitSec,
 
         ZHopMm = p.ZHopMm, WipeModeDisplay = p.WipeModeDisplay, WipeLengthMm = p.WipeLengthMm,
@@ -1655,7 +1642,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
     private static PrintPresetSample FromRecord(PrintPresetRecord r) => new()
     {
         Name = r.Name, Folder = r.Folder, CreatedUtc = r.CreatedUtc, LastPrintedUtc = r.LastPrintedUtc,
-        IsFavorite = r.IsFavorite, IsSeeded = false, Material = r.Material,
+        IsFavorite = r.IsFavorite, IsSeeded = false, ErpId = r.ErpId, Material = r.Material,
 
         BeadWidth = r.BeadWidth, LayerHeight = r.LayerHeight, TiltAngle = r.TiltAngle, TiltAngleX = r.TiltAngleX,
         MultiPlanarAxisX = r.MultiPlanarAxisX,
@@ -1709,7 +1696,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         Temperature1 = r.Temperature1, Temperature2 = r.Temperature2, Temperature3 = r.Temperature3,
 
         TemperatureOffset = r.TemperatureOffset, ExtrusionSpeedOffset = r.ExtrusionSpeedOffset,
-        DigitalStartStopEnabled = r.DigitalStartStopEnabled, ExtrusionStartWaitSec = r.ExtrusionStartWaitSec,
+        DigitalStartStopEnabled = r.DigitalStartStopEnabled, RobotModeEnabled = r.RobotModeEnabled, ExtrusionStartWaitSec = r.ExtrusionStartWaitSec,
         ExtrusionResumeWaitSec = r.ExtrusionResumeWaitSec,
 
         ZHopMm = r.ZHopMm, WipeModeDisplay = r.WipeModeDisplay, WipeLengthMm = r.WipeLengthMm,
@@ -1745,9 +1732,44 @@ public sealed class PresetsCardViewModel : ViewModelBase
     /// Writes every NON-seeded preset to disk — call after anything that adds/edits a real
     /// (Save'd or Imported) preset. Seed/sample presets are never written here; only what the
     /// user actually made lives on disk (see PrintPresetSample.IsSeeded).
+    /// Also pushes each row to the ERP when <see cref="PushToErp"/> is wired and connected.
     /// </summary>
     private void PersistUserPresets()
-        => PrintPresetsLoader.Save(AllPresets.Where(p => !p.IsSeeded).Select(ToRecord));
+    {
+        var records = AllPresets.Where(p => !p.IsSeeded).Select(ToRecord).ToList();
+        PrintPresetsLoader.Save(records);
+        if (_suppressErpPush || PushToErp is null) return;
+        // Push only the most recently touched row would be ideal; pushing all non-seeded is
+        // fine for small libraries and keeps server ids stamped after first upload.
+        foreach (var rec in records)
+            PushToErp(rec);
+    }
+
+    /// <summary>
+    /// Reloads the print-preset list from AppData after an ERP pull (does not re-push).
+    /// </summary>
+    public void ReloadFromDiskAfterErpSync()
+    {
+        var selectedName = SelectedPreset?.Name;
+        _suppressErpPush = true;
+        try
+        {
+            AllPresets.Clear();
+            foreach (var record in PrintPresetsLoader.Load())
+                AllPresets.Add(FromRecord(record));
+            EnsureMasterDefaultsPreset();
+            RefreshFilterBoundsFromData();
+            RecomputeSiblingLinks();
+            if (selectedName is { } name)
+                SelectedPreset = AllPresets.FirstOrDefault(p => p.Name == name);
+            Refresh();
+            StatusMessage = $"Presets library refreshed from ERP ({AllPresets.Count(p => !p.IsSeeded)} saved)";
+        }
+        finally
+        {
+            _suppressErpPush = false;
+        }
+    }
 
     /// <summary>
     /// Recomputes every filter's dataset bounds/options from the live preset list — call after
@@ -1756,7 +1778,6 @@ public sealed class PresetsCardViewModel : ViewModelBase
     /// </summary>
     private void RefreshFilterBoundsFromData()
     {
-        foreach (var f in NumericFilters) f.RecalculateBounds(AllPresets.Select(f.Selector));
         foreach (var f in ChoiceFilters) f.RefreshOptions(AllPresets.Select(f.Selector));
     }
 
@@ -1850,7 +1871,6 @@ public sealed class PresetsCardViewModel : ViewModelBase
                 t => NormalizeForSearch(t).Contains(needle, StringComparison.Ordinal)));
         }
 
-        foreach (var f in NumericFilters) query = query.Where(f.Matches);
         foreach (var f in ChoiceFilters) query = query.Where(f.Matches);
         if (FavoritesOnly) query = query.Where(p => p.IsFavorite);
 

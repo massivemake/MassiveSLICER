@@ -1,4 +1,4 @@
-﻿using MassiveSlicer.Core.IO;
+using MassiveSlicer.Core.IO;
 using MassiveSlicer.Viewport.Loading;
 using MassiveSlicer.Viewport.Scene;
 Directory.SetCurrentDirectory(@"\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2");

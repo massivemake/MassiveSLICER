@@ -1,0 +1,196 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Chrome-less toggle used as the ComboBox hit target. SimpleTheme's
+         ToggleButton ControlTheme paints ThemeBorderHigh (OS/Cosmic purple)
+         on hover/checked — that was the TOOL# ring. -->
+    <ControlTheme x:Key="MassiveComboToggleTheme" TargetType="ToggleButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <ContentPresenter Background="Transparent"
+                                  BorderThickness="0"
+                                  Content="{TemplateBinding Content}"
+                                  HorizontalContentAlignment="Stretch"
+                                  VerticalContentAlignment="Stretch"/>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <!-- Assigned onto every ComboBox via BaseStyles Theme= setter.
+         A Style Template cannot beat SimpleTheme's implicit ControlTheme. -->
+    <ControlTheme x:Key="MassiveComboBoxTheme" TargetType="ComboBox">
+        <Setter Property="Background" Value="#E62a2a2a"/>
+        <Setter Property="Foreground" Value="#71a72a"/>
+        <Setter Property="BorderBrush" Value="#3a3a3a"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="5"/>
+        <Setter Property="Padding" Value="8,4"/>
+        <Setter Property="MinHeight" Value="28"/>
+        <Setter Property="MaxDropDownHeight" Value="220"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="PlaceholderForeground" Value="#acacac"/>
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+        <Setter Property="FocusAdorner" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Name="fieldChrome"
+                        Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{TemplateBinding CornerRadius}"
+                        MinHeight="{TemplateBinding MinHeight}">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Name="PlaceholderTextBlock"
+                                   Grid.Column="0"
+                                   Margin="{TemplateBinding Padding}"
+                                   HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                   VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                   Foreground="{TemplateBinding PlaceholderForeground}"
+                                   Text="{TemplateBinding PlaceholderText}">
+                            <TextBlock.IsVisible>
+                                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                    <Binding Path="SelectionBoxItem"
+                                             RelativeSource="{RelativeSource TemplatedParent}"
+                                             Converter="{x:Static ObjectConverters.IsNull}"/>
+                                    <Binding Path="!IsEditable"
+                                             RelativeSource="{RelativeSource TemplatedParent}"/>
+                                </MultiBinding>
+                            </TextBlock.IsVisible>
+                        </TextBlock>
+                        <ContentControl Grid.Column="0"
+                                        Margin="{TemplateBinding Padding}"
+                                        HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                        VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                        Content="{TemplateBinding SelectionBoxItem}"
+                                        ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                        Foreground="{TemplateBinding Foreground}"
+                                        IsVisible="{TemplateBinding IsEditable, Converter={x:Static BoolConverters.Not}}"/>
+                        <TextBox Name="PART_EditableTextBox"
+                                 Grid.Column="0"
+                                 Padding="{TemplateBinding Padding}"
+                                 HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                 VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                 Foreground="{TemplateBinding Foreground}"
+                                 Background="Transparent"
+                                 Text="{TemplateBinding Text, Mode=TwoWay}"
+                                 PlaceholderText="{TemplateBinding PlaceholderText}"
+                                 BorderThickness="0"
+                                 IsVisible="{TemplateBinding IsEditable}"/>
+                        <Path Grid.Column="1"
+                              Width="8" Height="4"
+                              Margin="0,0,10,0"
+                              HorizontalAlignment="Center"
+                              VerticalAlignment="Center"
+                              Data="F1 M 301.14,-189.041L 311.57,-189.041L 306.355,-182.942L 301.14,-189.041 Z"
+                              Fill="#acacac"
+                              Stretch="Uniform"
+                              IsHitTestVisible="False"/>
+                        <ToggleButton Name="toggle"
+                                      Grid.Column="0"
+                                      Grid.ColumnSpan="2"
+                                      Theme="{StaticResource MassiveComboToggleTheme}"
+                                      Background="Transparent"
+                                      BorderThickness="0"
+                                      ClickMode="Press"
+                                      Focusable="False"
+                                      IsTabStop="False"
+                                      IsChecked="{TemplateBinding IsDropDownOpen, Mode=TwoWay}"/>
+                        <Popup Name="PART_Popup"
+                               MinWidth="{Binding Bounds.Width, RelativeSource={RelativeSource TemplatedParent}}"
+                               MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                               IsLightDismissEnabled="True"
+                               IsOpen="{TemplateBinding IsDropDownOpen, Mode=TwoWay}"
+                               PlacementTarget="{TemplateBinding}"
+                               Placement="Bottom">
+                            <Border Background="#E62a2a2a"
+                                    BorderBrush="#71a72a"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="2"
+                                    Margin="0,2,0,0">
+                                <ScrollViewer HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                              VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}">
+                                    <ItemsPresenter Name="PART_ItemsPresenter"
+                                                    ItemsPanel="{TemplateBinding ItemsPanel}"/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+
+        <Style Selector="^:pointerover /template/ Border#fieldChrome">
+            <Setter Property="BorderBrush" Value="#71a72a"/>
+            <Setter Property="Background" Value="#303030"/>
+        </Style>
+        <Style Selector="^:focus /template/ Border#fieldChrome">
+            <Setter Property="BorderBrush" Value="#71a72a"/>
+            <Setter Property="Background" Value="#243810"/>
+        </Style>
+        <Style Selector="^:focus-visible /template/ Border#fieldChrome">
+            <Setter Property="BorderBrush" Value="#71a72a"/>
+            <Setter Property="Background" Value="#243810"/>
+        </Style>
+        <Style Selector="^:dropdownopen /template/ Border#fieldChrome">
+            <Setter Property="BorderBrush" Value="#71a72a"/>
+            <Setter Property="Background" Value="#243810"/>
+        </Style>
+        <Style Selector="^:pressed /template/ Border#fieldChrome">
+            <Setter Property="BorderBrush" Value="#8bc43a"/>
+        </Style>
+        <Style Selector="^:disabled /template/ Border#fieldChrome">
+            <Setter Property="Opacity" Value="0.45"/>
+        </Style>
+        <Style Selector="^[IsEditable=true]">
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="KeyboardNavigation.TabNavigation" Value="Local"/>
+        </Style>
+    </ControlTheme>
+
+    <ControlTheme x:Key="MassiveComboBoxItemTheme" TargetType="ComboBoxItem">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="#71a72a"/>
+        <Setter Property="Padding" Value="8,6"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="CornerRadius" Value="4"/>
+        <Setter Property="Margin" Value="0,1"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="FocusAdorner" Value="{x:Null}"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Name="itemBorder"
+                        Background="{TemplateBinding Background}"
+                        CornerRadius="{TemplateBinding CornerRadius}"
+                        Padding="{TemplateBinding Padding}">
+                    <ContentPresenter Content="{TemplateBinding Content}"
+                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                      HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                      VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                      Foreground="{TemplateBinding Foreground}"/>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover /template/ Border#itemBorder">
+            <Setter Property="Background" Value="#333333"/>
+        </Style>
+        <Style Selector="^:selected /template/ Border#itemBorder">
+            <Setter Property="Background" Value="#3a5716"/>
+        </Style>
+        <Style Selector="^:selected">
+            <Setter Property="Foreground" Value="#8bc43a"/>
+        </Style>
+        <Style Selector="^:selected:pointerover /template/ Border#itemBorder">
+            <Setter Property="Background" Value="#3a5716"/>
+        </Style>
+    </ControlTheme>
+
+</ResourceDictionary>

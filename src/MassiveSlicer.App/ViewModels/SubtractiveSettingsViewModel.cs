@@ -41,6 +41,9 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
             AreaSelectStatus = "Whole model";
         });
 
+        CapturePlanarFromCameraCommand = new RelayCommand(() => CapturePlanarFromCamera?.Invoke());
+        CapturePlanarFromPaintCommand = new RelayCommand(() => CapturePlanarFromPaint?.Invoke());
+
         ReloadBitLibrary();
     }
 
@@ -107,6 +110,12 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     public RelayCommand OpenBitLibraryCommand { get; }
     public event EventHandler? OpenBitLibraryRequested;
 
+    /// <summary>ERP upsert after a local mill-library save. Wired from MainWindow.</summary>
+    public Action<MillBitTool>? PushBitToErp { get; set; }
+
+    /// <summary>ERP delete after a local mill-library row is removed.</summary>
+    public Action<MillBitTool>? DeleteBitFromErp { get; set; }
+
     /// <summary>Reload library from disk and keep current selection if still present.</summary>
     public void ReloadBitLibrary(string? preferToolId = null)
     {
@@ -130,13 +139,21 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     public void ReplaceBitLibrary(IEnumerable<MillBitTool> tools, string? selectId = null)
     {
         var list = tools.ToList();
+        var incomingIds = new HashSet<string>(list.Select(t => t.Id), StringComparer.Ordinal);
+        foreach (var gone in BitLibrary.Where(t => !incomingIds.Contains(t.Id)).ToList())
+            DeleteBitFromErp?.Invoke(gone);
+
         MillBitLibraryLoader.Save(list);
         ReloadBitLibrary(selectId ?? SelectedBit?.Id);
+        foreach (var t in BitLibrary)
+            PushBitToErp?.Invoke(t);
     }
 
     public void PersistBitLibrary()
     {
         MillBitLibraryLoader.Save(BitLibrary);
+        if (SelectedBit is { } bit)
+            PushBitToErp?.Invoke(bit);
     }
 
     /// <summary>Push geometry + cutting preset into the live mill panel fields.</summary>
@@ -149,6 +166,7 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         ToolDiameterMm = bit.DiameterMm;
         BallEnd = bit.IsBallEnd;
         MaxDepthMm = bit.MaxDepthMm;
+        OnPropertyChanged(nameof(PreviewCylinderLengthMm));
         SpindleRpm = cut.SpindleRpm;
         SpindleDirection = cut.SpindleDirection;
         CuttingFeedMmS = cut.CuttingFeedMmS > 0 ? cut.CuttingFeedMmS : cut.CuttingFeedMmMin / 60.0;
@@ -158,6 +176,22 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         FinishAllowanceMm = cut.FinishAllowanceMm;
         RapidZMm = cut.RapidZMm;
         OnPropertyChanged(nameof(BitName));
+        OnPropertyChanged(nameof(PreviewCylinderLengthMm));
+    }
+
+    /// <summary>Live preview stick-out (mm). Changing this rebuilds the spindle cylinder.</summary>
+    public double PreviewCylinderLengthMm
+    {
+        get => SelectedBit?.EffectiveCylinderLengthMm ?? 50;
+        set
+        {
+            if (SelectedBit is null) return;
+            var next = Math.Max(0, value);
+            if (Math.Abs(SelectedBit.CylinderLengthMm - next) < 1e-4) return;
+            SelectedBit.CylinderLengthMm = next;
+            PersistBitLibrary();
+            OnPropertyChanged(nameof(PreviewCylinderLengthMm));
+        }
     }
 
     // -- Operation type (step 2 OPERATION) ------------------------------------
@@ -206,6 +240,7 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
             OnPropertyChanged(nameof(IsCutout));
             OnPropertyChanged(nameof(IsContouring));
             OnPropertyChanged(nameof(IsSwarf));
+            OnPropertyChanged(nameof(ShowsPlanarToolAxis));
         }
     }
 
@@ -228,6 +263,7 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     public bool IsCutout             => SelectedOperation == MillOperationKind.Cutout;
     public bool IsContouring         => SelectedOperation == MillOperationKind.Contouring;
     public bool IsSwarf              => SelectedOperation == MillOperationKind.Swarf;
+    public bool ShowsPlanarToolAxis  => IsPlanarFacing || IsPlanarClearing;
 
     /// <summary>Step 2 OPERATION card expansion.</summary>
     public bool StepOperationExpanded
@@ -285,6 +321,177 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     /// <summary>Host clears face/region selection for the mill operation.</summary>
     public Action? ClearAreaSelection { get; set; }
 
+    /// <summary>Host captures the current camera as the planar approach (eye → work).</summary>
+    public Action? CapturePlanarFromCamera { get; set; }
+
+    /// <summary>Host averages the painted mill area into the planar axis.</summary>
+    public Action? CapturePlanarFromPaint { get; set; }
+
+    // -- Planar tool axis (facing / clearing) ---------------------------------
+
+    private MillPlanarAxisOption _planarToolAxis = MillPlanarAxisOption.Default;
+    private double _planarTiltDeg;
+    private double _planarAzimuthDeg;
+    private double _planarCustomX;
+    private double _planarCustomY;
+    private double _planarCustomZ = -1;
+    private double _planarCapturedX;
+    private double _planarCapturedY;
+    private double _planarCapturedZ = -1;
+
+    public static IReadOnlyList<MillPlanarAxisOption> PlanarToolAxisOptions => MillPlanarAxisOption.All;
+
+    /// <summary>Where T12 +Z points before tilt. Raster is along the opposite direction.</summary>
+    public MillPlanarAxisOption PlanarToolAxis
+    {
+        get => _planarToolAxis ?? MillPlanarAxisOption.Default;
+        set
+        {
+            var next = value ?? MillPlanarAxisOption.Default;
+            if (!SetField(ref _planarToolAxis, next)) return;
+            OnPropertyChanged(nameof(PlanarToolAxisIndex));
+            OnPropertyChanged(nameof(IsPlanarAxisCustom));
+            NotifyPlanarAxis();
+        }
+    }
+
+    public int PlanarToolAxisIndex
+    {
+        get => PlanarToolAxisOptions.ToList().FindIndex(o => o.Kind == PlanarToolAxis.Kind);
+        set
+        {
+            if (value < 0 || value >= PlanarToolAxisOptions.Count) return;
+            PlanarToolAxis = PlanarToolAxisOptions[value];
+        }
+    }
+
+    public bool IsPlanarAxisCustom => PlanarToolAxis.Kind == MillPlanarAxisKind.Custom;
+
+    /// <summary>Tilt of T12 +Z off the chosen axis (deg).</summary>
+    public double PlanarTiltDeg
+    {
+        get => _planarTiltDeg;
+        set
+        {
+            if (!SetField(ref _planarTiltDeg, Math.Clamp(value, -90, 90))) return;
+            NotifyPlanarAxis();
+        }
+    }
+
+    /// <summary>Which way the tilt leans, around the chosen tool axis (deg).</summary>
+    public double PlanarAzimuthDeg
+    {
+        get => _planarAzimuthDeg;
+        set
+        {
+            if (!SetField(ref _planarAzimuthDeg, value)) return;
+            NotifyPlanarAxis();
+        }
+    }
+
+    public double PlanarCustomX
+    {
+        get => _planarCustomX;
+        set { if (SetField(ref _planarCustomX, value)) NotifyPlanarAxis(); }
+    }
+
+    public double PlanarCustomY
+    {
+        get => _planarCustomY;
+        set { if (SetField(ref _planarCustomY, value)) NotifyPlanarAxis(); }
+    }
+
+    public double PlanarCustomZ
+    {
+        get => _planarCustomZ;
+        set { if (SetField(ref _planarCustomZ, value)) NotifyPlanarAxis(); }
+    }
+
+    public string PlanarAxisStatus
+    {
+        get
+        {
+            var tool = ResolvePlanarToolAxis();
+            var approach = MillPlanarOrientation.ApproachFromToolAxis(tool);
+            return $"T12 +Z = ({tool.X:0.###}, {tool.Y:0.###}, {tool.Z:0.###})  ·  project from ({approach.X:0.###}, {approach.Y:0.###}, {approach.Z:0.###})";
+        }
+    }
+
+    // Same Y/X/Z sliders as print MOVEMENT. Applied as local KUKA ZYX after mill ABC.
+    private double _toolheadA;
+    private double _toolheadB;
+    private double _toolheadC;
+
+    /// <summary>Z (°) — KUKA A, spin about the cutter.</summary>
+    public double ToolheadA
+    {
+        get => _toolheadA;
+        set => SetField(ref _toolheadA, Math.Clamp(value, -180.0, 180.0));
+    }
+
+    /// <summary>Y (°) — KUKA B, tilt around world/tool Y.</summary>
+    public double ToolheadB
+    {
+        get => _toolheadB;
+        set => SetField(ref _toolheadB, Math.Clamp(value, -180.0, 180.0));
+    }
+
+    /// <summary>X (°) — KUKA C, tilt around world/tool X.</summary>
+    public double ToolheadC
+    {
+        get => _toolheadC;
+        set => SetField(ref _toolheadC, Math.Clamp(value, -180.0, 180.0));
+    }
+
+    public RelayCommand CapturePlanarFromCameraCommand { get; }
+    public RelayCommand CapturePlanarFromPaintCommand { get; }
+
+    void NotifyPlanarAxis()
+    {
+        OnPropertyChanged(nameof(PlanarAxisStatus));
+        OnPropertyChanged(nameof(IsPlanarAxisCustom));
+    }
+
+    /// <summary>T12 +Z after preset + tilt. Used by planar Generate + mill ABC.</summary>
+    public System.Numerics.Vector3 ResolvePlanarToolAxis()
+    {
+        var kind = PlanarToolAxis.Kind;
+        var captured = kind switch
+        {
+            MillPlanarAxisKind.Custom => new System.Numerics.Vector3(
+                (float)PlanarCustomX, (float)PlanarCustomY, (float)PlanarCustomZ),
+            _ => new System.Numerics.Vector3(
+                (float)_planarCapturedX, (float)_planarCapturedY, (float)_planarCapturedZ),
+        };
+        return MillPlanarOrientation.ResolveToolAxis(
+            kind, captured, (float)PlanarTiltDeg, (float)PlanarAzimuthDeg);
+    }
+
+    /// <summary>World direction the cutter comes from (raster +Z).</summary>
+    public System.Numerics.Vector3 ResolvePlanarApproach()
+        => MillPlanarOrientation.ApproachFromToolAxis(ResolvePlanarToolAxis());
+
+    /// <summary>Store a captured T12 +Z (from paint or camera) and switch the combo.</summary>
+    public void SetCapturedToolAxis(System.Numerics.Vector3 toolZ, MillPlanarAxisKind kind)
+    {
+        if (toolZ.LengthSquared() < 1e-12f) toolZ = -System.Numerics.Vector3.UnitZ;
+        toolZ = System.Numerics.Vector3.Normalize(toolZ);
+        _planarCapturedX = toolZ.X;
+        _planarCapturedY = toolZ.Y;
+        _planarCapturedZ = toolZ.Z;
+        if (kind == MillPlanarAxisKind.Custom)
+        {
+            _planarCustomX = toolZ.X;
+            _planarCustomY = toolZ.Y;
+            _planarCustomZ = toolZ.Z;
+            OnPropertyChanged(nameof(PlanarCustomX));
+            OnPropertyChanged(nameof(PlanarCustomY));
+            OnPropertyChanged(nameof(PlanarCustomZ));
+        }
+        PlanarToolAxis = MillPlanarAxisOption.Find(kind);
+        NotifyPlanarAxis();
+    }
+
     // -- Tool geometry (from bit library; not edited in TOOLPATHING) ------------
 
     private double _toolDiameterMm = 76.2;
@@ -300,6 +507,7 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
 
     // -- Toolpathing (step 3) — Passes / Travel / Movement ---------------------
 
+    private double _offsetDistanceMm;
     private int    _numberOfDepthCuts = 1;
     private double _stepoverMm = 4;
     private double _stepdownMm = 2;
@@ -312,7 +520,8 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     private bool   _enableAntiGouging;
     private double _approachClearanceMm = 100;
     private double _rapidZMm = 50; // retract height
-    private double _feedRateMmMin = 10.44 * 60; // 10.44 mm/s
+    private double _feedRateMmMin = 10.44 * 60; // 10.44 mm/s — milling (cut) speed
+    private double _travelSpeedMmS = 80;        // robot travel / rapid — not print travel
     private double _skimFeedMmS = 60;
     private double _plungeFeedMmMin = 400;
     private double _spindleRpm = 2088;
@@ -326,6 +535,16 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
 
     public static IReadOnlyList<SpindleDirection> SpindleDirectionOptions { get; } =
         [SpindleDirection.Clockwise, SpindleDirection.CounterClockwise];
+
+    /// <summary>
+    /// Offset the mill path along the surface normal (mm). + pushes the cutter out
+    /// (shallower / leave stock). − cuts into the work. Not print/stock-to-leave.
+    /// </summary>
+    public double OffsetDistanceMm
+    {
+        get => _offsetDistanceMm;
+        set => SetField(ref _offsetDistanceMm, Math.Clamp(value, -200.0, 200.0));
+    }
 
     /// <summary>How many Z depth levels to cut (roughing stack).</summary>
     public int NumberOfDepthCuts
@@ -387,11 +606,18 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Cutting feed (mm/s) — UI unit matching shop CAM cards.</summary>
+    /// <summary>Milling / cutting robot speed (mm/s). Independent of print speed.</summary>
     public double CuttingFeedMmS
     {
         get => FeedRateMmMin / 60.0;
         set => FeedRateMmMin = value * 60.0;
+    }
+
+    /// <summary>Robot travel / rapid speed (mm/s) between mill cuts. Not print TravelSpeed.</summary>
+    public double TravelSpeedMmS
+    {
+        get => _travelSpeedMmS;
+        set => SetField(ref _travelSpeedMmS, Math.Clamp(value, 0.01, 500.0));
     }
 
     /// <summary>Skim / air-cut feed (mm/s).</summary>
@@ -470,4 +696,145 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     public string HeaderTemplate { get => _headerTemplate; set => SetField(ref _headerTemplate, value); }
     /// <summary>Editable KRL program footer (spindle off lives here).</summary>
     public string FooterTemplate { get => _footerTemplate; set => SetField(ref _footerTemplate, value); }
+
+    /// <summary>Snapshot of every mill right-sidebar setting for a .mass / prefs save.</summary>
+    public MillSidebarSettings CaptureSidebar()
+    {
+        return new MillSidebarSettings
+        {
+            SelectedOperation = SelectedOperation.ToString(),
+            AreaSelectTool = AreaSelectTool.ToString(),
+            SelectedBitId = SelectedBit?.Id,
+            SelectedCuttingPresetName = SelectedCuttingPreset?.Name,
+            PlanarToolAxis = PlanarToolAxis.Kind.ToString(),
+            PlanarTiltDeg = PlanarTiltDeg,
+            PlanarAzimuthDeg = PlanarAzimuthDeg,
+            PlanarCustomX = PlanarCustomX,
+            PlanarCustomY = PlanarCustomY,
+            PlanarCustomZ = PlanarCustomZ,
+            PlanarCapturedX = _planarCapturedX,
+            PlanarCapturedY = _planarCapturedY,
+            PlanarCapturedZ = _planarCapturedZ,
+            ToolheadA = ToolheadA,
+            ToolheadB = ToolheadB,
+            ToolheadC = ToolheadC,
+            ToolDiameterMm = ToolDiameterMm,
+            BallEnd = BallEnd,
+            MaxDepthMm = MaxDepthMm,
+            OffsetDistanceMm = OffsetDistanceMm,
+            NumberOfDepthCuts = NumberOfDepthCuts,
+            StepoverMm = StepoverMm,
+            StepdownMm = StepdownMm,
+            FinishAllowanceMm = FinishAllowanceMm,
+            PassAngleDeg = PassAngleDeg,
+            PassStrategy = PassStrategy,
+            CuttingDirection = CuttingDirection,
+            KeepToolWithinSurface = KeepToolWithinSurface,
+            ClipPath = ClipPath,
+            EnableAntiGouging = EnableAntiGouging,
+            ApproachClearanceMm = ApproachClearanceMm,
+            RapidZMm = RapidZMm,
+            FeedRateMmMin = FeedRateMmMin,
+            TravelSpeedMmS = TravelSpeedMmS,
+            SkimFeedMmS = SkimFeedMmS,
+            PlungeFeedMmMin = PlungeFeedMmMin,
+            SpindleRpm = SpindleRpm,
+            SpindleDirection = SpindleDirection.ToString(),
+            HeightmapPath = HeightmapPath,
+            HeightScaleMm = HeightScaleMm,
+            InvertHeightmap = InvertHeightmap,
+            DisplacementDistanceMm = DisplacementDistanceMm,
+            AnalysisToleranceMm = AnalysisToleranceMm,
+            AutoReferenceFromTop = AutoReferenceFromTop,
+            ReferencePlaneZ = ReferencePlaneZ,
+            AutoFootprint = AutoFootprint,
+            FootprintOriginX = FootprintOriginX,
+            FootprintOriginY = FootprintOriginY,
+            FootprintWidthMm = FootprintWidthMm,
+            FootprintLengthMm = FootprintLengthMm,
+            HeaderTemplate = HeaderTemplate,
+            FooterTemplate = FooterTemplate,
+        };
+    }
+
+    /// <summary>
+    /// Restore a saved mill sidebar. Bit is selected first (that loads preset feeds),
+    /// then the saved numbers overwrite so user overrides stick.
+    /// </summary>
+    public void ApplySidebar(MillSidebarSettings s)
+    {
+        if (!string.IsNullOrEmpty(s.SelectedBitId)
+            && (SelectedBit is null || SelectedBit.Id != s.SelectedBitId))
+            ReloadBitLibrary(s.SelectedBitId);
+
+        if (!string.IsNullOrEmpty(s.SelectedCuttingPresetName) && SelectedBit is { } bit)
+        {
+            var preset = bit.CuttingPresets
+                .FirstOrDefault(p => string.Equals(p.Name, s.SelectedCuttingPresetName, StringComparison.OrdinalIgnoreCase));
+            if (preset is not null)
+                SelectedCuttingPreset = preset;
+        }
+
+        if (Enum.TryParse<MillOperationKind>(s.SelectedOperation, ignoreCase: true, out var op))
+            SelectedOperation = op;
+
+        ToolDiameterMm = s.ToolDiameterMm;
+        BallEnd = s.BallEnd;
+        MaxDepthMm = s.MaxDepthMm;
+        OffsetDistanceMm = s.OffsetDistanceMm;
+        NumberOfDepthCuts = s.NumberOfDepthCuts;
+        StepoverMm = s.StepoverMm;
+        StepdownMm = s.StepdownMm;
+        FinishAllowanceMm = s.FinishAllowanceMm;
+        PassAngleDeg = s.PassAngleDeg;
+        PassStrategy = s.PassStrategy;
+        CuttingDirection = s.CuttingDirection;
+        KeepToolWithinSurface = s.KeepToolWithinSurface;
+        ClipPath = s.ClipPath;
+        EnableAntiGouging = s.EnableAntiGouging;
+        ApproachClearanceMm = s.ApproachClearanceMm;
+        RapidZMm = s.RapidZMm;
+        FeedRateMmMin = s.FeedRateMmMin;
+        if (s.TravelSpeedMmS > 0)
+            TravelSpeedMmS = s.TravelSpeedMmS;
+        SkimFeedMmS = s.SkimFeedMmS;
+        PlungeFeedMmMin = s.PlungeFeedMmMin;
+        SpindleRpm = s.SpindleRpm;
+        if (Enum.TryParse<SpindleDirection>(s.SpindleDirection, ignoreCase: true, out var dir))
+            SpindleDirection = dir;
+
+        HeightmapPath = s.HeightmapPath ?? "";
+        HeightScaleMm = s.HeightScaleMm;
+        InvertHeightmap = s.InvertHeightmap;
+        DisplacementDistanceMm = s.DisplacementDistanceMm;
+        AnalysisToleranceMm = s.AnalysisToleranceMm;
+        AutoReferenceFromTop = s.AutoReferenceFromTop;
+        ReferencePlaneZ = s.ReferencePlaneZ;
+        AutoFootprint = s.AutoFootprint;
+        FootprintOriginX = s.FootprintOriginX;
+        FootprintOriginY = s.FootprintOriginY;
+        FootprintWidthMm = s.FootprintWidthMm;
+        FootprintLengthMm = s.FootprintLengthMm;
+        HeaderTemplate = s.HeaderTemplate ?? "";
+        FooterTemplate = s.FooterTemplate ?? "";
+
+        _planarCapturedX = s.PlanarCapturedX;
+        _planarCapturedY = s.PlanarCapturedY;
+        _planarCapturedZ = s.PlanarCapturedZ;
+        PlanarCustomX = s.PlanarCustomX;
+        PlanarCustomY = s.PlanarCustomY;
+        PlanarCustomZ = s.PlanarCustomZ;
+        PlanarTiltDeg = s.PlanarTiltDeg;
+        PlanarAzimuthDeg = s.PlanarAzimuthDeg;
+        if (Enum.TryParse<MillPlanarAxisKind>(s.PlanarToolAxis, ignoreCase: true, out var axis))
+            PlanarToolAxis = MillPlanarAxisOption.Find(axis);
+        NotifyPlanarAxis();
+
+        ToolheadA = s.ToolheadA;
+        ToolheadB = s.ToolheadB;
+        ToolheadC = s.ToolheadC;
+
+        if (Enum.TryParse<MillAreaSelectTool>(s.AreaSelectTool, ignoreCase: true, out var area))
+            AreaSelectTool = area;
+    }
 }

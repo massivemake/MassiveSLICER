@@ -32,22 +32,76 @@ public static class SurfaceFollowMillGenerator
         Vector3.UnitY, -Vector3.UnitY,
     ];
 
-    /// <summary>Single top-down (+Z) surface-follow pass.</summary>
+    /// <summary>
+    /// Single planar surface-follow pass. Default approach is world +Z (project down Z).
+    /// Pass <paramref name="approachAxis"/> to raster in another frame (tool comes from that
+    /// world direction). When <paramref name="lockToolToApproach"/> is true, every move's
+    /// <see cref="ToolpathMove.Normal"/> is the approach — T12 +Z stays −approach.
+    /// </summary>
     public static Toolpath Generate(
         IReadOnlyList<Vector3> positions,
         IReadOnlyList<Vector3> normals,
         IReadOnlyList<int> indices,
         MillSettings mill,
-        float? sampleSpacingMm = null)
+        float? sampleSpacingMm = null,
+        Vector3? approachAxis = null,
+        bool lockToolToApproach = false)
     {
         var tp = new Toolpath();
         if (positions.Count == 0 || indices.Count < 3) return tp;
 
-        var layer = new ToolpathLayer(0, TopZ(positions)) { PlaneNormal = Vector3.UnitZ };
-        // Top-down: take the topmost surface regardless of facing (-1 = no facing filter).
-        layer.Moves.AddRange(RasterView(positions, normals, indices, mill, sampleSpacingMm, Vector3.UnitZ, -1f));
-        if (layer.Moves.Count > 0) tp.Layers.Add(layer);
+        var approach = approachAxis is { } raw && raw.LengthSquared() > 1e-12f
+            ? Vector3.Normalize(raw)
+            : Vector3.UnitZ;
+
+        if (IsUnitZ(approach))
+        {
+            var layer = new ToolpathLayer(0, TopZ(positions)) { PlaneNormal = Vector3.UnitZ };
+            layer.Moves.AddRange(RasterView(positions, normals, indices, mill, sampleSpacingMm, Vector3.UnitZ, -1f));
+            if (lockToolToApproach)
+                LockNormals(layer.Moves, Vector3.UnitZ);
+            if (layer.Moves.Count > 0) tp.Layers.Add(layer);
+            return tp;
+        }
+
+        var basis = new ViewBasis(approach);
+        int n = positions.Count;
+        var vp = new Vector3[n];
+        var vn = new Vector3[n];
+        for (int i = 0; i < n; i++)
+        {
+            vp[i] = basis.ToView(positions[i]);
+            vn[i] = basis.ToView(i < normals.Count ? normals[i] : Vector3.UnitZ);
+        }
+
+        var viewLayer = new ToolpathLayer(0, TopZ(vp)) { PlaneNormal = Vector3.UnitZ };
+        viewLayer.Moves.AddRange(RasterView(vp, vn, indices, mill, sampleSpacingMm, Vector3.UnitZ, -1f));
+
+        var world = new ToolpathLayer(0, TopZ(positions)) { PlaneNormal = approach };
+        foreach (var m in viewLayer.Moves)
+        {
+            var wn = m.Normal == Vector3.Zero ? Vector3.Zero : basis.ToWorld(m.Normal);
+            world.Moves.Add(m with
+            {
+                From = basis.ToWorld(m.From),
+                To = basis.ToWorld(m.To),
+                Normal = lockToolToApproach ? approach : wn,
+            });
+        }
+        if (world.Moves.Count > 0) tp.Layers.Add(world);
         return tp;
+    }
+
+    static bool IsUnitZ(Vector3 v) => MathF.Abs(v.X) < 1e-6f && MathF.Abs(v.Y) < 1e-6f && v.Z > 0.999f;
+
+    static void LockNormals(List<ToolpathMove> moves, Vector3 n)
+    {
+        for (int i = 0; i < moves.Count; i++)
+        {
+            if (moves[i].Normal == Vector3.Zero && moves[i].Kind != MoveKind.Mill)
+                continue;
+            moves[i] = moves[i] with { Normal = n };
+        }
     }
 
     /// <summary>
@@ -147,7 +201,7 @@ public static class SurfaceFollowMillGenerator
                 float x = MathF.Min(minX + cc * sample, maxX);
                 // A covered cell (claimed by an earlier view) breaks the run, like a miss.
                 if (grid.QueryTop(x, y, out var hit) && (claim is null || claim(hit.Point)))
-                    rowHits.Add(hit);
+                    rowHits.Add(OffsetHit(hit, mill.OffsetDistanceMm));
                 else
                     FlushSegment(moves, rowHits, ref cursor, safeZ);
             }
@@ -156,6 +210,13 @@ public static class SurfaceFollowMillGenerator
         if (cursor is { } last)
             moves.Add(new ToolpathMove(last, new Vector3(last.X, last.Y, safeZ), MoveKind.Travel) { IsZHop = true });
         return moves;
+    }
+
+    static Hit OffsetHit(Hit hit, float offsetMm)
+    {
+        if (MathF.Abs(offsetMm) < 1e-6f) return hit;
+        var n = hit.Normal.LengthSquared() > 1e-12f ? Vector3.Normalize(hit.Normal) : Vector3.UnitZ;
+        return hit with { Point = hit.Point + n * offsetMm };
     }
 
     private static float TopZ(IReadOnlyList<Vector3> positions)
@@ -170,13 +231,14 @@ public static class SurfaceFollowMillGenerator
         if (hits.Count == 0) return;
 
         var first = hits[0];
+        var approachN = first.Normal.LengthSquared() > 1e-12f ? first.Normal : Vector3.UnitZ;
         if (cursor is { } cur)
         {
             var up = new Vector3(cur.X, cur.Y, safeZ);
             if (cur.Z < safeZ - 1e-3f)
-                moves.Add(new ToolpathMove(cur, up, MoveKind.Travel) { IsZHop = true });
+                moves.Add(new ToolpathMove(cur, up, MoveKind.Travel) { IsZHop = true, Normal = approachN });
             var over = new Vector3(first.Point.X, first.Point.Y, safeZ);
-            moves.Add(new ToolpathMove(up, over, MoveKind.Travel));
+            moves.Add(new ToolpathMove(up, over, MoveKind.Travel) { Normal = approachN });
             cursor = over;
         }
         else
@@ -184,7 +246,7 @@ public static class SurfaceFollowMillGenerator
             cursor = new Vector3(first.Point.X, first.Point.Y, safeZ);
         }
 
-        moves.Add(new ToolpathMove(cursor.Value, first.Point, MoveKind.Travel) { IsZHop = true });
+        moves.Add(new ToolpathMove(cursor.Value, first.Point, MoveKind.Travel) { IsZHop = true, Normal = approachN });
         var prev = first.Point;
         for (int i = 1; i < hits.Count; i++)
         {

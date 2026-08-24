@@ -195,6 +195,8 @@ public sealed class MillBitLibraryViewModel : ViewModelBase
             FluteCount = 2,
             HolderSegments = [new MillBitHolderSegment()],
             CuttingPresets = [new MillBitCuttingPreset { Name = "Default" }],
+            ShowSpindleCylinder = true,
+            CylinderLengthMm = 50,
         };
         Tools.Add(t);
         SelectedTool = t;
@@ -216,6 +218,7 @@ public sealed class MillBitLibraryViewModel : ViewModelBase
         if (SelectedTool is null) return;
         var copy = CloneTool(SelectedTool);
         copy.Id = Guid.NewGuid().ToString("N");
+        copy.ErpId = null;
         copy.Name = SelectedTool.Name + " (copy)";
         Tools.Add(copy);
         SelectedTool = copy;
@@ -282,6 +285,7 @@ public sealed class MillBitLibraryViewModel : ViewModelBase
         return new MillBitTool
         {
             Id = src.Id,
+            ErpId = src.ErpId,
             Name = src.Name,
             Identifier = src.Identifier,
             ToolNumber = src.ToolNumber,
@@ -296,6 +300,9 @@ public sealed class MillBitLibraryViewModel : ViewModelBase
             FluteCount = src.FluteCount,
             MaxDepthMm = src.MaxDepthMm,
             IsDefaultSpindleBit = src.IsDefaultSpindleBit,
+            ShowSpindleCylinder = src.ShowSpindleCylinder,
+            CylinderLengthMm = src.CylinderLengthMm,
+            CylinderFlip = src.CylinderFlip,
             LastModifiedUtc = src.LastModifiedUtc,
             HolderSegments = holders,
             CuttingPresets = presets,

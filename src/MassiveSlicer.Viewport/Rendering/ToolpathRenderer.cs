@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using MassiveSlicer.Core.Models;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -38,7 +38,7 @@ public sealed class ToolpathRenderer : IDisposable
     private int  _lightningVao, _lightningVbo, _lightningCount;
     private int  _ptVao, _ptVbo;
     private int  _pointCount;
-    /// <summary>All extrude midpoints (edit Point mode) — denser than seam-only points.</summary>
+    /// <summary>All programmed vertices (edit Point mode) — corners + side points.</summary>
     private int  _allPtVao, _allPtVbo;
     private int  _allPointCount;
     private int  _beadVao, _beadVbo, _beadEbo, _beadCount;   // _beadCount = index count
@@ -815,23 +815,12 @@ void main() {
     }
 
     /// <summary>
-    /// One point at the midpoint of every extrude bead — used by edit Point mode so
-    /// the user sees every pickable vertex, not only contour seam ends.
+    /// One point at every programmed vertex (From of each extrude + To of the last
+    /// in a run). Midpoints hid square corners on long wall beads.
     /// </summary>
     private float[] BuildAllPathPointData()
     {
-        var events = new List<(int FlatIdx, NVec3 Pos)>();
-        int fi = 0;
-        foreach (var layer in _toolpath.Layers)
-        {
-            foreach (var move in layer.Moves)
-            {
-                if (move.Kind == MoveKind.Extrude
-                    && !move.IsLayerStitch && !move.IsLayerChange)
-                    events.Add((fi, (move.From + move.To) * 0.5f));
-                fi++;
-            }
-        }
+        var events = MassiveSlicer.Core.Slicing.ToolpathEditPoints.Collect(_toolpath);
 
         // Lime vertex fallback (live colour is uPointColor uniform).
         var col = new Vector3(0.55f, 1.0f, 0.18f);
@@ -1377,8 +1366,8 @@ void main() {
             }
         }
 
-        // Edit Point mode: every extrude midpoint. Size + opacity scale with camera
-        // distance so near beads are large/solid and far ones shrink to ~20% alpha.
+        // Edit Point mode: every programmed vertex (corners + side points). Size +
+        // opacity scale with camera so near points pop and far ones fade.
         if (showAllPathPoints && allPtCount > allPtFirst && _allPtVao != 0)
         {
             // eyeLocal is camera position in toolpath-local space (matches aPos).

@@ -1,6 +1,10 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using MassiveSlicer.App.Behaviors;
 using MassiveSlicer.ViewModels;
 
 namespace MassiveSlicer.App.Views;
@@ -13,9 +17,19 @@ public partial class LeftPanelView : UserControl
     /// <summary>Raised with local file paths dropped onto the import dropzone.</summary>
     public event Action<string[]>? ImportFilesDropped;
 
+    /// <summary>
+    /// PersistExpander restores saved open/closed state on Loaded. Don't steal the
+    /// scroll position until that restore has finished and the user expands a card.
+    /// </summary>
+    public bool AllowExpandScroll { get; private set; }
+
+    static LeftPanelView() => SidebarExpandScroll.Arm();
+
     public LeftPanelView()
     {
         InitializeComponent();
+
+        AttachedToVisualTree += OnAttachedToVisualTree;
 
         ImportDropZone.PointerPressed += (_, _) => ImportClickRequested?.Invoke();
         ImportDropZone.AddHandler(DragDrop.DragOverEvent, (_, e) =>
@@ -34,9 +48,15 @@ public partial class LeftPanelView : UserControl
         });
     }
 
+    void OnAttachedToVisualTree(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() => AllowExpandScroll = true, DispatcherPriority.ContextIdle);
+    }
+
     private void JointAngle_KeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter)
             e.Handled = true;
     }
+
 }

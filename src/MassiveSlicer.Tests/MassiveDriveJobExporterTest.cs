@@ -69,12 +69,17 @@ public sealed class MassiveDriveJobExporterTest
         Assert.Equal(1, segs[2]["layer"]);
 
         // ABC from UnitZ normal: B ≈ 90° (nozzle down), same as KRL export
-        var from0 = Assert.IsType<float[]>(segs[0]["from"]);
-        Assert.Equal(6, from0.Length);
-        Assert.Equal(0f, from0[0]);
-        Assert.Equal(0f, from0[1]);
-        Assert.Equal(10f, from0[2]);
-        Assert.InRange(from0[4], 89f, 91f); // B
+        var from0 = Assert.IsType<Dictionary<string, double>>(segs[0]["from"]);
+        Assert.Equal(0.0, from0["x"]);
+        Assert.Equal(0.0, from0["y"]);
+        Assert.Equal(10.0, from0["z"]);
+        Assert.InRange(from0["b"], 89.0, 91.0);
+
+        var meta = Assert.IsType<Dictionary<string, object?>>(dict["meta"]);
+        Assert.Equal(true, meta["absolute"]);
+        Assert.Equal("#BASE", meta["ipo_frame"]);
+        Assert.Equal(1, meta["tool"]);
+        Assert.Equal(1, meta["base"]);
 
         // Round-trip JSON
         var json = MassiveDriveJobExporter.ExportJson(SamplePath(), settings);
@@ -93,21 +98,86 @@ public sealed class MassiveDriveJobExporterTest
         };
         var segs = Assert.IsType<List<Dictionary<string, object?>>>(
             MassiveDriveJobExporter.ExportDict(SamplePath(), settings)["segments"]);
-        var from0 = Assert.IsType<float[]>(segs[0]["from"]);
+        var from0 = Assert.IsType<Dictionary<string, double>>(segs[0]["from"]);
         // With B toolhead offset, ABC should not be pure (0, 90, 0)
-        Assert.False(MathF.Abs(from0[3]) < 0.01f && MathF.Abs(from0[4] - 90f) < 0.01f && MathF.Abs(from0[5]) < 0.01f);
+        Assert.False(Math.Abs(from0["a"]) < 0.01 && Math.Abs(from0["b"] - 90) < 0.01 && Math.Abs(from0["c"]) < 0.01);
     }
 
     [Fact]
-    public void Export_skips_mill_only_moves()
+    public void Export_emits_mill_package_with_spindle_rpm()
     {
         var tp = new Toolpath();
         var layer = new ToolpathLayer(0, 0f) { PlaneNormal = Vector3.UnitZ };
-        layer.Moves.Add(new ToolpathMove(Vector3.Zero, new Vector3(10, 0, 0), MoveKind.Mill));
+        layer.Moves.Add(new ToolpathMove(Vector3.Zero, new Vector3(10, 0, 0), MoveKind.Mill)
+        {
+            Normal = Vector3.UnitZ,
+        });
         tp.Layers.Add(layer);
 
-        var settings = new MassiveDriveExportSettings { Name = "mill" };
-        Assert.Throws<InvalidOperationException>(() =>
-            MassiveDriveJobExporter.ExportDict(tp, settings));
+        var settings = new MassiveDriveExportSettings
+        {
+            Name = "mill",
+            Tool = 12,
+            MillOrientation = true,
+            SpindleRpm = 1800f,
+            PrintSpeedMmS = 10.44f,
+            TravelSpeedMmS = 80f,
+            TravelReverse = false,
+        };
+        var dict = MassiveDriveJobExporter.ExportDict(tp, settings);
+        var segs = Assert.IsType<List<Dictionary<string, object?>>>(dict["segments"]);
+        Assert.Equal("mill", segs[0]["kind"]);
+        var meta = Assert.IsType<Dictionary<string, object?>>(dict["meta"]);
+        Assert.Equal(true, meta["spindle"]);
+        Assert.Equal(1800f, meta["spindle_rpm"]);
+        Assert.Equal(true, meta["absolute"]);
+        Assert.Equal("Milling Start", meta["approach_waypoint"]);
+        var frames = Assert.IsType<Dictionary<string, int>>(dict["frames"]);
+        Assert.Equal(12, frames["tool"]);
+    }
+
+    [Fact]
+    public void Export_maps_lfam3_world_xyz_to_src_base()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 919.31f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        layer.Moves.Add(new ToolpathMove(
+            new Vector3(1955.45f, -162.54f, 919.31f),
+            new Vector3(2035.45f, -162.54f, 919.31f),
+            MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+            PrintSpeedScale = 1f,
+        });
+        tp.Layers.Add(layer);
+
+        var settings = new MassiveDriveExportSettings
+        {
+            Name = "Six squares",
+            Tool = 1,
+            Base = 1,
+            PrintSpeedMmS = 40f,
+            TravelSpeedMmS = 40f,
+            RobrootWorldPos = new Vector3(0, 0, 1000),
+            BaseDataOffset = new Vector3(2135.45f, -52.54f, -83.69f),
+            SliceBedWorldZ = 916.31f,
+            BedOrigin = new Vector3(2135.45f, -52.54f, 916.31f),
+        };
+
+        var dict = MassiveDriveJobExporter.ExportDict(tp, settings);
+        var segs = Assert.IsType<List<Dictionary<string, object?>>>(dict["segments"]);
+        var from0 = Assert.IsType<Dictionary<string, double>>(segs[0]["from"]);
+        // Same as SRC: print-bed BASE, not $POS_ACT world 919.
+        Assert.InRange(from0["x"], -180.1, -179.9);
+        Assert.InRange(from0["y"], -110.1, -109.9);
+        Assert.InRange(from0["z"], 2.9, 3.1);
+        var frames = Assert.IsType<Dictionary<string, int>>(dict["frames"]);
+        Assert.Equal(1, frames["tool"]);
+        Assert.Equal(1, frames["base"]);
+        var meta = Assert.IsType<Dictionary<string, object?>>(dict["meta"]);
+        Assert.Equal(true, meta["absolute"]);
+        Assert.Equal("base", meta["frame"]);
+        var bed = Assert.IsType<Dictionary<string, double>>(meta["bed_origin"]);
+        Assert.InRange(bed["z"], 916.2, 916.4);
     }
 }

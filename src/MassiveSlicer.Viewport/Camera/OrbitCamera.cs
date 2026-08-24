@@ -1,4 +1,4 @@
-﻿using MassiveSlicer.Viewport.Scene;
+using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;
 
 namespace MassiveSlicer.Viewport.Camera;

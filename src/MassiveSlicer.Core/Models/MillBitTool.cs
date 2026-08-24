@@ -81,6 +81,14 @@ public sealed class MillBitTool
     public const string DefaultSpindleBitId = "lfam3-ap90-flat-3in";
 
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
+    /// <summary>
+    /// Stable id on lab.massivemake.com when synced via
+    /// <c>/api/slicer/v1/mill-tools</c>. Null until first successful push/pull.
+    /// Not the local <see cref="Id"/> (that stays the desktop tool guid).
+    /// </summary>
+    public string? ErpId { get; set; }
+
     /// <summary>Display / list name.</summary>
     public string Name { get; set; } = "New bit";
     /// <summary>Identifier string (e.g. AP90 FLAT 3in End Mill).</summary>
@@ -101,11 +109,40 @@ public sealed class MillBitTool
     public double MaxDepthMm { get; set; }
     /// <summary>When true, this bit is preferred on cold start (mounted on spindle).</summary>
     public bool IsDefaultSpindleBit { get; set; }
+
+    /// <summary>
+    /// Draw a preview cylinder on the LFAM 3 spindle, origin at the
+    /// <c>SpindleBitTCP</c> plane (else <c>SpindleBit</c> disc), length along the plane normal.
+    /// </summary>
+    public bool ShowSpindleCylinder { get; set; } = true;
+
+    /// <summary>
+    /// Cylinder stick-out (mm) from the disc centre along the face normal. 0 = use
+    /// <see cref="TotalLengthMm"/>, then <see cref="FluteLengthMm"/>, then 50 mm.
+    /// </summary>
+    public double CylinderLengthMm { get; set; }
+
+    /// <summary>Reverse the cylinder so it grows from the opposite disc face.</summary>
+    public bool CylinderFlip { get; set; }
+
+    /// <summary>Resolved preview length in mm (never 0).</summary>
+    [JsonIgnore]
+    public double EffectiveCylinderLengthMm
+    {
+        get
+        {
+            if (CylinderLengthMm > 0.05) return CylinderLengthMm;
+            if (TotalLengthMm > 0.05) return TotalLengthMm;
+            if (FluteLengthMm > 0.05) return FluteLengthMm;
+            return 50;
+        }
+    }
     public DateTime LastModifiedUtc { get; set; } = DateTime.UtcNow;
 
     public List<MillBitHolderSegment> HolderSegments { get; set; } = [];
-    public List<MillBitCuttingPreset> CuttingPresets { get; set; } = [new()];
+    public List<MillBitCuttingPreset> CuttingPresets { get; set; } = [];
 
+    [JsonIgnore]
     public string TypeDisplayName => Type switch
     {
         MillBitType.BallEndMill => "Ball end mill",
@@ -115,10 +152,30 @@ public sealed class MillBitTool
         _                       => "Other",
     };
 
+    [JsonIgnore]
     public bool IsBallEnd => Type is MillBitType.BallEndMill;
 
+    [JsonIgnore]
     public MillBitCuttingPreset DefaultPreset =>
         CuttingPresets is { Count: > 0 } ? CuttingPresets[0] : new MillBitCuttingPreset();
+
+    /// <summary>
+    /// Lab / older JSON sometimes stores the first preset as <c>DefaultPreset</c>
+    /// instead of <c>CuttingPresets</c>. Read-only on the wire.
+    /// </summary>
+    [JsonPropertyName("DefaultPreset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MillBitCuttingPreset? DefaultPresetImport
+    {
+        get => null;
+        set
+        {
+            if (value is null) return;
+            CuttingPresets ??= [];
+            if (CuttingPresets.Count == 0)
+                CuttingPresets.Add(value);
+        }
+    }
 
     /// <summary>AP90 3″ face mill — currently mounted on LFAM 3 spindle (from shop CAM card).</summary>
     public static MillBitTool CreateLfam3DefaultFlat3In() => new()

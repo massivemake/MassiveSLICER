@@ -116,6 +116,27 @@ public sealed class WorkspaceUiSession
     /// <summary>Robot joint pose [A1..A6, E1] (KRL degrees) at save time.</summary>
     public double[]? RobotJoints { get; set; }
 
+    /// <summary>
+    /// ROBOT CELL TOOL # (KUKA TOOL_DATA index) at save time. Nullable so older
+    /// .mass files do not force tool 0; restore then falls back to Settings.ToolDataIndex.
+    /// </summary>
+    public int? KrlToolIndex { get; set; }
+
+    /// <summary>ROBOT CELL BASE # (KUKA BASE_DATA index) at save time.</summary>
+    public int? KrlBaseIndex { get; set; }
+
+    /// <summary>
+    /// LFAM 3 PRINT / SCAN / MILL / PrePrintScan. Null on older .mass files —
+    /// restore then infers Mill from TOOL #12 / spindle tools / Subtractive tab.
+    /// </summary>
+    public string? Lfam3WorkflowPhase { get; set; }
+
+    /// <summary>Optional pre-print scan step on the LFAM 3 timeline.</summary>
+    public bool? HasPrePrintScanStep { get; set; }
+
+    /// <summary>Flange-mounted cell tool name at save (e.g. Tool 12). Not the mill-bit library.</summary>
+    public string? MountedToolName { get; set; }
+
     /// <summary>Sim-timeline camera keyframes: [percent, azimuth, elevation, radius, targetX, targetY, targetZ].</summary>
     public List<double[]>? SimCameraKeyframes { get; set; }
 
@@ -437,6 +458,9 @@ public sealed class WorkspaceToolpathEntry
     /// <summary>RGB material colour used for bead rendering.</summary>
     public float[] MaterialColor { get; set; } = [0.1f, 0.45f, 0.9f];
 
+    /// <summary>Print or Mill. Missing on older workspaces — inferred from name / mill moves.</summary>
+    public string? Kind { get; set; }
+
     /// <summary>Displayed (smoothed) toolpath geometry.</summary>
     public WorkspaceToolpathData Data { get; set; } = new();
 
@@ -488,4 +512,31 @@ public sealed class WorkspaceToolpathMoveData
     public float PrintSpeedScale { get; set; } = 1f;
     /// <summary>Optional per-travel resume wait (seconds). Null/0 omitted when serializing default.</summary>
     public float? ResumeWaitSec { get; set; }
+
+    /// <summary>
+    /// Local layer thickness relative to nominal (1 = nominal) — the adaptive-layer-height and
+    /// Multi-Planar wedge flow correction. MUST round-trip: without it a reopened workspace
+    /// exports every thin layer at full nominal flow (measured up to 2.9x over-extrusion).
+    /// Absent in files saved before this field existed, which load as 1 — the old behaviour.
+    /// </summary>
+    public float HeightScale { get; set; } = 1f;
+
+    /// <summary>Lightning Bridge support finger — drives its own display layer.</summary>
+    public bool IsLightning { get; set; }
+
+    /// <summary>Absolute RPM (%) for this move; null = derive from speed. Used by the brim.</summary>
+    public float? RpmPercentOverride { get; set; }
+
+    /// <summary>
+    /// Bed-adhesion brim. MUST round-trip: reprocessing a reloaded workspace re-runs
+    /// LayerSpeedPostProcessor, which would otherwise put the brim back into the layer-speed
+    /// metric and re-cap the whole part's speed against the 99 % RPM gate.
+    /// </summary>
+    public bool IsBrim { get; set; }
+
+    /// <summary>Travel inserted when merging separate toolpaths.</summary>
+    public bool IsMergeConnector { get; set; }
+
+    /// <summary>Per-move travel speed override (m/s). Null = use the global travel speed.</summary>
+    public float? TravelSpeedMps { get; set; }
 }

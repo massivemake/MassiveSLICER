@@ -1,4 +1,4 @@
-﻿namespace MassiveSlicer.Core.Models;
+namespace MassiveSlicer.Core.Models;
 
 /// <summary>
 /// A named material profile used by the additive slicer.
@@ -9,6 +9,12 @@ public sealed class MaterialPreset
     public string Name { get; set; } = "New Preset";
     public string MaterialType { get; set; } = "ABS";
     public string Color { get; set; } = "Black";
+
+    /// <summary>
+    /// Stable id on lab.massivemake.com when synced via
+    /// <c>/api/slicer/v1/material-presets</c>. Null until first successful push/pull.
+    /// </summary>
+    public string? ErpId { get; set; }
 
     // -- Temperatures (deg C) -------------------------------------------------
     // KRL export: $ANOUT[1..3] = ((−150 + T) × 0.032 + 0.032) / 10
