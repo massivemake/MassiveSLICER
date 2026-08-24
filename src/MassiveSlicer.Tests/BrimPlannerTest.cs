@@ -25,7 +25,7 @@ public class BrimPlannerTest
     private static SliceSettings Settings(
         bool enabled = true,
         int loops = 3,
-        BrimDirection direction = BrimDirection.Outward) => new()
+        BrimDirection direction = BrimDirection.Outside) => new()
     {
         BeadWidth     = Bead,
         LayerHeight   = 3f,
@@ -160,7 +160,7 @@ public class BrimPlannerTest
     public void Inward_puts_loops_in_the_hole_and_none_outside()
     {
         var tp = SquareToolpath();
-        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Inward));
+        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Inside));
         var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
         Assert.NotEmpty(brim);
         Assert.All(brim, m => Assert.True(InsideHole(m.To), $"inward brim point {m.To} is not in the hole"));
@@ -173,7 +173,7 @@ public class BrimPlannerTest
         // One loop only: its centreline must be half a bead inside the hole edge, so the bead
         // touches the part wall — the same rule the outward loops follow.
         var tp = SquareToolpath();
-        BrimPlanner.Apply(tp, Settings(loops: 1, direction: BrimDirection.Inward));
+        BrimPlanner.Apply(tp, Settings(loops: 1, direction: BrimDirection.Inside));
         var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
         Assert.NotEmpty(brim);
         Assert.Equal(HoleMin + Bead * 0.5f, brim.Min(m => m.To.X), 1);
@@ -186,7 +186,7 @@ public class BrimPlannerTest
         // Deepest first, working back out — mirroring outward's farthest-first ordering, so
         // whichever loop prints last is the one adjacent to the part.
         var tp = SquareToolpath();
-        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Inward));
+        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Inside));
         var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
         static float FromCentre(Vector3 v) => MathF.Max(MathF.Abs(v.X - 50f), MathF.Abs(v.Y - 50f));
         Assert.True(FromCentre(brim[0].To) < FromCentre(brim[^1].To),
@@ -219,11 +219,55 @@ public class BrimPlannerTest
     }
 
     [Fact]
-    public void Inward_on_a_footprint_with_no_hole_adds_nothing()
+    public void An_open_path_has_two_sides_and_inside_takes_the_other_one()
     {
+        // The case that motivated the side rule. An open wall encloses nothing, so a
+        // hole-based inward brim produced NOTHING on one — which is what happened on a real
+        // capital and a real bendy wall. Offsetting an open path yields one boundary running
+        // down BOTH sides, so "inside" is simply the stretch on the far side.
+        var outside = SolidLineToolpath();
+        BrimPlanner.Apply(outside, Settings(loops: 2, direction: BrimDirection.Outside));
+        var o = BrimMoves(outside, 1).Where(m => m.Kind == MoveKind.Extrude).ToList();
+
+        var inside = SolidLineToolpath();
+        BrimPlanner.Apply(inside, Settings(loops: 2, direction: BrimDirection.Inside));
+        var i = BrimMoves(inside, 1).Where(m => m.Kind == MoveKind.Extrude).ToList();
+
+        Assert.NotEmpty(o);
+        Assert.NotEmpty(i);
+        // The bead runs along y=50, so the two sides separate cleanly above and below it.
+        float oMid = o.Average(m => m.To.Y), iMid = i.Average(m => m.To.Y);
+        Assert.True(Math.Abs(oMid - iMid) > Bead,
+            $"outside (avg y {oMid:F1}) and inside (avg y {iMid:F1}) did not land on opposite sides");
+    }
+
+    [Fact]
+    public void Both_on_an_open_path_covers_more_than_either_side_alone()
+    {
+        int Count(BrimDirection d)
+        {
+            var tp = SolidLineToolpath();
+            BrimPlanner.Apply(tp, Settings(loops: 2, direction: d));
+            return BrimMoves(tp, 1).Count(m => m.Kind == MoveKind.Extrude);
+        }
+        int both = Count(BrimDirection.Both);
+        Assert.True(both > Count(BrimDirection.Outside), "Both should exceed Outside alone");
+        Assert.True(both > Count(BrimDirection.Inside),  "Both should exceed Inside alone");
+    }
+
+    [Fact]
+    public void Partial_runs_are_left_open_rather_than_chorded_shut()
+    {
+        // A side-limited run must not close on itself: the closing segment would be a chord
+        // drawn straight across the part.
         var tp = SolidLineToolpath();
-        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Inward));
-        Assert.Single(tp.Layers[0].Moves);
+        BrimPlanner.Apply(tp, Settings(loops: 1, direction: BrimDirection.Inside));
+        var brim = BrimMoves(tp, 1).Where(m => m.Kind == MoveKind.Extrude).ToList();
+        Assert.NotEmpty(brim);
+        float span = brim.Max(m => m.To.X) - brim.Min(m => m.To.X);
+        Assert.All(brim, m => Assert.True(
+            Vector3.Distance(m.From, m.To) < span,
+            $"a {Vector3.Distance(m.From, m.To):F1}mm segment spans the whole run — the ring was closed"));
     }
 
     [Fact]
@@ -240,7 +284,7 @@ public class BrimPlannerTest
         var tp = new Toolpath();
         tp.Layers.Add(layer);
 
-        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Inward));
+        BrimPlanner.Apply(tp, Settings(loops: 3, direction: BrimDirection.Inside));
         var brim = BrimMoves(tp, 4).Where(m => m.Kind == MoveKind.Extrude).ToList();
         // The k=1 ring (5mm into a 5..35 void) fits; k=3 (25mm in) cannot.
         static float FromCentre(Vector3 v) => MathF.Max(MathF.Abs(v.X - 20f), MathF.Abs(v.Y - 20f));

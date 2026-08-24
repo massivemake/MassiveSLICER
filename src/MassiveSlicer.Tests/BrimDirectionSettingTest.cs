@@ -11,8 +11,8 @@ namespace MassiveSlicer.Tests;
 public class BrimDirectionSettingTest
 {
     [Theory]
-    [InlineData("Outward", BrimDirection.Outward)]
-    [InlineData("Inward",  BrimDirection.Inward)]
+    [InlineData("Outside", BrimDirection.Outside)]
+    [InlineData("Inside",  BrimDirection.Inside)]
     [InlineData("Both",    BrimDirection.Both)]
     public void Display_string_maps_to_the_slicing_enum(string display, BrimDirection expected)
         => Assert.Equal(expected, AdditiveSettingsViewModel.ParseBrimDirection(display));
@@ -20,10 +20,10 @@ public class BrimDirectionSettingTest
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("inward")]      // wrong case is NOT a silent Inward
+    [InlineData("inside")]      // wrong case is NOT a silent Inside
     [InlineData("Sideways")]
-    public void Anything_unrecognised_falls_back_to_outward(string? display)
-        => Assert.Equal(BrimDirection.Outward, AdditiveSettingsViewModel.ParseBrimDirection(display));
+    public void Anything_unrecognised_falls_back_to_outside(string? display)
+        => Assert.Equal(BrimDirection.Outside, AdditiveSettingsViewModel.ParseBrimDirection(display));
 
     [Fact]
     public void Every_dropdown_option_maps_to_a_distinct_direction()
@@ -38,10 +38,10 @@ public class BrimDirectionSettingTest
     }
 
     [Fact]
-    public void Default_is_outward_everywhere_so_old_files_do_not_change_behaviour()
+    public void Default_is_outside_everywhere_so_old_files_do_not_change_behaviour()
     {
-        Assert.Equal("Outward", new AdditiveSettingsViewModel().BrimDirectionDisplay);
-        Assert.Equal("Outward", new AppPreferences().BrimDirectionDisplay);
-        Assert.Equal(BrimDirection.Outward, new SliceSettings().BrimDirection);
+        Assert.Equal("Outside", new AdditiveSettingsViewModel().BrimDirectionDisplay);
+        Assert.Equal("Outside", new AppPreferences().BrimDirectionDisplay);
+        Assert.Equal(BrimDirection.Outside, new SliceSettings().BrimDirection);
     }
 }

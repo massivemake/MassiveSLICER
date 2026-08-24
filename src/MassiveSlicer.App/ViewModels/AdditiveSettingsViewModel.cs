@@ -1047,7 +1047,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     // -- Brim (bed adhesion) -------------------------------------------------------
 
     private bool _brimEnabled;
-    /// <summary>Outward offset loops around the first layer for bed adhesion (applied last, encloses X-bracing).</summary>
+    /// <summary>Offset loops alongside the first layer for bed adhesion (applied last, encloses X-bracing).</summary>
     public bool BrimEnabled
     {
         get => _brimEnabled;
@@ -1068,13 +1068,13 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _brimLoops, Math.Clamp(value, 1, 50));
     }
 
-    public string[] BrimDirectionOptions { get; } = ["Outward", "Inward", "Both"];
+    public string[] BrimDirectionOptions { get; } = ["Outside", "Inside", "Both"];
 
-    private string _brimDirectionDisplay = "Outward";
+    private string _brimDirectionDisplay = "Outside";
     /// <summary>
-    /// Which edges get loops: Outward (outside the footprint), Inward (inside interior
-    /// holes), or Both. The loop count, speed and RPM are shared — direction only chooses
-    /// which edges are offset.
+    /// Which side of the path the loops sit on: Outside, Inside, or Both. The loop count,
+    /// speed and RPM are shared — this only selects which stretches of the one offset
+    /// boundary are kept.
     /// </summary>
     public string BrimDirectionDisplay
     {
@@ -1082,12 +1082,16 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _brimDirectionDisplay, value);
     }
 
-    /// <summary>Maps the display string onto the slicing enum. Anything unrecognised is Outward.</summary>
+    /// <summary>
+    /// Maps the display string onto the slicing enum. Anything unrecognised is Outside, so a
+    /// prefs file or preset written before this setting existed keeps the old behaviour.
+    /// "Outward"/"Inward" are accepted as the earlier wording.
+    /// </summary>
     public static BrimDirection ParseBrimDirection(string? display) => display switch
     {
-        "Inward" => BrimDirection.Inward,
-        "Both"   => BrimDirection.Both,
-        _        => BrimDirection.Outward,
+        "Inside" or "Inward" => BrimDirection.Inside,
+        "Both"               => BrimDirection.Both,
+        _                    => BrimDirection.Outside,
     };
 
     private double _brimSpeed = SliceSettings.MaxBrimSpeedMmS;

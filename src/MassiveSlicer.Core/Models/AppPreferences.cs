@@ -264,11 +264,11 @@ public sealed class AppPreferences
     public int BrimLoops { get; set; } = 3;
 
     /// <summary>
-    /// Which side of the footprint the loops sit on: "Outward", "Inward" or "Both".
+    /// Which side of the path the loops sit on: "Outside", "Inside" or "Both".
     /// Stored as the display string, matching <see cref="WipeModeDisplay"/>. Defaults to
-    /// Outward, so a prefs file written before this existed keeps the old behaviour.
+    /// Outside, so a prefs file written before this existed keeps the old behaviour.
     /// </summary>
-    public string BrimDirectionDisplay { get; set; } = "Outward";
+    public string BrimDirectionDisplay { get; set; } = "Outside";
 
     /// <summary>Fixed brim print speed (mm/s), independent of print speed and Adaptive Speed.</summary>
     public double BrimSpeedMmS { get; set; } = 60.0;

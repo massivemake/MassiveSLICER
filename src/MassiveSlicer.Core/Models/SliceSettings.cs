@@ -58,11 +58,11 @@ public sealed class SliceSettings
     public int BrimLoops { get; init; } = 3;
 
     /// <summary>
-    /// Which side of the footprint the loops sit on. Defaults to <see cref="BrimDirection.Outward"/>,
+    /// Which side of the path the loops sit on. Defaults to <see cref="BrimDirection.Outside"/>,
     /// which is what brim did before the setting existed — so old presets and workspaces that
     /// carry no direction keep behaving exactly as they did.
     /// </summary>
-    public BrimDirection BrimDirection { get; init; } = BrimDirection.Outward;
+    public BrimDirection BrimDirection { get; init; } = BrimDirection.Outside;
 
     /// <summary>
     /// Fixed brim print speed (mm/s), independent of print speed and of the Adaptive Speed
