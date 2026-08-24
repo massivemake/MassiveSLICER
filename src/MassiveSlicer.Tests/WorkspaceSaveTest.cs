@@ -33,6 +33,8 @@ public class WorkspaceSaveTest
                 Lfam3WorkflowPhase     = "Mill",
                 HasPrePrintScanStep    = false,
                 MountedToolName        = "Tool 12",
+                SelectedHomePositionName = "Home Target 6",
+                SelectedHomeAngles       = [0f, -85f, 90f, 15f, 0f, 0f],
             },
         };
 
@@ -63,6 +65,8 @@ public class WorkspaceSaveTest
             Assert.Equal("Mill", s.Lfam3WorkflowPhase);
             Assert.Equal(false, s.HasPrePrintScanStep);
             Assert.Equal("Tool 12", s.MountedToolName);
+            Assert.Equal("Home Target 6", s.SelectedHomePositionName);
+            Assert.Equal(new float[] { 0f, -85f, 90f, 15f, 0f, 0f }, s.SelectedHomeAngles);
         }
         finally
         {

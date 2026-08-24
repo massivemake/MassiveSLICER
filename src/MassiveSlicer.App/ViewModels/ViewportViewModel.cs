@@ -6048,6 +6048,28 @@ public sealed partial class ViewportViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Home name from the .mass being opened. Cell swap reads it once so the
+    /// workspace pick wins over the cell default.
+    /// </summary>
+    string? _pendingWorkspaceHomeName;
+    float[]? _pendingWorkspaceHomeAngles;
+
+    public void SetPendingWorkspaceHome(string? name, float[]? angles = null)
+    {
+        _pendingWorkspaceHomeName = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+        _pendingWorkspaceHomeAngles = angles is { Length: >= 6 } ? angles : null;
+    }
+
+    public (string? Name, float[]? Angles) TakePendingWorkspaceHome()
+    {
+        var n = _pendingWorkspaceHomeName;
+        var a = _pendingWorkspaceHomeAngles;
+        _pendingWorkspaceHomeName = null;
+        _pendingWorkspaceHomeAngles = null;
+        return (n, a);
+    }
+
     private void OnAdditiveSettingsPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(AdditiveSettingsViewModel.ShowMultiPlanarControls)

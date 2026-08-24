@@ -420,7 +420,7 @@ public sealed class AppPreferences
     public string WipeModeDisplay { get; set; } = "Same-Direction";
 
     public double WipeLengthMm { get; set; } = 35.0;
-    public double WipeRampMm { get; set; } = 5.0;
+    public double WipeRampMm { get; set; } = -1.0;
     public double WipeSpeed { get; set; } = 600.0;
     /// <summary>Skip wipe when the following travel is shorter than 2× layer height.</summary>
     public bool WipeSkipShortTravels { get; set; }

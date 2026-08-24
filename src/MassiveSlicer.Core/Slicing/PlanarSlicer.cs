@@ -223,23 +223,7 @@ public static class PlanarSlicer
                 // a small jump gets an extrude stitch (keep printing through the seam).
                 if (prevLayer is { } pl && pl.Moves.Count > 0)
                 {
-                    var endPos   = pl.Moves[^1].To;
-                    var startPos = layer.Moves[0].From;
-                    float dx = endPos.X - startPos.X;
-                    float dy = endPos.Y - startPos.Y;
-                    float xyDist = MathF.Sqrt(dx * dx + dy * dy);
-
-                    if (xyDist > settings.BeadWidth)
-                    {
-                        layer.Moves.Insert(0, new ToolpathMove(endPos, startPos, MoveKind.Travel)
-                            { IsLayerChange = true });
-                    }
-                    else if (xyDist > 0.01f || MathF.Abs(endPos.Z - startPos.Z) > 0.01f)
-                    {
-                        // Close enough to stitch without stopping extrusion.
-                        layer.Moves.Insert(0, new ToolpathMove(endPos, startPos, MoveKind.Extrude) { IsLayerStitch = true });
-                    }
-                    // else: identical position (perfect seam alignment) — no move needed.
+                    ToolpathLayerConnect.Insert(layer, pl.Moves[^1].To, settings.BeadWidth);
                 }
 
                 toolpath.Layers.Add(layer);

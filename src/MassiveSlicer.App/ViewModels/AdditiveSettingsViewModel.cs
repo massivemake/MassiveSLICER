@@ -21,6 +21,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         KrlPostProcess.Owner = this;
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
+        GoToSelectedHomeCommand = new RelayCommand(GoToSelectedHome);
         ReverseTiltDirectionCommand      = new RelayCommand(ReverseTiltDirection);
         SetPatternCommand = new RelayCommand<string>(p => PatternType = p ?? "Smooth");
         AutoTiltCommand       = new RelayCommand(() => OnAutoTiltRequested?.Invoke(false), () => !IsAutoTiltRunning);
@@ -2269,7 +2270,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public const string ShopWipeMode = "Same-Direction";
     public const double ShopWipeLengthMm = 35.0;
-    public const double ShopWipeRampMm = 5.0;
+    public const double ShopWipeRampMm = -1.0;
     public const double ShopWipeSpeedMmS = 600.0;
 
     /// <summary>
@@ -2320,19 +2321,19 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _wipeLengthMm, Math.Max(0.0, value));
     }
 
-    /// <summary>Shop default: wipe ramp = layer height + 2 mm.</summary>
+    /// <summary>Shop default: −1 mm Z smash (into the bead), then wipe length.</summary>
     public const double WipeRampAboveLayerMm = 2.0;
 
     public static double DefaultWipeRampMm(double layerHeightMm)
-        => layerHeightMm + WipeRampAboveLayerMm;
+        => ShopWipeRampMm;
 
-    private double _wipeRampMm = 5.0;
-    private bool _wipeRampFollowsLayerHeight = true;
+    private double _wipeRampMm = -1.0;
+    private bool _wipeRampFollowsLayerHeight = false;
 
     /// <summary>
     /// Wipe ramp (mm). Positive = last N mm of wipe length ramps RPM down.
-    /// Negative = extra |N| mm past wipe length with ramp-down squeeze.
-    /// Default follows layer height + 2 mm until the operator types a different value.
+    /// Negative = first |N| mm −Z smash into the bead (RPM 0), then wipe length.
+    /// Shop default −1. Smash is capped at layer height.
     /// </summary>
     public double WipeRampMm
     {
@@ -2524,8 +2525,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (value is null) return;
+            int found = _homePositions.FindIndex(p => p.Name == value);
+            if (found < 0) return; // not loaded yet — workspace restore retries after cell swap
             if (!SetField(ref _selectedHomePositionName, value)) return;
-            _selectedHomePositionIndex = Math.Max(0, _homePositions.FindIndex(p => p.Name == value));
+            _selectedHomePositionIndex = found;
             OnHomePositionSelected?.Invoke(SelectedHomeAngles);
         }
     }
@@ -2551,6 +2554,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         else
             _homePositions.Add((name, angles));
         AvailableHomePositionNames = _homePositions.Select(p => p.Name).ToArray();
+        SelectedHomePositionName = name;
     }
 
     /// <summary>Wired by ViewportView.axaml.cs; invoked when "Set as Default" is clicked.</summary>
@@ -2558,6 +2562,12 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     /// <summary>Saves the currently selected home position as the default for this cell.</summary>
     public RelayCommand SetDefaultHomePositionCommand { get; }
+
+    /// <summary>Puts the viewport robot on the selected home so you can confirm it. Does not move the live arm.</summary>
+    public RelayCommand GoToSelectedHomeCommand { get; }
+
+    void GoToSelectedHome()
+        => OnHomePositionSelected?.Invoke(SelectedHomeAngles);
 
     /// <summary>
     /// Refreshes the available home position list from the given cell config and restores

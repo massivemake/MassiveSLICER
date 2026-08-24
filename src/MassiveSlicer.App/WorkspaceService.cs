@@ -277,6 +277,8 @@ internal static class WorkspaceService
             Lfam3WorkflowPhase       = viewport.CaptureLfam3WorkflowPhaseName(),
             HasPrePrintScanStep      = viewport.ShowLfam3ToolPicker ? viewport.HasPrePrintScanStep : null,
             MountedToolName          = viewport.HasFlangeMountedTool ? viewport.MountedToolName : null,
+            SelectedHomePositionName = viewport.AdditiveSettings?.SelectedHomePositionName,
+            SelectedHomeAngles       = viewport.AdditiveSettings?.SelectedHomeAngles,
             SimCameraKeyframes       = viewport.CaptureSimCameraKeyframes(),
         };
     }

@@ -126,6 +126,18 @@ public sealed class WorkspaceUiSession
     /// <summary>Flange-mounted cell tool name at save (e.g. Tool 12). Not the mill-bit library.</summary>
     public string? MountedToolName { get; set; }
 
+    /// <summary>
+    /// Named home selected for this workspace (ROBOT card dropdown). Export PTP
+    /// uses these joints. Null on older .mass — cell defaultHomePosition is used.
+    /// </summary>
+    public string? SelectedHomePositionName { get; set; }
+
+    /// <summary>
+    /// A1–A6 (+ optional E1) for <see cref="SelectedHomePositionName"/>. Kept on
+    /// the .mass so a failed cell-JSON write cannot drop the export pose.
+    /// </summary>
+    public float[]? SelectedHomeAngles { get; set; }
+
     /// <summary>Sim-timeline camera keyframes: [percent, azimuth, elevation, radius, targetX, targetY, targetZ].</summary>
     public List<double[]>? SimCameraKeyframes { get; set; }
 

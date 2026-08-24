@@ -3226,7 +3226,12 @@ public partial class ViewportView : UserControl
 
             var posData = CellLoader.LoadPositionData(swap.CellPath);
             if (vm.AdditiveSettings is { } additive)
-                additive.UpdateFromCell(swap.Config, posData.Default, posData.Positions);
+            {
+                var (pick, ang) = vm.TakePendingWorkspaceHome();
+                additive.UpdateFromCell(swap.Config, pick ?? posData.Default, posData.Positions);
+                if (pick is not null && ang is { Length: >= 6 })
+                    additive.AddHomePosition(pick, ang);
+            }
 
             if (vm.Robot is null) return;
 
@@ -6587,7 +6592,7 @@ public partial class ViewportView : UserControl
 
     /// <summary>
     /// After a successful print slice: if the path has travel hops, set Wipe to
-    /// Same-Direction / 35 mm / 5 mm / 600 mm/s. Posted so we do not cancel this
+    /// Same-Direction / 35 mm / −1 mm Z smash / 600 mm/s. Posted so we do not cancel this
     /// finishing slice. Once per source mesh so a later Retrace edit is kept.
     /// </summary>
     void QueueShopWipeForTravels(Toolpath toolpath, object? sourceKey)
@@ -16673,7 +16678,7 @@ public partial class ViewportView : UserControl
             data.Positions.Add(config);
 
         CellLoader.SavePositionData(cellPath, data);
-        additive.AddHomePosition(name, angles);
+        additive.AddHomePosition(name, angles); // selects this name — export uses it
         robot.SetNextPositionName(data.Positions.Count + 1);
     }
 
@@ -17686,6 +17691,14 @@ public partial class ViewportView : UserControl
         }
     }
 
+    /// <summary>Saved <c>filename.mass</c>, or null when the job was never saved.</summary>
+    private string? CurrentMassWorkspaceFileName()
+    {
+        var path = (TopLevel.GetTopLevel(this)?.DataContext as MainWindowViewModel)
+            ?.AppPreferences.LastWorkspacePath;
+        return KrlExporter.MassWorkspaceFileName(path);
+    }
+
     /// <summary>
     /// The one place UI settings become RPM inputs. Export and the viewport highlight both
     /// go through here, so the RPM drawn on screen is the RPM written to the .src — there is
@@ -17832,6 +17845,26 @@ public partial class ViewportView : UserControl
         return false;
     }
 
+    /// <summary>
+    /// Joints for the Z+50 approach — same TCP as the old approach LIN.
+    /// Cartesian PTP {X Y Z} without S/T is a different KUKA config; do not use it.
+    /// </summary>
+    float[]? TrySolveApproachJoints(Toolpath toolpath, KrlExportSettings s)
+    {
+        if (_ikSolver is null) return null;
+        if (!KrlExporter.TryGetApproachCartesian(toolpath, s, out var basePt, out var a, out var b, out var c))
+            return null;
+        RefreshIkSceneKinematics();
+        var world = KrlExporter.BaseToWorld(basePt, s.RobrootWorldPos, s.BaseDataOffset, s.SliceBedWorldZ);
+        var rob = s.RobrootWorldPos;
+        var tgt = new TkVector3(world.X - rob.X, world.Y - rob.Y, world.Z - rob.Z);
+        var seed = s.HomePosition is { Length: >= 6 } h
+            ? new[] { h[0], h[1], h[2], h[3], h[4], h[5] }
+            : new[] { 0f, -90f, 90f, 0f, 15f, 0f };
+        var rot = _ikSolver.TargetRotFromKukaAbc(a, b, c);
+        return _ikSolver.Solve(tgt, seed, rot);
+    }
+
     private async Task<bool> WriteKrlAsync(
         ViewportViewModel vm,
         Toolpath toolpath,
@@ -17923,6 +17956,7 @@ public partial class ViewportView : UserControl
                 HeaderTemplate   = string.IsNullOrWhiteSpace(sub.HeaderTemplate) ? null : sub.HeaderTemplate,
                 FooterTemplate   = string.IsNullOrWhiteSpace(sub.FooterTemplate) ? null : sub.FooterTemplate,
                 SlicerVersion    = MassiveSlicer.App.BuildInfo.Label,
+                WorkspaceFileName = CurrentMassWorkspaceFileName(),
                 CellName         = cell.Name,
             };
             var millKrl = await Task.Run(() => KrlExporter.Export(toolpath, millExport));
@@ -17998,6 +18032,7 @@ public partial class ViewportView : UserControl
             DigitalStartStopEnabled = false,
             ExtruderAirEnabled      = settings.ExtruderAirEnabled,
             SlicerVersion           = MassiveSlicer.App.BuildInfo.Label,
+            WorkspaceFileName       = CurrentMassWorkspaceFileName(),
             MaterialPresetName      = selectedPreset?.Name,
             MaterialType            = selectedPreset?.MaterialType,
             MaterialColor           = selectedPreset?.Color,
@@ -18006,6 +18041,9 @@ public partial class ViewportView : UserControl
         };
         exportSettings = WithRpmInputs(exportSettings, settings);
         exportSettings = KrlPostProcessRecipe.Apply(exportSettings, postProcess);
+        var approachJ = TrySolveApproachJoints(toolpath, exportSettings);
+        if (approachJ is { Length: >= 6 })
+            exportSettings = exportSettings with { ApproachJoints = approachJ };
 
         string krl;
         try

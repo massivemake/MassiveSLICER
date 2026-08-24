@@ -36,10 +36,11 @@ public sealed class SliceSettings
     public float WipeSpeed { get; init; } = 0.12f;
 
     /// <summary>
-    /// Trailing wipe ramp distance (mm). Positive: last N mm of <see cref="WipeLengthMm"/> ramps RPM to zero.
-    /// Negative: after the full wipe length, extend an additional |N| mm with ramp-down (squeeze segment).
+    /// Wipe ramp (mm). Positive: last N mm of <see cref="WipeLengthMm"/> ramps RPM to zero.
+    /// Negative: first dip |N| mm in −Z (smash into the bead, RPM 0), then the full wipe length.
+    /// Shop default −1 mm. Smash is capped at layer height.
     /// </summary>
-    public float WipeRampMm { get; init; } = 5f;
+    public float WipeRampMm { get; init; } = -1f;
 
     /// <summary>
     /// When true, skip wipe insertion before travels shorter than
