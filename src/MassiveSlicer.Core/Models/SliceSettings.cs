@@ -49,7 +49,7 @@ public sealed class SliceSettings
     public bool WipeSkipShortTravels { get; init; }
 
     /// <summary>
-    /// Brim: outward offset loops around the full first-layer footprint for bed adhesion.
+    /// Brim: offset loops around the first-layer footprint for bed adhesion.
     /// Applied as the LAST toolpath step so first-layer additions (X-bracing, patterns)
     /// are enclosed.
     /// </summary>
@@ -59,26 +59,12 @@ public sealed class SliceSettings
     public int BrimLoops { get; init; } = 3;
 
     /// <summary>
-    /// Fixed brim print speed (mm/s), independent of print speed and of the Adaptive Speed
-    /// window. The brim is bed adhesion, not part shape — it has no reason to follow the
-    /// part's speed rule, and following it made the brim the fastest move in the print
-    /// (and the one that hit the 99 % RPM export gate). Capped at
-    /// <see cref="MaxBrimSpeedMmS"/>. RPM follows the speed, so flow stays correct.
+    /// Which side of the path the loops sit on. Defaults to <see cref="BrimDirection.Outside"/>,
+    /// which is what brim did before the setting existed — so old presets and workspaces that
+    /// carry no direction keep behaving exactly as they did.
     /// </summary>
-    public float BrimSpeedMmS { get; init; } = 60f;
+    public BrimDirection BrimDirection { get; init; } = BrimDirection.Outside;
 
-    /// <summary>Upper bound on <see cref="BrimSpeedMmS"/> — a brim never wants to be quick.</summary>
-    public const float MaxBrimSpeedMmS = 60f;
-
-    /// <summary>
-    /// Absolute extrusion RPM (%) for the brim. 0 = off, i.e. let RPM follow brim speed.
-    /// Set it to lay a deliberately fat brim for adhesion despite the slow speed. Capped at
-    /// <see cref="MaxBrimRpmPercent"/> so it can never trip the export gate on its own.
-    /// </summary>
-    public float BrimRpmPercent { get; init; }
-
-    /// <summary>Upper bound on <see cref="BrimRpmPercent"/>, matching the export RPM gate.</summary>
-    public const float MaxBrimRpmPercent = 99f;
 
     /// <summary>Material flow rate (rev/cm³) for RPM ramp scaling.</summary>
     public float FlowRate { get; init; } = 0.463f;

@@ -195,6 +195,7 @@ public sealed class PrintPresetSample
     // -- Brim --------------------------------------------------------------------
     public bool? BrimEnabled { get; init; }
     public int? BrimLoops { get; init; }
+    public string? BrimDirectionDisplay { get; init; }
 
     /// <summary>
     /// Coarse-rounded settings signature used to detect "this is secretly the same preset as that
@@ -446,6 +447,7 @@ public sealed class PrintPresetSample
             {
                 B(s, "Brim enabled", BrimEnabled);
                 I(s, "Brim loops", BrimLoops);
+                S(s, "Brim direction", BrimDirectionDisplay);
             });
 
             lines.Add("");
@@ -904,7 +906,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
 
             UseDisplacedStock = d.UseDisplacedStock, StockAllowanceMm = d.StockAllowanceMm,
 
-            BrimEnabled = d.BrimEnabled, BrimLoops = d.BrimLoops,
+            BrimEnabled = d.BrimEnabled, BrimLoops = d.BrimLoops, BrimDirectionDisplay = d.BrimDirectionDisplay,
         };
 
         AllPresets.Add(preset);
@@ -1233,6 +1235,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
 
         if (p.BrimEnabled is { } brimEnabled) _additive.BrimEnabled = brimEnabled;
         if (p.BrimLoops is { } brimLoops) _additive.BrimLoops = brimLoops;
+        if (p.BrimDirectionDisplay is { Length: > 0 } brimDir) _additive.BrimDirectionDisplay = brimDir;
 
         if (!string.IsNullOrEmpty(p.Material))
         {
@@ -1484,6 +1487,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
 
             BrimEnabled = brim ? a.BrimEnabled : null,
             BrimLoops = brim ? a.BrimLoops : null,
+            BrimDirectionDisplay = brim ? a.BrimDirectionDisplay : null,
         };
     }
 
@@ -1636,7 +1640,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
 
         UseDisplacedStock = p.UseDisplacedStock, StockAllowanceMm = p.StockAllowanceMm,
 
-        BrimEnabled = p.BrimEnabled, BrimLoops = p.BrimLoops,
+        BrimEnabled = p.BrimEnabled, BrimLoops = p.BrimLoops, BrimDirectionDisplay = p.BrimDirectionDisplay,
     };
 
     private static PrintPresetSample FromRecord(PrintPresetRecord r) => new()
@@ -1714,7 +1718,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
 
         UseDisplacedStock = r.UseDisplacedStock, StockAllowanceMm = r.StockAllowanceMm,
 
-        BrimEnabled = r.BrimEnabled, BrimLoops = r.BrimLoops,
+        BrimEnabled = r.BrimEnabled, BrimLoops = r.BrimLoops, BrimDirectionDisplay = r.BrimDirectionDisplay,
     };
 
     /// <summary>

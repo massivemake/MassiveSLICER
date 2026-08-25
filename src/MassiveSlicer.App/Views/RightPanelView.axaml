@@ -2193,7 +2193,7 @@
 
                             <!-- Brim (collapsible group under EFFECTS) -->
                             <Expander Classes="SectionExpander" Header="BRIM" IsExpanded="False"
-                                      ToolTip.Tip="Bed-adhesion brim: outward offset loops around the first layer. Generated as the last toolpath step, so it wraps X-bracing and any other first-layer additions.">
+                                      ToolTip.Tip="Bed-adhesion brim: offset loops around the first layer, outside the footprint and/or inside interior holes. Generated as the last toolpath step, so it wraps X-bracing and any other first-layer additions.">
                                 <StackPanel Margin="0,2,0,4">
                                     <CheckBox Margin="8,2,8,4"
                                               Content="Enable brim"
@@ -2205,32 +2205,25 @@
                                         <Grid Margin="8,2,8,4">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="110"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Direction" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Which side of the path the loops sit on.&#x0a;&#x0a;Offsetting the footprint produces ONE boundary that runs down BOTH sides of the path — out along one side, round the end, and back along the other. Measured on a real open wall it comes to 2.01x the path length. So this does not offset twice; it picks which stretches of that one boundary to keep.&#x0a;&#x0a;Outside: the outer side only. What brim did before this setting existed.&#x0a;&#x0a;Inside: the other side — the concave side of an open wall, or the bore of a closed one.&#x0a;&#x0a;Both: the whole boundary, outer side first so the run crosses over once rather than per loop.&#x0a;&#x0a;Side is measured against the path&apos;s direction of travel, so a run stays on one side for its whole length even where the wall bends both ways. If it picks the side you did not want, switch it. The inside runs out of room and stops on its own once the loops no longer fit."/>
+                                            <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
+                                                       ItemsSource="{Binding Additive.BrimDirectionOptions}"
+                                                       SelectedItem="{Binding Additive.BrimDirectionDisplay, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <Grid Margin="8,2,8,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="80"/>
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Grid.Column="0" Text="Offset loops" VerticalAlignment="Center" Classes="LabelMuted"
                                                        ToolTip.Tip="How many loops to print around the part. More loops = wider skirt = stronger hold."/>
                                             <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BrimLoops, Mode=TwoWay}"/>
                                         </Grid>
-                                        <Grid Margin="8,2,8,4">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="80"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="Brim speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"
-                                                       ToolTip.Tip="Fixed speed for the brim only. Ignores print speed and the Adaptive Speed range — the brim is bed adhesion, not part shape. Capped at 60 mm/s. RPM follows the speed, so flow stays correct."/>
-                                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BrimSpeed, Mode=TwoWay}"/>
-                                        </Grid>
-                                        <Grid Margin="8,2,8,4">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="80"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="Brim RPM (%)" VerticalAlignment="Center" Classes="LabelMuted"
-                                                       ToolTip.Tip="Absolute extrusion RPM for the brim. 0 = let RPM follow brim speed. Raise it to lay a deliberately fat brim for adhesion despite the slow speed — this bypasses every flow scale, so it will not be pulled back down. Capped at 99 %."/>
-                                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BrimRpmPercent, Mode=TwoWay}"/>
-                                        </Grid>
                                         <TextBlock Margin="10,0,10,4" FontSize="10" Opacity="0.6" TextWrapping="Wrap"
-                                                   Text="Loops are one bead width apart, printed outermost-in before the part so the innermost loop fuses to the first bead. Brim speed is fixed and independent of Adaptive Speed."/>
+                                                   Text="Loops are one bead width apart and print before the part, farthest edge first, so the last loop fuses to its first bead. Inward loops work the same way measured from each hole edge. Brim speed is fixed and independent of Adaptive Speed."/>
                                     </StackPanel>
                                 </StackPanel>
                             </Expander>

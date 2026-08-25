@@ -192,6 +192,7 @@ public sealed class PrintPresetRecord
     // -- Brim --------------------------------------------------------------------
     public bool? BrimEnabled { get; set; }
     public int? BrimLoops { get; set; }
+    public string? BrimDirectionDisplay { get; set; }
 }
 
 /// <summary>

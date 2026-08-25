@@ -1048,7 +1048,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     // -- Brim (bed adhesion) -------------------------------------------------------
 
     private bool _brimEnabled;
-    /// <summary>Outward offset loops around the first layer for bed adhesion (applied last, encloses X-bracing).</summary>
+    /// <summary>Offset loops alongside the first layer for bed adhesion (applied last, encloses X-bracing).</summary>
     public bool BrimEnabled
     {
         get => _brimEnabled;
@@ -1069,33 +1069,45 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _brimLoops, Math.Clamp(value, 1, 50));
     }
 
-    private double _brimSpeed = SliceSettings.MaxBrimSpeedMmS;
+    public string[] BrimDirectionOptions { get; } = ["Outside", "Inside", "Both"];
+
+    private string _brimDirectionDisplay = "Outside";
     /// <summary>
-    /// Fixed brim speed (mm/s). Deliberately ignores print speed and the Adaptive Speed
-    /// window — the brim is bed adhesion, not part shape. Capped at
-    /// <see cref="SliceSettings.MaxBrimSpeedMmS"/>.
+    /// Which side of the path the loops sit on: Outside, Inside, or Both. The loop count,
+    /// speed and RPM are shared — this only selects which stretches of the one offset
+    /// boundary are kept.
     /// </summary>
-    public double BrimSpeed
+    public string BrimDirectionDisplay
     {
-        get => _brimSpeed;
-        set => SetField(ref _brimSpeed, Math.Clamp(value, 1.0, SliceSettings.MaxBrimSpeedMmS));
+        get => _brimDirectionDisplay;
+        set => SetField(ref _brimDirectionDisplay, value);
     }
 
-    private double _brimRpmPercent;
     /// <summary>
-    /// Absolute brim extrusion RPM (%). 0 = off, i.e. RPM follows brim speed as usual.
-    /// Raise it to lay a deliberately fat brim for adhesion despite the slow brim speed —
-    /// this value bypasses every per-move flow scale. Capped at
-    /// <see cref="SliceSettings.MaxBrimRpmPercent"/> so it cannot trip the export gate.
+    /// The canonical display string for a direction — always one of
+    /// <see cref="BrimDirectionOptions"/>. Anything setting the direction programmatically must go
+    /// through here: the console command hard-coded its own strings, they went stale when the
+    /// options were renamed, and the dropdown silently rendered BLANK because the stored value
+    /// matched no option.
     /// </summary>
-    public double BrimRpmPercent
+    public static string BrimDirectionDisplayFor(BrimDirection d) => d switch
     {
-        get => _brimRpmPercent;
-        set => SetField(ref _brimRpmPercent,
-                        value <= 0.0 ? 0.0 : Math.Clamp(value, 1.0, SliceSettings.MaxBrimRpmPercent));
-    }
+        BrimDirection.Inside => "Inside",
+        BrimDirection.Both   => "Both",
+        _                    => "Outside",
+    };
 
-    // -- X-Bracing Wall ----------------------------------------------------------
+    /// <summary>
+    /// Maps the display string onto the slicing enum. Anything unrecognised is Outside, so a
+    /// prefs file or preset written before this setting existed keeps the old behaviour.
+    /// "Outward"/"Inward" are accepted as the earlier wording.
+    /// </summary>
+    public static BrimDirection ParseBrimDirection(string? display) => display switch
+    {
+        "Inside" or "Inward" => BrimDirection.Inside,
+        "Both"               => BrimDirection.Both,
+        _                    => BrimDirection.Outside,
+    };
 
     private bool _xBracingEnabled;
     /// <summary>Cut dual-wall X braces into the perimeter for structural back-support.</summary>
