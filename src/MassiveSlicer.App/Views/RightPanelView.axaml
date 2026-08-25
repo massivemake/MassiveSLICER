@@ -1677,7 +1677,7 @@
                                     <ColumnDefinition Width="80"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="Wipe ramp (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                           ToolTip.Tip="Default is layer height + 2 mm and tracks layer height until you type a different value. Positive: last N mm of wipe length ramps RPM to zero. Negative: extend |N| mm past wipe length with squeeze ramp."/>
+                                           ToolTip.Tip="Shop −1 = dip 1 mm in −Z into the bead with RPM 0, then wipe length (reverse fires on that smash). Positive: last N mm of wipe length ramps RPM to zero. Smash depth is capped at layer height."/>
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeRampMm}"/>
                             </Grid>
 
@@ -2581,6 +2581,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <ComboBox Grid.Column="0"
                                       HorizontalAlignment="Stretch"
@@ -2588,6 +2589,12 @@
                                       ItemsSource="{Binding Additive.AvailableHomePositionNames}"
                                       SelectedItem="{Binding Additive.SelectedHomePositionName, Mode=TwoWay}"/>
                             <Button Grid.Column="1"
+                                    Content="GO"
+                                    Classes="ToolbarButton"
+                                    Margin="0,0,4,0"
+                                    Command="{Binding Additive.GoToSelectedHomeCommand}"
+                                    ToolTip.Tip="Put the viewport robot on this pose so you can confirm it. Does not move the live arm."/>
+                            <Button Grid.Column="2"
                                     Content="Set Default"
                                     Classes="ToolbarButton"
                                     Command="{Binding Additive.SetDefaultHomePositionCommand}"

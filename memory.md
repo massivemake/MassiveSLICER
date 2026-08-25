@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-22** (export uses settings-menu header, not stock CaracolSafety)
+Last updated: **2026-08-24** (approach PTP is joints, not PTP {X Y Z})
 
 ---
 
@@ -516,6 +516,114 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-24 — Cartesian PTP {X Y Z} was not the same pose as the LIN
+
+- Symptom: approach PTP looked nothing like the old `LIN {X -101, Y -451, Z 50.50}`.
+- Cause: `PTP {X Y Z A B C}` with no S/T. KUKA defaults S=0 T=0 — a different
+  wrist than the LIN (LIN inherits config from the home joint PTP).
+- Fix: never emit cartesian PTP without S/T. Approach is `PTP {A1…}` from
+  viewport IK of that same LIN pose, or the original LIN if IK fails.
+
+### 2026-08-24 — Home → first print pose is PTP, not LIN
+
+- Symptom: A4 spins through a wrist singularity between `PTP {A1…}` home and
+  `LIN {X Y Z+50 A B C} C_VEL`.
+- Cause: LIN interpolates cartesian ABC. Home A4/A5/A6 ≠ first bead ABC
+  (e.g. A −90 / B 45 / C −90).
+- Fix: first hop is `;approach` + cartesian `PTP {X Y Z+50 …}`. Drop to the
+  bed stays exact-stop LIN (same ABC). Mill first rapid matches.
+
+### 2026-08-24 — GO confirms the selected home in the viewport
+
+- Symptom: no way to put the preview on the named home before export.
+- Cause: dropdown select already called `ApplyViewportJoints`, but there was no
+  button; live Sync would also overwrite the sliders.
+- Fix: **GO** next to the home dropdown (ROBOT card + PRINT GLOBAL). Viewport
+  only — does not move the live arm. `ApplyViewportJoints` pauses C3 stream.
+
+### 2026-08-24 — Saved home was not the SRC start PTP
+
+- Symptom: LFAM 3 SAVE AS HOME POSITION (Home Target 6, A2 −85 / A4 15) then
+  export still started at cell default Home (A2 −90 / A4 0 / A5 15).
+- Cause: left ROBOT card was a name box only — save wrote the pose into the
+  cell JSON but never selected it. Export uses `SelectedHomeAngles`.
+- Fix: dropdown of named homes on the ROBOT card; save selects that name;
+  `.mass` stores `UiSession.SelectedHomePositionName` so reopen exports the
+  same PTP. E1 is stored as the 7th joint.
+
+### 2026-08-23 — Wipe is a level on `$ANOUT[1]`, not a new pin
+
+- Shop: splice zone-1 analog, look for ~1.0 V vs heat ~3.2 V. Do not rewrite Caracol.
+- Live: T1=250 → `$ANOUT[1]`=0.323 → **3.23 V**. ANALOGHANDLER `SET_T1` already owns that wire.
+- Export: `WAIT SEC 0` + `T1 = 180` (~1.0 V) at `;wipe`, restore job `T1` after the wipe run.
+- ClearCore A-10 (firmware on disk, **not flashed**): falling edge after heat >2 V → one REVERSE. 0 V does not fire.
+- Files: `KrlExporter.cs`, `KrlExporterTest.cs`. Rebuild + re-export. Flash ExtruderMotor before splicing A-10 onto MIO Analog IN 2.
+
+### 2026-08-23 — Layer-change hops were missing wipe
+
+- Symptom: viewport showed orange wipe stubs on some seams and only a vertical hop on others.
+- Cause: `MovementPostProcessor` reset `lastExtrude` every layer. Layer hops are the first move of layer N+1 (`ToolpathLayerConnect` travel), so smash/wipe never ran. Intra-layer island travels still wiped.
+- Fix: keep last real bead across layers. Re-slice after rebuild. Same-XY layer stitches still do not wipe (they stay print).
+- Files: `MovementPostProcessor.cs`, `MovementPostProcessorTest.cs`. Not print-verified.
+
+### 2026-08-23 — Wipe ramp −1 mm is a Z smash, then wipe length
+
+- Symptom: shop wanted a clean nozzle: dip into the bead with no RPM, then wipe, plus Drive reverse.
+- Cause: negative `WipeRampMm` used to add extra XY squeeze after wipe length (RPM fade). Not a Z smash.
+- Fix: negative ramp = first wipe LIN is −Z by |N| mm (`WipeRpmScale = 0`, exact-stop SRC), then the full wipe length at that Z. Shop default **−1**. Smash capped at layer height. Reverse still fires on that first wipe / `E2 1`. Positive ramp still fades the last N mm.
+- Files: `MovementPostProcessor.cs`, `KrlExporter.cs`, wipe defaults/UI. Re-slice + rebuild. Not print-verified.
+
+### 2026-08-23 — First wipe LIN stamps E2 1.000 (Drive reverse flag)
+
+- Symptom: A9 reverse-on-RPM=0 was noisy; shop asked for E2 1.000 on the first wipe LIN.
+- Cause: RPM=0 happens on every travel/stop. E2 on a LIN is unused on LFAM 3
+  (`$EX_AX_NUM=1`; rotary is **E1** / `KP1-MB2000`).
+- Fix: `KrlExporter` writes `E2 1.000` only on the **first** wipe LIN of a run
+  (`;wipe` still once). Later wipe LINs stay `E2 0.000`. Safe on LFAM 3 — E2
+  is not a machine axis. MassiveDRIVE parses SRC at TCP (E2≥0.5 or first LIN
+  after `;wipe`) and pulses reverse once.
+- Files: `KrlExporter.cs`, `KrlExporterTest.cs`. Re-export SRC for the E2 stamp; existing `;wipe` already triggers Drive.
+
+### 2026-08-23 — Multi-Planar next-layer hop printed as a bead
+
+- Symptom: `LIN` at Z 0.22 then `RPM = 24.9` + print `$VEL.CP` then `LIN` at
+  Z 3.36 ~580 mm away. No `;travel start` / z-hop.
+- Cause: Planar inserts a layer-change travel when XY > bead width. Angled /
+  Multi-Planar never did. Exporter only writes each move's `To`, so the hop
+  became a `C_VEL` print.
+- Fix: shared `ToolpathLayerConnect.Insert` (Planar + Angled + Multi-Planar).
+  Exporter also inserts `;layer change` if the next extrude `From` is far from
+  the last pose (re-export without re-slice). Re-slice to get wipe / z-hop.
+
+### 2026-08-23 — $ADVANCE ran print RPM during approach
+
+- Symptom: pad/HMI showed RPM ~24 before the robot reached the Z+50 approach LIN.
+- Cause: `$ADVANCE=5`. `RPM = 23.64426` is a normal assignment, so the interpreter
+  executes it as soon as it *reads* it — five motions ahead. Not a second setpoint.
+- Fix: `WAIT SEC 0` immediately before travel `RPM = 0` and print `RPM =` (empties
+  look-ahead). Mid-bead RPM updates unchanged. No TRIGGER.
+
+### 2026-08-23 — Collapse wipe comments and same-value $VEL.CP
+
+- Symptom: five `;wipe` + `$VEL.CP = 0.600000` pairs, then the same speed again on
+  each z-hop LIN. The 1.25 mm wipe LINs are real path; the comments/speed were not.
+- Fix: one `;wipe` per wipe run (same as `;z-hop`). `$VEL.CP` only when the F6
+  value changes (print, travel, wipe, mill).
+
+### 2026-08-23 — Duplicate RPM around ;travel end
+
+- Symptom (`2026_0823_-_testPrintV02.src`): `RPM = 23.64426` then `;travel end` then
+  `RPM = 23.64426 ; RPM on`.
+- Cause: `WriteTravelEnd` wrote print RPM, then the first print move wrote it again.
+- Fix: `;travel end` is only the comment. One `RPM =` on resume. Same for approach.
+  Mid-bead RPM updates (layer speed / height scale) are unchanged.
+
+### 2026-08-22 — SRC header fold includes saved .mass filename
+
+- `;FOLD MassiveSLICER export` now has `; Workspace filename.mass` when the job was
+  saved as a `.mass`. Unsaved / non-`.mass` omits the line (no path, filename only).
+- Print and mill SRC / Send to Robot. PointLoader-safe comment (ASCII, no `$OUT`).
 
 ### 2026-08-22 — Export ignored settings-menu header (CaracolSafety gate)
 

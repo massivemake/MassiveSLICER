@@ -195,6 +195,8 @@ public static class AngledPlanarSlicer
 
             if (layer.Moves.Count > 0)
             {
+                if (prevEnd is { } pe)
+                    ToolpathLayerConnect.Insert(layer, pe, settings.BeadWidth);
                 toolpath.Layers.Add(layer);
                 prevEnd = layer.Moves[^1].To;
             }
@@ -527,6 +529,8 @@ public static class AngledPlanarSlicer
                     layer = fixedLayer;
                 }
 
+                if (prevEnd is { } pe)
+                    ToolpathLayerConnect.Insert(layer, pe, settings.BeadWidth);
                 toolpath.Layers.Add(layer);
                 prevEnd = layer.Moves[^1].To;
             }

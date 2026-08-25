@@ -12,6 +12,11 @@ public sealed record KrlExportSettings
     public required string ProgramName { get; init; }
     /// <summary>MassiveSLICER build label (status-bar version) written into the KRL header.</summary>
     public string? SlicerVersion { get; init; }
+    /// <summary>
+    /// Saved workspace file name (<c>filename.mass</c>) for the export comment fold.
+    /// Null when the job was never saved as a <c>.mass</c>.
+    /// </summary>
+    public string? WorkspaceFileName { get; init; }
     /// <summary>Applied material / print preset name, if one was selected.</summary>
     public string? MaterialPresetName { get; init; }
     /// <summary>Preset material family (e.g. ABS), if known.</summary>
@@ -154,6 +159,12 @@ public sealed record KrlExportSettings
     public float SsApproachSpeedScale { get; init; } = 0.5f;
 
     public float[] HomePosition { get; init; } = [0f, -90f, 90f, 0f, 15f, 0f];
+    /// <summary>
+    /// Joint PTP for the Z+50 approach (A1–A6). Same cartesian pose as the old
+    /// approach LIN. Null = emit that LIN (do not write <c>PTP {X Y Z}</c> —
+    /// missing S/T is a different config).
+    /// </summary>
+    public float[]? ApproachJoints { get; init; }
     /// <summary>LFAM 1 rail: E1 position (mm) emitted in the header HOME PTP. NaN = omit.</summary>
     public float HomeE1Mm { get; init; } = float.NaN;
 
@@ -589,18 +600,26 @@ public static class KrlExporter
         float lastE1 = float.IsNaN(s.HomeE1Mm) ? 0f : s.HomeE1Mm;
 
         // -- Initial approach -----------------------------------------------------
-        sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
+        string? lastVelText = null;
+        WriteVelIfChanged(sb, s.TravelSpeedMps, ref lastVelText);
         float e1Approach = E1ForBase(p0, s, ref lastE1);
-        sb.AppendLine(FormatLin(new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm), a0, b0, c0, e1Approach));
-        // Exact stop at the touch-down point so the RPM-on TRIGGER fires at the
-        // correct physical position (not inside a C_VEL blend zone).
-        sb.AppendLine(FormatLinExact(p0, a0, b0, c0, e1Approach));
-        // Approach ends with ";travel end" then first bead writes RPM =.
-        if (s.UseTravelStartStop)
+        var approach = new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm);
+        sb.AppendLine(";approach");
+        if (s.ApproachJoints is { Length: >= 6 } aj)
         {
-            sb.AppendLine(FormatTravelRpmOn(s, 1f));
-            sb.AppendLine(";travel end");
+            // Joint PTP of the same cartesian pose as the LIN below.
+            // Do not emit PTP {X Y Z} — no S/T is a different wrist.
+            sb.AppendLine(FormatPtpJoints(aj, e1Approach, s));
         }
+        else
+        {
+            sb.AppendLine(FormatLin(approach, a0, b0, c0, e1Approach));
+        }
+        // Exact-stop LIN down to the bed (same ABC — no wrist change).
+        sb.AppendLine(FormatLinExact(p0, a0, b0, c0, e1Approach));
+        // Approach is a travel. First print start writes the single RPM =.
+        if (s.UseTravelStartStop)
+            sb.AppendLine(";travel end");
         sb.AppendLine();
 
         Vector3 lastPos = p0;
@@ -608,13 +627,14 @@ public static class KrlExporter
         bool needsRpmOn = true;
         bool isFirstPrintStart = true;
         bool inZHopSequence = false;
+        bool inWipeSequence = false;
+        bool an1Dipped = false;
         // Caracol S&S: emit OUT[9]/OUT[7] stop block once at the start of a wipe/z-hop/travel run.
         bool ssStopActive = false;
         float? pendingResumeWaitSec = null;
         float lastExtrudeSpeedMps = -1f;
         float lastExtrudeRpmScale = -1f;
         string? lastExtrudeAnoutText = null;
-        string? lastExtrudeVelText = null;
 
         // Pre-smooth per-move normals along each contour with a forward-biased Gaussian
         // kernel before ABC conversion. This prevents the KRL exporter from producing
@@ -644,8 +664,41 @@ public static class KrlExporter
                 var move = layer.Moves[mi];
                 var to   = ToBase(move.To, s);
 
+                // Missing layer-change travel: last pose is far from this extrude's
+                // From. Write the hop as travel so we never print across layers.
+                if (move.Kind == MoveKind.Extrude && !move.IsWipe && !move.IsLayerStitch)
+                {
+                    var fromB = ToBase(move.From, s);
+                    float gx = lastPos.X - fromB.X, gy = lastPos.Y - fromB.Y;
+                    float xy2 = gx * gx + gy * gy;
+                    float gapMm = MathF.Max(s.BeadWidthMm, 2f);
+                    if (xy2 > gapMm * gapMm)
+                    {
+                        WriteAn1HeatRestore(sb, s, ref an1Dipped);
+                        inWipeSequence = false;
+                        inZHopSequence = false;
+                        if (s.UseTravelStartStop && !ssStopActive)
+                        {
+                            WriteTravelStart(sb, s);
+                            ssStopActive = true;
+                        }
+                        else if (!s.UseTravelStartStop)
+                            sb.AppendLine(FormatExtruderOff(s, "extruder off"));
+                        sb.AppendLine(";layer change");
+                        WriteVelIfChanged(sb, s.TravelSpeedMps, ref lastVelText);
+                        var (ga, gb, gc) = lastAbc;
+                        sb.AppendLine(s.UseTravelStartStop
+                            ? FormatLin(fromB, ga, gb, gc, E1ForBase(fromB, s, ref lastE1))
+                            : FormatLinExact(fromB, ga, gb, gc, E1ForBase(fromB, s, ref lastE1)));
+                        lastPos = fromB;
+                        needsRpmOn = true;
+                    }
+                }
+
                 if (move.Kind == MoveKind.Travel)
                 {
+                    WriteAn1HeatRestore(sb, s, ref an1Dipped);
+                    inWipeSequence = false;
                     if (move.ResumeWaitSec is { } tw)
                         pendingResumeWaitSec = tw;
 
@@ -665,7 +718,7 @@ public static class KrlExporter
                         }
 
                         var zHopSpeed = move.TravelSpeedMps ?? s.TravelSpeedMps;
-                        sb.AppendLine($"$VEL.CP = {zHopSpeed.ToString("F6", Inv)}");
+                        WriteVelIfChanged(sb, zHopSpeed, ref lastVelText);
                         var (za, zb, zc) = lastAbc;
                         if (s.UseTravelStartStop)
                             sb.AppendLine(FormatLin(to, za, zb, zc, E1ForMove(move, to, s, ref lastE1)));
@@ -693,10 +746,9 @@ public static class KrlExporter
                             sb.AppendLine(";layer change");
                         else if (move.IsMergeConnector)
                             sb.AppendLine(";merge travel");
-                        sb.AppendLine($"$VEL.CP = {travelSpeed.ToString("F6", Inv)}");
+                        WriteVelIfChanged(sb, travelSpeed, ref lastVelText);
                         sb.AppendLine(FormatLinExact(to, ta, tb, tc, e1Travel));
-                        float resumeScale = lastExtrudeRpmScale > 0f ? lastExtrudeRpmScale : 1f;
-                        WriteTravelEnd(sb, s, resumeScale);
+                        WriteTravelEnd(sb);
                         sb.AppendLine();
                         ssStopActive = false;
                     }
@@ -704,7 +756,7 @@ public static class KrlExporter
                     {
                         sb.AppendLine(move.IsLayerChange ? ";layer change" : move.IsMergeConnector ? ";merge travel" : ";travel");
                         sb.AppendLine(FormatExtruderOff(s, "extruder off"));
-                        sb.AppendLine($"$VEL.CP = {travelSpeed.ToString("F6", Inv)}");
+                        WriteVelIfChanged(sb, travelSpeed, ref lastVelText);
                         sb.AppendLine(FormatLinExact(to, ta, tb, tc, e1Travel));
                         sb.AppendLine();
                     }
@@ -736,18 +788,35 @@ public static class KrlExporter
                             WriteTravelStart(sb, s);
                             ssStopActive = true;
                         }
-                        sb.AppendLine(";wipe");
+                        // First wipe LIN: E2 1.000 is a MassiveDRIVE suck-back flag
+                        // (SRC parse). E1 is the rotary on LFAM 3 ($EX_AX_NUM=1);
+                        // E2 is unused, so 1.000 does not move the bed.
+                        float wipeE2 = 0f;
+                        if (!inWipeSequence)
+                        {
+                            sb.AppendLine(";wipe");
+                            if (!s.UseTravelStartStop)
+                                sb.AppendLine(FormatExtruderOff(s, "extruder off (wipe)"));
+                            an1Dipped = WriteAn1WipeDip(sb, s) || an1Dipped;
+                            inWipeSequence = true;
+                            wipeE2 = 1f;
+                        }
                         if (move.ResumeWaitSec is { } ww)
                             pendingResumeWaitSec = ww;
-                        if (!s.UseTravelStartStop)
-                            sb.AppendLine(FormatExtruderOff(s, "extruder off (wipe)"));
-                        sb.AppendLine($"$VEL.CP = {s.WipeSpeedMps.ToString("F6", Inv)}");
-                        sb.AppendLine(FormatLin(to, ma, mb, mc, E1ForMove(move, to, s, ref lastE1)));
+                        WriteVelIfChanged(sb, s.WipeSpeedMps, ref lastVelText);
+                        // Smash (WipeRpmScale 0) is an exact-stop −Z dip so reverse/wipe start on the bead.
+                        if (move.WipeRpmScale < 0.05f)
+                            sb.AppendLine(FormatLinExact(to, ma, mb, mc, E1ForMove(move, to, s, ref lastE1), wipeE2));
+                        else
+                            sb.AppendLine(FormatLin(to, ma, mb, mc, E1ForMove(move, to, s, ref lastE1), wipeE2));
                         lastAbc = (ma, mb, mc);
                         lastPos = to;
                         needsRpmOn = true;
                         continue;
                     }
+
+                    WriteAn1HeatRestore(sb, s, ref an1Dipped);
+                    inWipeSequence = false;
 
                     if (move.IsResumeRamp)
                     {
@@ -762,9 +831,10 @@ public static class KrlExporter
                             {
                                 if (ssStopActive)
                                 {
-                                    WriteTravelEnd(sb, layerS, rpmScale);
+                                    WriteTravelEnd(sb);
                                     ssStopActive = false;
                                 }
+                                WriteAdvanceSync(sb);
                                 sb.AppendLine(FormatExtruderOn(layerS, rpmScale, "RPM ramp", useTrigger: false));
                             }
                             else
@@ -781,7 +851,7 @@ public static class KrlExporter
                             sb.AppendLine(FormatExtruderOn(layerS, rpmScale, "RPM ramp", useTrigger: false));
                         }
 
-                        sb.AppendLine($"$VEL.CP = {speedMps.ToString("F6", Inv)}");
+                        WriteVelIfChanged(sb, speedMps, ref lastVelText);
                         sb.AppendLine(FormatLin(to, ma, mb, mc, E1ForMove(move, to, s, ref lastE1)));
                         lastAbc = (ma, mb, mc);
                         lastPos = to;
@@ -800,7 +870,7 @@ public static class KrlExporter
                     string extrudeKey = FormatExtruderOn(layerS, extrudeRpmScale, "", useTrigger: false);
                     string velText = extrudeSpeedMps.ToString("F6", Inv);
                     bool anoutChanged = !string.Equals(extrudeKey, lastExtrudeAnoutText, System.StringComparison.Ordinal);
-                    bool velChanged = !string.Equals(velText, lastExtrudeVelText, System.StringComparison.Ordinal);
+                    bool velChanged = !string.Equals(velText, lastVelText, System.StringComparison.Ordinal);
 
                     if (needsRpmOn)
                     {
@@ -811,9 +881,10 @@ public static class KrlExporter
                         {
                             if (ssStopActive)
                             {
-                                WriteTravelEnd(sb, layerS, extrudeRpmScale);
+                                WriteTravelEnd(sb);
                                 ssStopActive = false;
                             }
+                            WriteAdvanceSync(sb);
                             sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "RPM on", useTrigger: false));
                         }
                         else if (waitSec > 0f)
@@ -824,11 +895,10 @@ public static class KrlExporter
                         else
                             sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "RPM on", useTrigger: true));
 
-                        sb.AppendLine($"$VEL.CP = {velText}");
+                        WriteVelIfChanged(sb, velText, ref lastVelText);
                         isFirstPrintStart = false;
                         needsRpmOn = false;
                         lastExtrudeAnoutText = extrudeKey;
-                        lastExtrudeVelText = velText;
                     }
                     else if (anoutChanged || velChanged)
                     {
@@ -837,9 +907,8 @@ public static class KrlExporter
                         else if (anoutChanged && s.UseRobotMode)
                             sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "", useTrigger: false));
                         if (velChanged)
-                            sb.AppendLine($"$VEL.CP = {velText}");
+                            WriteVelIfChanged(sb, velText, ref lastVelText);
                         lastExtrudeAnoutText = extrudeKey;
-                        lastExtrudeVelText = velText;
                     }
 
                     sb.AppendLine(FormatLin(to, ma, mb, mc, E1ForMove(move, to, s, ref lastE1)));
@@ -853,12 +922,13 @@ public static class KrlExporter
         }
 
         // -- Final retreat --------------------------------------------------------
+        WriteAn1HeatRestore(sb, s, ref an1Dipped);
         if (s.UseTravelStartStop && ssStopActive)
             sb.AppendLine(";travel end");
         var (fa, fb, fc) = lastAbc;
         sb.AppendLine(";retreat");
         sb.AppendLine(FormatExtruderOff(s, "extruder off"));
-        sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
+        WriteVelIfChanged(sb, s.TravelSpeedMps, ref lastVelText);
         sb.AppendLine(FormatLinExact(new Vector3(lastPos.X, lastPos.Y, lastPos.Z + s.ApproachZMm), fa, fb, fc, E1ForBase(lastPos, s, ref lastE1)));
         sb.AppendLine();
         WriteFooter(sb, s);
@@ -931,7 +1001,8 @@ public static class KrlExporter
         var (a0, b0, c0) = MillAbc(first.move, first.layer, s, 0, 0, 0);
         var p0 = ToBase(first.move.From, s);
         float lastE1 = float.IsNaN(s.HomeE1Mm) ? 0f : s.HomeE1Mm;
-        sb.AppendLine($"$VEL.CP = {rapidV}");
+        string? lastVelText = null;
+        WriteVelIfChanged(sb, rapidV, ref lastVelText);
         sb.AppendLine(FormatLinExact(new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm), a0, b0, c0, E1ForBase(p0, s, ref lastE1)));
         sb.AppendLine();
 
@@ -946,14 +1017,14 @@ public static class KrlExporter
                 var (a, b, c) = MillAbc(move, layer, s, la, lb, lc);
                 if (move.Kind == MoveKind.Mill)
                 {
-                    sb.AppendLine($"$VEL.CP = {cutV}");
+                    WriteVelIfChanged(sb, cutV, ref lastVelText);
                     sb.AppendLine(FormatLin(to, a, b, c, E1ForMove(move, to, s, ref lastE1)));
                 }
                 else // Travel: rapid (up/over) or plunge (down)
                 {
                     bool plunging = move.To.Z < move.From.Z - 1e-4f;
                     sb.AppendLine(plunging ? ";plunge" : ";rapid");
-                    sb.AppendLine($"$VEL.CP = {(plunging ? plungeV : rapidV)}");
+                    WriteVelIfChanged(sb, plunging ? plungeV : rapidV, ref lastVelText);
                     sb.AppendLine(FormatLinExact(to, a, b, c, E1ForMove(move, to, s, ref lastE1)));
                 }
             }
@@ -1016,7 +1087,11 @@ public static class KrlExporter
         if (!float.IsNaN(s.HomeE1Mm))
             homePtp += $", E1 {s.HomeE1Mm.ToString("F3", Inv)}";     // LFAM 1 rail (linear E1)
         else if (s.RotaryExternalKinematic)
-            homePtp += ", E1 0.000, E2 0.000, E3 0.000";            // LFAM 3 rotary positioner axes
+        {
+            // LFAM 3 rotary: E1 from the selected home (7th joint). Default 0.
+            float e1 = s.HomePosition is { Length: >= 7 } ? s.HomePosition[6] : 0f;
+            homePtp += $", E1 {e1.ToString("F3", Inv)}, E2 0.000, E3 0.000";
+        }
         homePtp += "}";
 
         // Rotary cells (LFAM 3): couple the base to the positioner (external kinematic).
@@ -1084,6 +1159,8 @@ public static class KrlExporter
         sb.AppendLine(";FOLD MassiveSLICER export");
         sb.AppendLine($"; MassiveSLICER {SanitizeComment(s.SlicerVersion)}");
         sb.AppendLine($"; Exported {DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", Inv)} UTC");
+        if (!string.IsNullOrWhiteSpace(s.WorkspaceFileName))
+            sb.AppendLine($"; Workspace {SanitizeComment(s.WorkspaceFileName)}");
         if (!string.IsNullOrWhiteSpace(s.CellName))
             sb.AppendLine($"; Cell {SanitizeComment(s.CellName)}");
         sb.AppendLine($"; TOOL {s.ToolDataIndex}  BASE {s.BaseDataIndex}");
@@ -1129,6 +1206,17 @@ public static class KrlExporter
 
         sb.AppendLine(";ENDFOLD (MassiveSLICER export)");
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// <c>filename.mass</c> from a saved workspace path, or null if unsaved / not a .mass.
+    /// </summary>
+    public static string? MassWorkspaceFileName(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        string name = Path.GetFileName(path.Trim());
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        return name.EndsWith(".mass", StringComparison.OrdinalIgnoreCase) ? name : null;
     }
 
     static string Mms(float mps) => (mps * 1000f).ToString("F1", Inv);
@@ -1371,21 +1459,54 @@ public static class KrlExporter
     private static float E1ForBase(Vector3 basePt, KrlExportSettings s, ref float lastE1)
         => E1ForMove(null, basePt, s, ref lastE1);
 
+    /// <summary>
+    /// First-print approach in BASE (Z = touchdown + ApproachZ). Viewport IK uses this
+    /// to solve the joint PTP that matches the old approach LIN.
+    /// </summary>
+    public static bool TryGetApproachCartesian(
+        Toolpath toolpath, KrlExportSettings s,
+        out Vector3 baseXyz, out float a, out float b, out float c)
+    {
+        baseXyz = default;
+        a = b = c = 0f;
+        var first = FindFirstExtrude(toolpath);
+        if (first is null) return false;
+        var (move, layer) = first.Value;
+        (a, b, c) = KukaAbc(layer.PlaneNormal, s);
+        var p0 = ToBase(move.From, s);
+        baseXyz = new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm);
+        return true;
+    }
+
+    private static string FormatPtpJoints(float[] h, float e1, KrlExportSettings s)
+    {
+        var ptp = $"PTP {{A1 {h[0].ToString("F3", Inv)}, A2 {h[1].ToString("F3", Inv)}, " +
+                  $"A3 {h[2].ToString("F3", Inv)}, A4 {h[3].ToString("F3", Inv)}, " +
+                  $"A5 {h[4].ToString("F3", Inv)}, A6 {h[5].ToString("F3", Inv)}";
+        if (!float.IsNaN(s.HomeE1Mm) || s.RotaryExternalKinematic)
+        {
+            ptp += $", E1 {e1.ToString("F3", Inv)}";
+            if (s.RotaryExternalKinematic)
+                ptp += ", E2 0.000, E3 0.000";
+        }
+        return ptp + "}";
+    }
+
     // C_VEL: approximate (blended) positioning — used for extrude moves so the robot
     // never fully stops mid-bead and maintains a smooth velocity profile.
-    private static string FormatLin(Vector3 p, float a, float b, float c, float e1)
+    private static string FormatLin(Vector3 p, float a, float b, float c, float e1, float e2 = 0f)
         => $"LIN {{X {p.X.ToString("F2", Inv)}, Y {p.Y.ToString("F2", Inv)}, Z {p.Z.ToString("F2", Inv)}, " +
            $"A {a.ToString("F3", Inv)}, B {b.ToString("F3", Inv)}, C {c.ToString("F3", Inv)}, " +
-           $"E1 {e1.ToString("F3", Inv)}, E2 0.000, E3 0.000, E4 0.000, E5 0.000, E6 0.000 }} C_VEL";
+           $"E1 {e1.ToString("F3", Inv)}, E2 {e2.ToString("F3", Inv)}, E3 0.000, E4 0.000, E5 0.000, E6 0.000 }} C_VEL";
 
     // Exact stop — used for travel/approach/retreat moves so TRIGGER WHEN DISTANCE=0
     // fires at the precise physical waypoint rather than inside a C_VEL blend zone.
     // This is the fix for the $ADVANCE look-ahead timing issue: with exact stop the
     // "path switchover point" (DISTANCE=0) coincides with the actual robot position.
-    private static string FormatLinExact(Vector3 p, float a, float b, float c, float e1)
+    private static string FormatLinExact(Vector3 p, float a, float b, float c, float e1, float e2 = 0f)
         => $"LIN {{X {p.X.ToString("F2", Inv)}, Y {p.Y.ToString("F2", Inv)}, Z {p.Z.ToString("F2", Inv)}, " +
            $"A {a.ToString("F3", Inv)}, B {b.ToString("F3", Inv)}, C {c.ToString("F3", Inv)}, " +
-           $"E1 {e1.ToString("F3", Inv)}, E2 0.000, E3 0.000, E4 0.000, E5 0.000, E6 0.000 }}";
+           $"E1 {e1.ToString("F3", Inv)}, E2 {e2.ToString("F3", Inv)}, E3 0.000, E4 0.000, E5 0.000, E6 0.000 }}";
 
     private static string FormatTriggerAnout4(string text, string comment)
         => string.IsNullOrEmpty(comment)
@@ -1398,30 +1519,67 @@ public static class KrlExporter
             : $"$ANOUT[4] = {text} ; {comment}";
 
     /// <summary>
-    /// Travel start: comment + <c>RPM = 0.00</c>. Screw off for the hop.
+    /// Travel start: comment + <c>WAIT SEC 0</c> + <c>RPM = 0.00</c>.
+    /// The wait empties <c>$ADVANCE</c> so the screw does not stop mid-bead.
     /// </summary>
     private static void WriteTravelStart(StringBuilder sb, KrlExportSettings s)
     {
         _ = s;
         sb.AppendLine(";travel start");
+        WriteAdvanceSync(sb);
         sb.AppendLine(FormatTravelRpmOff());
     }
 
-    /// <summary>
-    /// Right before print resumes: <c>RPM =</c> print value, then <c>;travel end</c>.
-    /// </summary>
-    private static void WriteTravelEnd(StringBuilder sb, KrlExportSettings s, float rpmScale)
+    /// <summary>Close the travel. Print resume writes the single <c>RPM =</c>.</summary>
+    private static void WriteTravelEnd(StringBuilder sb)
     {
-        sb.AppendLine(FormatTravelRpmOn(s, rpmScale));
         sb.AppendLine(";travel end");
     }
 
     private static string FormatTravelRpmOff() => "RPM = 0.00";
 
-    private static string FormatTravelRpmOn(KrlExportSettings s, float rpmScale)
+    /// <summary>
+    /// Stop <c>$ADVANCE</c> so the next <c>RPM =</c> runs when the robot is actually
+    /// at the last programmed point, not five motions later.
+    /// </summary>
+    private static void WriteAdvanceSync(StringBuilder sb)
+        => sb.AppendLine("WAIT SEC 0");
+
+    /// <summary>
+    /// Zone-1 analog level on the existing <c>$ANOUT[1]</c> / <c>SET_T1</c> wire.
+    /// Heat is T≥220 → ~3.2 V. Wipe is T=180 → ~1.0 V. ANALOGHANDLER follows
+    /// <c>T1</c>; Caracol is not rewritten. <c>WAIT SEC 0</c> so <c>$ADVANCE</c>
+    /// does not dip mid-bead.
+    /// </summary>
+    internal const int An1WipeTempC = 180;
+
+    private static bool WriteAn1WipeDip(StringBuilder sb, KrlExportSettings s)
     {
-        float rpmPercent = ResolveRpmPercent(s, rpmScale <= 0f ? 1f : rpmScale);
-        return $"RPM = {FormatCaracolRpm(rpmPercent)}";
+        if (s.IsMilling) return false;
+        if (s.Temperature1 < An1WipeTempC + 20f) return false;
+        WriteAdvanceSync(sb);
+        sb.AppendLine($"T1 = {An1WipeTempC.ToString(Inv)}");
+        return true;
+    }
+
+    private static void WriteAn1HeatRestore(StringBuilder sb, KrlExportSettings s, ref bool an1Dipped)
+    {
+        if (!an1Dipped) return;
+        an1Dipped = false;
+        WriteAdvanceSync(sb);
+        sb.AppendLine($"T1 = {s.Temperature1.ToString("F0", Inv)}");
+    }
+
+    /// <summary>Write <c>$VEL.CP</c> only when the rounded value changed.</summary>
+    private static void WriteVelIfChanged(StringBuilder sb, float mps, ref string? lastVelText)
+        => WriteVelIfChanged(sb, mps.ToString("F6", Inv), ref lastVelText);
+
+    private static void WriteVelIfChanged(StringBuilder sb, string text, ref string? lastVelText)
+    {
+        if (string.Equals(text, lastVelText, StringComparison.Ordinal))
+            return;
+        sb.AppendLine($"$VEL.CP = {text}");
+        lastVelText = text;
     }
 
     /// <summary>

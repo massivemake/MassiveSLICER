@@ -567,8 +567,11 @@ public sealed class RobotPanelViewModel : ViewModelBase
     public void ApplyViewportJoints(float[] home)
     {
         if (home.Length < 6) return;
+        // Live C3 stream would overwrite this on the next tick.
+        PauseStreaming();
         A1 = home[0]; A2 = home[1]; A3 = home[2];
         A4 = home[3]; A5 = home[4]; A6 = home[5];
+        if (home.Length >= 7) E1 = home[6];
     }
 
     private float _defaultToolheadA;
@@ -1062,7 +1065,11 @@ public sealed class RobotPanelViewModel : ViewModelBase
         var name   = string.IsNullOrWhiteSpace(NewHomePositionName)
                          ? "Home Target 1"
                          : NewHomePositionName.Trim();
-        var angles = new float[] { (float)A1, (float)A2, (float)A3, (float)A4, (float)A5, (float)A6 };
+        // A1–A6 + E1 (rotary deg / rail mm). Export reads [6] on LFAM 3.
+        var angles = new float[]
+        {
+            (float)A1, (float)A2, (float)A3, (float)A4, (float)A5, (float)A6, (float)E1,
+        };
         OnSaveHomePositionRequested?.Invoke(name, angles);
     }
 

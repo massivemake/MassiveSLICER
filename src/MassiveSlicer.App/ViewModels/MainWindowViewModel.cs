@@ -4155,6 +4155,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Workflow + TOOL # before models so mesh/toolpath select cannot snap back to PRINT / T1.
         RestoreKrlFramesFromWorkspace(doc);
         RestoreLfam3WorkflowFromWorkspace(doc);
+        RestoreHomePositionFromWorkspace(doc);
 
         if (Enum.TryParse<RightPanelTab>(doc.RightPanelTab, out var tab)
             && tab is RightPanelTab.Settings or RightPanelTab.Toolpath)
@@ -4182,6 +4183,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         // the saved ROBOT CELL pickers so the file opens the way it was closed.
         RestoreKrlFramesFromWorkspace(doc);
         RestoreLfam3WorkflowFromWorkspace(doc);
+        RestoreHomePositionFromWorkspace(doc);
 
         Viewport.RestoreSimCameraKeyframes(doc.UiSession?.SimCameraKeyframes);
 
@@ -4235,6 +4237,25 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (tool <= 0 && bse <= 0) return;
         robot.SelectKrlFrames(tool, bse);
         Console.Log($"[workspace] Restored TOOL #{robot.KrlToolIndex}  BASE #{robot.KrlBaseIndex}.");
+    }
+
+    /// <summary>
+    /// Workspace-selected home wins over the cell default. Stash the name so a
+    /// later cell-swap <c>UpdateFromCell</c> does not snap back to "Home".
+    /// </summary>
+    private void RestoreHomePositionFromWorkspace(WorkspaceDocument doc)
+    {
+        var name = doc.UiSession?.SelectedHomePositionName;
+        if (string.IsNullOrWhiteSpace(name)) return;
+        Viewport.SetPendingWorkspaceHome(name, doc.UiSession?.SelectedHomeAngles);
+        if (Viewport.AdditiveSettings is { } add)
+        {
+            if (doc.UiSession?.SelectedHomeAngles is { Length: >= 6 } ang)
+                add.AddHomePosition(name, ang);
+            else
+                add.SelectedHomePositionName = name;
+        }
+        Console.Log($"[workspace] Home '{name}' — export PTP uses this pose.");
     }
 
     void RestoreLfam3WorkflowFromWorkspace(WorkspaceDocument doc)
