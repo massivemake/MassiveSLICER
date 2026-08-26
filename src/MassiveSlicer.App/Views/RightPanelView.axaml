@@ -1541,7 +1541,7 @@
                                           IsChecked="{Binding Additive.LayerSpeedAdaptEnabled, Mode=TwoWay}"
                                           Margin="0,0,0,2"/>
                                 <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
-                                           Text="Interpolate robot speed and extrusion RPM per layer. Enabling fills low and high speeds from the current print speed — adjust either end as needed."/>
+                                           Text="Interpolate robot speed and extrusion RPM per layer. Print feedback uses the live notes and caps long layers at print speed — cut length / layer time still stretch the file from low to high."/>
 
                                 <StackPanel IsVisible="{Binding Additive.LayerSpeedAdaptEnabled}" Spacing="8">
                                     <Grid Margin="0,2,0,0">
@@ -1597,6 +1597,18 @@
                                                        Value="{Binding Additive.LayerSpeedMaxMmS, Mode=TwoWay}"
                                                        Minimum="0.1" Maximum="2000" Increment="1"
                                                        FormatString="F0" FontSize="11"/>
+                                    </Grid>
+                                    <Grid Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Print notes" Classes="LabelMuted" FontSize="10"
+                                                   VerticalAlignment="Center"
+                                                   ToolTip.Tip="1-based layer:percent from the live print. 63:-20 = layer 63 twenty percent slower than the mapped speed."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                   Text="{Binding Additive.LayerSpeedNotes, Mode=TwoWay}"
+                                                   Watermark="63:-20"/>
                                     </Grid>
                                 </StackPanel>
 

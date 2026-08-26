@@ -613,6 +613,45 @@ public sealed class KrlExporterTest
     }
 
     [Fact]
+    public void Approach_ik_target_uses_lfam1_rail_e1_not_cell_origin()
+    {
+        // Dragon Column: E1 -939.6, rail Y e1Sign -1 → ROBROOT +939.6 mm in Y.
+        var s = new KrlExportSettings
+        {
+            ProgramName    = "rail_ik",
+            HomeE1Mm       = -939.6f,
+            RailAxis       = "Y",
+            RailE1Sign     = -1f,
+            RailMinMm      = -4650f,
+            RailMaxMm      = 150f,
+            RobrootWorldPos = new Vector3(0f, 0f, 500f),
+        };
+        var world = new Vector3(1390.50f, 52.35f, 552f);
+        var rel = KrlExporter.ApproachIkTargetRobroot(world, s);
+        var naive = world - s.RobrootWorldPos;
+        Assert.Equal(naive.X, rel.X, 2);
+        Assert.Equal(naive.Z, rel.Z, 2);
+        // SceneOffset Y = (-1) * (-939.6) = +939.6
+        Assert.Equal(naive.Y - 939.6f, rel.Y, 1);
+        Assert.NotEqual(naive.Y, rel.Y);
+    }
+
+    [Fact]
+    public void Approach_ik_target_ignores_rail_on_rotary()
+    {
+        var s = new KrlExportSettings
+        {
+            ProgramName             = "rot_ik",
+            HomeE1Mm                = -12.5f,
+            RotaryExternalKinematic = true,
+            RobrootWorldPos         = new Vector3(0f, 0f, 1000f),
+        };
+        var world = new Vector3(100f, 200f, 1100f);
+        var rel = KrlExporter.ApproachIkTargetRobroot(world, s);
+        Assert.Equal(world - s.RobrootWorldPos, rel);
+    }
+
+    [Fact]
     public void Export_uses_selected_home_joints_as_start_ptp()
     {
         var tp = new Toolpath();

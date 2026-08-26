@@ -1478,6 +1478,28 @@ public static class KrlExporter
         return true;
     }
 
+    /// <summary>
+    /// ROBROOT-frame IK target for the approach TCP. On LFAM 1 the rail (E1) moves
+    /// ROBROOT; joints must be solved at <see cref="KrlExportSettings.HomeE1Mm"/>,
+    /// not at the cell JSON origin (E1 = 0). Rotary cells have no rail offset.
+    /// </summary>
+    public static Vector3 ApproachIkTargetRobroot(Vector3 approachWorld, KrlExportSettings s)
+    {
+        var home = s.RobrootWorldPos;
+        if (s.RotaryExternalKinematic || float.IsNaN(s.HomeE1Mm))
+            return approachWorld - home;
+
+        var rail = new RobotRailCellConfig
+        {
+            Axis   = s.RailAxis,
+            MinMm  = s.RailMinMm,
+            MaxMm  = s.RailMaxMm,
+            E1Sign = s.RailE1Sign,
+        };
+        var baseW = RailE1Planner.BaseWorld(home, rail, s.HomeE1Mm);
+        return approachWorld - baseW;
+    }
+
     private static string FormatPtpJoints(float[] h, float e1, KrlExportSettings s)
     {
         var ptp = $"PTP {{A1 {h[0].ToString("F3", Inv)}, A2 {h[1].ToString("F3", Inv)}, " +

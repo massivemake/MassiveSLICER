@@ -2485,7 +2485,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         }
     }
 
-    public IReadOnlyList<string> LayerSpeedBasisOptions { get; } = ["Cut length", "Layer time"];
+    public IReadOnlyList<string> LayerSpeedBasisOptions { get; } = ["Print feedback", "Cut length", "Layer time"];
 
     private bool _layerSpeedAdaptEnabled;
 
@@ -2515,9 +2515,19 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public LayerSpeedBasis LayerSpeedBasis => _layerSpeedBasisDisplay switch
     {
-        "Layer time" => LayerSpeedBasis.LayerTime,
-        _            => LayerSpeedBasis.CutLength,
+        "Layer time"      => LayerSpeedBasis.LayerTime,
+        "Print feedback"  => LayerSpeedBasis.PrintFeedback,
+        _                 => LayerSpeedBasis.CutLength,
     };
+
+    private string _layerSpeedNotes = "";
+
+    /// <summary>Live print notes, 1-based <c>layer:Δ%</c> (e.g. 63:-20). Applied after the metric.</summary>
+    public string LayerSpeedNotes
+    {
+        get => _layerSpeedNotes;
+        set => SetField(ref _layerSpeedNotes, value ?? "");
+    }
 
     private double _layerSpeedMinMmS = 10.0;
 

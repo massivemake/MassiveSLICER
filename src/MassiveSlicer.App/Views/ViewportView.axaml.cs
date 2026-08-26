@@ -1091,6 +1091,7 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.LayerSpeedBasisDisplay)
                                     or nameof(AdditiveSettingsViewModel.LayerSpeedMinMmS)
                                     or nameof(AdditiveSettingsViewModel.LayerSpeedMaxMmS)
+                                    or nameof(AdditiveSettingsViewModel.LayerSpeedNotes)
                                     or nameof(AdditiveSettingsViewModel.PrintSpeed))
                     RebuildToolpathsFromRaw(additive);
             };
@@ -5154,6 +5155,7 @@ public partial class ViewportView : UserControl
             LayerSpeedBasis            = s.LayerSpeedBasis,
             LayerSpeedMinMmS           = (float)s.LayerSpeedMinMmS,
             LayerSpeedMaxMmS           = (float)s.LayerSpeedMaxMmS,
+            LayerSpeedNotes            = s.LayerSpeedNotes ?? "",
             MultiPlanarPlanes          = s.MultiPlanarPlanes
                 .Select(r => new MassiveSlicer.Core.Models.MultiPlanarPlane((float)r.HeightPct, (float)r.AngleDeg))
                 .ToList(),
@@ -18288,8 +18290,9 @@ public partial class ViewportView : UserControl
             return null;
         RefreshIkSceneKinematics();
         var world = KrlExporter.BaseToWorld(basePt, s.RobrootWorldPos, s.BaseDataOffset, s.SliceBedWorldZ);
-        var rob = s.RobrootWorldPos;
-        var tgt = new TkVector3(world.X - rob.X, world.Y - rob.Y, world.Z - rob.Z);
+        // LFAM 1: subtract ROBROOT at HomeE1, not the E1=0 cell origin.
+        var rel = KrlExporter.ApproachIkTargetRobroot(world, s);
+        var tgt = new TkVector3(rel.X, rel.Y, rel.Z);
         var seed = s.HomePosition is { Length: >= 6 } h
             ? new[] { h[0], h[1], h[2], h[3], h[4], h[5] }
             : new[] { 0f, -90f, 90f, 0f, 15f, 0f };

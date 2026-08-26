@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-24** (LFAM 3 homes: only LFAM 3 Start)
+Last updated: **2026-08-25** (LFAM 1 approach PTP uses rail E1 ROBROOT)
 
 ---
 
@@ -516,6 +516,24 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-25 — LFAM 1 approach PTP parked in front of the robot
+
+- Symptom: `PTP {A1 -3.7, A2 -60, A3 120, A4 -0.6, A5 -56, A6 44, E1 -939.6}`
+  after home — pad starts in front of the carriage, not at the slicer Z+50
+  (`LIN {X 1390.50, Y 52.35, Z 52}`).
+- Cause: `TrySolveApproachJoints` subtracted cell `RobrootWorldPos` (E1 = 0).
+  Those joints were then run at `HomeE1Mm = -939.6`. Rail Y `e1Sign -1` moves
+  ROBROOT ~940 mm; the arm pose was for the wrong base.
+- Fix: `ApproachIkTargetRobroot` uses `RailE1Planner.BaseWorld` at `HomeE1Mm`
+  (same as scrub IK). Rotary cells unchanged. Re-export only.
+
+### 2026-08-24 — macOS `run.sh` Permission denied on SMB apphost
+
+- Symptom: build on another Mac succeeds, then `Unhandled exception: ... start process '.../bin/Debug/net8.0/MassiveSlicer.App' ... Permission denied`.
+- Cause: MassiveFILES is noexec SMB. `dotnet run` execs the native apphost from `bin/`. File is `chmod +x` and a valid Mach-O; `execve` still EACCES.
+- Fix: `run.sh` uses `--property:UseAppHost=false` so the local `dotnet` hosts the DLL. On this share: `bash run.sh` (not `./run.sh`). CS/Avalonia/`landed/main` lines in the log are warnings, not the crash.
+- File: `run.sh`.
 
 ### 2026-08-24 — LFAM 3 home list is only LFAM 3 Start
 

@@ -1367,6 +1367,43 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "speednote",
+            Description = "Record live print speed feedback: speednote 63 -20 | speednote list | speednote clear",
+            Execute = (ctx, args) =>
+            {
+                var add = ctx.Main.RightPanel.Additive;
+                var raw = (args ?? "").Trim();
+                if (raw.Length == 0 || raw.Equals("list", StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Log(string.IsNullOrWhiteSpace(add.LayerSpeedNotes)
+                        ? "[speednote] none"
+                        : $"[speednote] {add.LayerSpeedNotes}");
+                    return;
+                }
+                if (raw.Equals("clear", StringComparison.OrdinalIgnoreCase))
+                {
+                    add.LayerSpeedNotes = "";
+                    ctx.Log("[speednote] cleared");
+                    return;
+                }
+                var parts = raw.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2
+                    || !int.TryParse(parts[0].TrimStart('L', 'l'), out int layer)
+                    || layer < 1
+                    || !double.TryParse(parts[1].TrimEnd('%'), System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out double delta))
+                {
+                    ctx.Log("[speednote] usage: speednote <layer> <-20|0.8>   (1-based layer, signed % or factor)");
+                    return;
+                }
+                add.LayerSpeedNotes = MassiveSlicer.Core.Slicing.Effects.LayerSpeedPostProcessor
+                    .SetNote(add.LayerSpeedNotes, layer, delta);
+                ctx.Log($"[speednote] {add.LayerSpeedNotes}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "massivebrain",
             Aliases = ["brain"],
             Description = "MassiveBRAIN sync server: massivebrain on|off|status",

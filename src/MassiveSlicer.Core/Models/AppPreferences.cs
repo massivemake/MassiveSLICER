@@ -461,6 +461,7 @@ public sealed class AppPreferences
     public string LayerSpeedBasisDisplay { get; set; } = "Cut length";
     public double LayerSpeedMinMmS { get; set; } = 10.0;
     public double LayerSpeedMaxMmS { get; set; } = 100.0;
+    public string LayerSpeedNotes { get; set; } = "";
 
     /// <summary>Seam guide points as [x, y, z] world coordinates.</summary>
     public List<float[]> SeamGuidePoints { get; set; } = [];

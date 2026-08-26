@@ -4455,6 +4455,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LayerSpeedBasisDisplay    = copy.LayerSpeedBasisDisplay;
         live.LayerSpeedMinMmS          = copy.LayerSpeedMinMmS;
         live.LayerSpeedMaxMmS          = copy.LayerSpeedMaxMmS;
+        live.LayerSpeedNotes           = copy.LayerSpeedNotes;
         live.SeamGuidePoints         = copy.SeamGuidePoints;
         live.PaintMarks              = copy.PaintMarks;
         live.StructuralSupports      = copy.StructuralSupports;
@@ -4860,6 +4861,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.LayerSpeedBasisDisplay    = p.LayerSpeedBasisDisplay;
         add.LayerSpeedMinMmS          = p.LayerSpeedMinMmS;
         add.LayerSpeedMaxMmS          = p.LayerSpeedMaxMmS;
+        add.LayerSpeedNotes           = p.LayerSpeedNotes ?? "";
         add.SetSeamGuides(p.SeamGuidePoints
             .Where(a => a is { Length: >= 3 })
             .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
@@ -5188,6 +5190,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.LayerSpeedBasisDisplay    = add.LayerSpeedBasisDisplay;
         p.LayerSpeedMinMmS          = add.LayerSpeedMinMmS;
         p.LayerSpeedMaxMmS          = add.LayerSpeedMaxMmS;
+        p.LayerSpeedNotes           = add.LayerSpeedNotes ?? "";
         p.SeamGuidePoints = add.SeamGuides
             .Select(g => new[] { (float)g.X, (float)g.Y, (float)g.Z })
             .ToList();

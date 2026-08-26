@@ -110,6 +110,12 @@ public sealed class SliceSettings
     /// <summary>Print speed (mm/s) applied to the longest/busiest layer.</summary>
     public float LayerSpeedMaxMmS { get; init; } = 100f;
 
+    /// <summary>
+    /// Live print notes, 1-based layer:signed percent (e.g. <c>63:-20</c> = layer 63 twenty
+    /// percent slower than the mapped speed). Applied after the layer metric.
+    /// </summary>
+    public string LayerSpeedNotes { get; init; } = "";
+
     /// <summary>Z height above the part to approach before each pass, in mm.</summary>
     public float ApproachZ { get; init; } = 50f;
 
