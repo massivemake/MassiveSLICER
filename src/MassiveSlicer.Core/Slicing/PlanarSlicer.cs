@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Linq;
 using Clipper2Lib;
@@ -247,6 +247,7 @@ public static class PlanarSlicer
         // enclosed by the offset loops.
         // Structural supports first — brim then wraps the final wall footprint.
         StructuralSupportPlanner.Apply(toolpath, settings);
+        DumpBrimFootprint(meshes, zPositions, settings);
         BrimPlanner.Apply(toolpath, settings);
 
         // Last, so brim and support moves are covered too: flow must follow the REAL layer
@@ -360,6 +361,47 @@ public static class PlanarSlicer
         return BuildLayerBody(settings, layer, z, isLastLayer, insetContours, insetClosed,
             normalLookup, seamOrigin, seamDir, prevTracks, lightningPlan, treePlan, xDetourState, prevEnd);
     }
+    /// <summary>
+    /// Diagnostic: writes layer 0's MESH cross-section to CSV when
+    /// <c>MASSIVESLICER_BRIM_DUMP</c> names a path. The brim footprint is currently derived from
+    /// the layer-0 TOOLPATH, which drags every internal wall, seam and unfilled gap into it; this
+    /// dumps what the MESH alone says the first layer looks like, so the two can be compared on a
+    /// real part instead of argued about. Off unless the variable is set.
+    /// </summary>
+    private static void DumpBrimFootprint(
+        IReadOnlyList<Vector3[]> meshes, float[] zPositions, SliceSettings settings)
+    {
+        string? path = Environment.GetEnvironmentVariable("MASSIVESLICER_BRIM_DUMP");
+        if (string.IsNullOrWhiteSpace(path) || zPositions.Length == 0) return;
+        try
+        {
+            var (contours, closed) = ComputeInsetContours(meshes, zPositions[0], settings);
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("contour,closed,points,signed_area,x,y");
+            for (int c = 0; c < contours.Count; c++)
+            {
+                var pts = contours[c];
+                double a2 = 0;
+                for (int i = 0; i < pts.Count; i++)
+                {
+                    var p = pts[i]; var q = pts[(i + 1) % pts.Count];
+                    a2 += p.X * q.Y - q.X * p.Y;
+                }
+                bool isClosed = c < closed.Count && closed[c];
+                foreach (var p in pts)
+                    sb.AppendLine($"{c},{isClosed},{pts.Count},{a2 / 2:0.###},{p.X:0.###},{p.Y:0.###}");
+            }
+            System.IO.File.WriteAllText(path, sb.ToString());
+            System.Console.WriteLine(
+                $"[brim-dump] layer0 z={zPositions[0]:0.##} contours={contours.Count} -> {path}");
+        }
+        catch (Exception ex)
+        {
+            System.Console.WriteLine($"[brim-dump] failed: {ex.Message}");
+        }
+    }
+
+
 
     /// <summary>
     /// Stages 1–3 of layer construction: mesh∩plane segments → chained contours →

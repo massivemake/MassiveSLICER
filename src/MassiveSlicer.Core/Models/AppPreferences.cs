@@ -257,17 +257,18 @@ public sealed class AppPreferences
     /// <summary>Multi-Planar: tilt about X instead of Y.</summary>
     public bool MultiPlanarAxisX { get; set; }
 
-    /// <summary>Brim: outward offset loops around the first layer for bed adhesion.</summary>
+    /// <summary>Brim: offset loops around the first layer for bed adhesion.</summary>
     public bool BrimEnabled { get; set; }
 
     /// <summary>Number of brim offset loops.</summary>
     public int BrimLoops { get; set; } = 3;
 
-    /// <summary>Fixed brim print speed (mm/s), independent of print speed and Adaptive Speed.</summary>
-    public double BrimSpeedMmS { get; set; } = 60.0;
-
-    /// <summary>Absolute brim extrusion RPM (%). 0 = let RPM follow brim speed.</summary>
-    public double BrimRpmPercent { get; set; }
+    /// <summary>
+    /// Which side of the path the loops sit on: "Outside", "Inside" or "Both".
+    /// Stored as the display string, matching <see cref="WipeModeDisplay"/>. Defaults to
+    /// Outside, so a prefs file written before this existed keeps the old behaviour.
+    /// </summary>
+    public string BrimDirectionDisplay { get; set; } = "Outside";
 
     /// <summary>X-Bracing Wall: cut dual-wall X notches for structural back-support.</summary>
     public bool XBracingEnabled { get; set; }

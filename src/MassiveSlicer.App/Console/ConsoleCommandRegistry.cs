@@ -316,6 +316,98 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "brim",
+            Description = "Bed-adhesion brim: report or set enable / direction / loops",
+            Usage = "brim | brim report | brim on|off | brim out|in|both | brim loops <n>",
+            Execute = (ctx, args) =>
+            {
+                var add = ctx.Main.RightPanel.Additive;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+                void Report() => ctx.Log(
+                    $"[brim] {(add.BrimEnabled ? "on" : "off")} · {add.BrimDirectionDisplay} · " +
+                    $"{add.BrimLoops} loop(s)");
+
+                if (parts.Length == 0) { Report(); return; }
+
+                if (parts[0].Equals("report", StringComparison.OrdinalIgnoreCase))
+                {
+                    // What actually landed in the toolpath, split into rings at the travels
+                    // between them. This exists because "I cannot see a brim" and "there is no
+                    // brim" are different problems and the console could not tell them apart.
+                    var tp = ctx.Main.Viewport.ActiveScrubToolpath;
+                    if (tp is null || tp.Layers.Count == 0)
+                    { ctx.LogError("[brim report] no active toolpath — slice first"); return; }
+                    var l0 = tp.Layers[0].Moves;
+                    // Where(), not TakeWhile(): wipes get spliced BETWEEN brim loops and are not flagged
+                    // IsBrim, so a TakeWhile stops after the first ring and reports one loop
+                    // no matter how many were laid.
+                    var brimMoves = l0.Where(m => m.IsBrim).ToList();
+                    if (brimMoves.Count == 0)
+                    { ctx.Log("[brim report] layer 0 carries NO brim moves"); return; }
+
+                    var rings = new List<List<Core.Models.ToolpathMove>>();
+                    var cur = new List<Core.Models.ToolpathMove>();
+                    foreach (var m in brimMoves)
+                    {
+                        if (m.Kind == Core.Models.MoveKind.Travel)
+                        { if (cur.Count > 0) { rings.Add(cur); cur = []; } }
+                        else cur.Add(m);
+                    }
+                    if (cur.Count > 0) rings.Add(cur);
+
+                    // Reach from the part's own layer-0 centre tells inner rings from outer ones.
+                    var part = l0.Where(m => !m.IsBrim && m.Kind == Core.Models.MoveKind.Extrude).ToList();
+                    float cx = 0, cy = 0;
+                    if (part.Count > 0)
+                    {
+                        cx = (part.Min(m => m.To.X) + part.Max(m => m.To.X)) / 2f;
+                        cy = (part.Min(m => m.To.Y) + part.Max(m => m.To.Y)) / 2f;
+                    }
+                    float partReach = part.Count > 0
+                        ? part.Max(m => MathF.Max(MathF.Abs(m.To.X - cx), MathF.Abs(m.To.Y - cy)))
+                        : 0f;
+
+                    ctx.Log($"[brim report] {add.BrimDirectionDisplay} · {add.BrimLoops} loop(s) · " +
+                            $"{rings.Count} ring(s) · {brimMoves.Count(m => m.Kind == Core.Models.MoveKind.Extrude)} extrude · " +
+                            $"part reach {partReach:0.#} mm");
+                    for (int i = 0; i < rings.Count; i++)
+                    {
+                        var rg = rings[i];
+                        float lo = rg.Min(m => MathF.Max(MathF.Abs(m.To.X - cx), MathF.Abs(m.To.Y - cy)));
+                        float hi = rg.Max(m => MathF.Max(MathF.Abs(m.To.X - cx), MathF.Abs(m.To.Y - cy)));
+                        double len = rg.Sum(m => System.Numerics.Vector3.Distance(m.From, m.To));
+                        string where = hi < partReach ? "INSIDE the part" : "outside";
+                        ctx.Log($"   ring {i}: {rg.Count,4} seg · {len,8:0} mm · reach {lo,7:0.#}..{hi,7:0.#} · {where}");
+                    }
+                    return;
+                }
+
+                switch (parts[0].ToLowerInvariant())
+                {
+                    case "on":   add.BrimEnabled = true;  break;
+                    case "off":  add.BrimEnabled = false; break;
+                    // Direction words rather than the display strings, so the command reads the
+                    // way you'd say it. "outward"/"inward" spelled out are accepted too.
+                    case "out" or "outward": add.BrimDirectionDisplay = ViewModels.AdditiveSettingsViewModel.BrimDirectionDisplayFor(BrimDirection.Outside); break;
+                    case "in"  or "inward":  add.BrimDirectionDisplay = ViewModels.AdditiveSettingsViewModel.BrimDirectionDisplayFor(BrimDirection.Inside);  break;
+                    case "both":             add.BrimDirectionDisplay = ViewModels.AdditiveSettingsViewModel.BrimDirectionDisplayFor(BrimDirection.Both);    break;
+                    case "loops":
+                        if (parts.Length < 2 || !int.TryParse(parts[1], out int n))
+                        { ctx.LogError("[brim] usage: brim loops <n>"); return; }
+                        add.BrimLoops = n;
+                        break;
+                    default:
+                        ctx.LogError($"[brim] unknown '{parts[0]}'. " +
+                                     "Try: report, on, off, out, in, both, loops <n>");
+                        return;
+                }
+                Report();
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "tpdump",
             Description = "Debug: dump the active toolpath moves to a CSV file",
             Usage = "tpdump <path.csv>",
