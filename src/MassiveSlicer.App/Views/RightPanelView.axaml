@@ -2817,6 +2817,34 @@
                                        ToolTip.Tip="Optional ±% adjustment. +10 exports 10 points higher; -10 exports 10 points lower. Leave empty for no change."/>
                         </Grid>
 
+                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,44,44">
+                            <TextBlock Grid.Column="0" Text="First layer print speed"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Print speed on layer 0 only. The number is the current first-layer speed (mm/s). +/- is a percent of that speed — +20 exports 1.20×, -20 is 0.80×. Later layers keep the job print speed."/>
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Additive.FirstLayerSpeedBase, StringFormat={}{0:F0}}"
+                                       VerticalAlignment="Center" TextAlignment="Right" Classes="LabelMuted"
+                                       ToolTip.Tip="First-layer print speed (mm/s) before this % increase."/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox" Margin="4,0,0,0"
+                                       Text="{Binding Additive.FirstLayerPrintSpeedOffset, Mode=TwoWay}"
+                                       PlaceholderText="+/-"
+                                       ToolTip.Tip="Optional ±% of first-layer print speed. +20 = 20% faster on layer 0 only. Empty = no change."/>
+                        </Grid>
+
+                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,44,44">
+                            <TextBlock Grid.Column="0" Text="First layer RPM"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Extrusion RPM on layer 0 only. Same +/- box as Extrusion Speed — +10 exports 10 points higher on the first layer. Later layers keep Extrusion Speed."/>
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Additive.FirstLayerRpmBase, StringFormat={}{0:F0}%}"
+                                       VerticalAlignment="Center" TextAlignment="Right" Classes="LabelMuted"
+                                       ToolTip.Tip="First-layer RPM (%) before this +/-."/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox" Margin="4,0,0,0"
+                                       Text="{Binding Additive.FirstLayerRpmOffset, Mode=TwoWay}"
+                                       PlaceholderText="+/-"
+                                       ToolTip.Tip="Optional ± RPM points on layer 0 only. +10 = ten points higher; -10 = lower. Empty = no change."/>
+                        </Grid>
+
                         </StackPanel>
                     </Expander>
 

@@ -51,8 +51,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 or nameof(SelectedPresetIndex))
             {
                 OnPropertyChanged(nameof(FirstLayerSpeedCalculated));
+                OnPropertyChanged(nameof(FirstLayerSpeedBase));
                 OnPropertyChanged(nameof(FirstLayerSpeedEffective));
                 OnPropertyChanged(nameof(FirstLayerRpmCalculated));
+                OnPropertyChanged(nameof(FirstLayerRpmBase));
                 OnPropertyChanged(nameof(FirstLayerRpmEffective));
             }
 
@@ -2099,8 +2101,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (!SetField(ref _firstLayerSpeed, Math.Clamp(value, 0.0, 2000.0))) return;
+            OnPropertyChanged(nameof(FirstLayerSpeedBase));
             OnPropertyChanged(nameof(FirstLayerSpeedEffective));
             OnPropertyChanged(nameof(FirstLayerRpmCalculated));
+            OnPropertyChanged(nameof(FirstLayerRpmBase));
             OnPropertyChanged(nameof(FirstLayerRpmEffective));
         }
     }
@@ -2113,6 +2117,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (!SetField(ref _firstLayerRpm, Math.Clamp(value, 0.0, 100.0))) return;
+            OnPropertyChanged(nameof(FirstLayerRpmBase));
             OnPropertyChanged(nameof(FirstLayerRpmEffective));
         }
     }
@@ -2120,8 +2125,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     /// <summary>Calculated first-layer print speed (mm/s) — same as the normal print speed.</summary>
     public double FirstLayerSpeedCalculated => PrintSpeed;
 
-    /// <summary>Effective first-layer print speed (mm/s): override if set, else calculated.</summary>
-    public double FirstLayerSpeedEffective => _firstLayerSpeed > 0.0 ? _firstLayerSpeed : FirstLayerSpeedCalculated;
+    /// <summary>First-layer print speed before the KRL Export % increase (mm/s).</summary>
+    public double FirstLayerSpeedBase => _firstLayerSpeed > 0.0 ? _firstLayerSpeed : FirstLayerSpeedCalculated;
+
+    /// <summary>Effective first-layer print speed (mm/s): override if set, else calculated, then % increase.</summary>
+    public double FirstLayerSpeedEffective => FirstLayerPercentAdjust.SpeedMmS(FirstLayerSpeedBase, FirstLayerPrintSpeedOffset);
 
     /// <summary>Calculated first-layer RPM (%) — from bead width, FIRST-layer height,
     /// the effective first-layer speed, and material flow.</summary>
@@ -2136,8 +2144,50 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Effective first-layer RPM (%): override if set, else calculated.</summary>
-    public double FirstLayerRpmEffective => _firstLayerRpm > 0.0 ? _firstLayerRpm : FirstLayerRpmCalculated;
+    /// <summary>First-layer RPM before the KRL Export % increase.</summary>
+    public double FirstLayerRpmBase => _firstLayerRpm > 0.0 ? _firstLayerRpm : FirstLayerRpmCalculated;
+
+    /// <summary>Effective first-layer RPM (%): override if set, else calculated, then +/- points.</summary>
+    public double FirstLayerRpmEffective => FirstLayerPercentAdjust.RpmPercent(FirstLayerRpmBase, FirstLayerRpmOffset);
+
+    private string _firstLayerPrintSpeedOffset = "";
+
+    /// <summary>±% of first-layer print speed (KRL Export). Empty = no change. +20 = 1.20×.</summary>
+    public string FirstLayerPrintSpeedOffset
+    {
+        get => _firstLayerPrintSpeedOffset;
+        set
+        {
+            if (!SetField(ref _firstLayerPrintSpeedOffset, value ?? "")) return;
+            OnPropertyChanged(nameof(FirstLayerSpeedEffective));
+            OnPropertyChanged(nameof(FirstLayerRpmCalculated));
+            OnPropertyChanged(nameof(FirstLayerRpmBase));
+            OnPropertyChanged(nameof(FirstLayerRpmEffective));
+        }
+    }
+
+    private string _firstLayerRpmOffset = "";
+
+    /// <summary>± RPM points on the first layer (KRL Export). Empty = no change. Same as Extrusion Speed +/-.</summary>
+    public string FirstLayerRpmOffset
+    {
+        get => _firstLayerRpmOffset;
+        set
+        {
+            if (!SetField(ref _firstLayerRpmOffset, value ?? "")) return;
+            OnPropertyChanged(nameof(FirstLayerRpmEffective));
+        }
+    }
+
+    /// <summary>True when export should write a first-layer print-speed override.</summary>
+    public bool HasFirstLayerPrintSpeedAdjust =>
+        (FirstLayerAdjustmentsEnabled && _firstLayerSpeed > 0.0)
+        || FirstLayerPercentAdjust.Has(_firstLayerPrintSpeedOffset);
+
+    /// <summary>True when export should write a first-layer RPM override.</summary>
+    public bool HasFirstLayerRpmAdjust =>
+        (FirstLayerAdjustmentsEnabled && _firstLayerRpm > 0.0)
+        || FirstLayerPercentAdjust.Has(_firstLayerRpmOffset);
 
     private double _extrusionStartWaitSec;
 

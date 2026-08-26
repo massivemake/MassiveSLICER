@@ -152,6 +152,8 @@ public sealed class PrintPresetRecord
     // -- KRL export tuning -----------------------------------------------------
     public string? TemperatureOffset { get; set; }
     public string? ExtrusionSpeedOffset { get; set; }
+    public string? FirstLayerPrintSpeedOffset { get; set; }
+    public string? FirstLayerRpmOffset { get; set; }
     public bool? DigitalStartStopEnabled { get; set; }
     public bool? RobotModeEnabled { get; set; }
     public double? ExtrusionStartWaitSec { get; set; }

@@ -4528,6 +4528,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.WaveGradientCurve      = copy.WaveGradientCurve;
         live.TemperatureOffset      = copy.TemperatureOffset;
         live.ExtrusionSpeedOffset   = copy.ExtrusionSpeedOffset;
+        live.FirstLayerPrintSpeedOffset = copy.FirstLayerPrintSpeedOffset;
+        live.FirstLayerRpmOffset    = copy.FirstLayerRpmOffset;
         live.ExtrusionRpmOverridePercent = copy.ExtrusionRpmOverridePercent;
         live.PatternType            = copy.PatternType;
         live.PatternMapping         = copy.PatternMapping;
@@ -4813,6 +4815,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         };
         add.TemperatureOffset    = p.TemperatureOffset;
         add.ExtrusionSpeedOffset = p.ExtrusionSpeedOffset;
+        add.FirstLayerPrintSpeedOffset = p.FirstLayerPrintSpeedOffset;
+        add.FirstLayerRpmOffset  = p.FirstLayerRpmOffset;
         add.ExtrusionRpmOverridePercent = p.ExtrusionRpmOverridePercent;
         add.PatternType         = p.PatternType;
         add.PatternMapping      = add.PatternMappingOptions.Contains(p.PatternMapping)
@@ -5142,6 +5146,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.WaveGradientCurve    = add.WaveGradientCurve;
         p.TemperatureOffset    = add.TemperatureOffset;
         p.ExtrusionSpeedOffset = add.ExtrusionSpeedOffset;
+        p.FirstLayerPrintSpeedOffset = add.FirstLayerPrintSpeedOffset;
+        p.FirstLayerRpmOffset  = add.FirstLayerRpmOffset;
         p.ExtrusionRpmOverridePercent = add.ExtrusionRpmOverridePercent;
         p.PatternType          = add.PatternType;
         p.PatternMapping       = add.PatternMapping;

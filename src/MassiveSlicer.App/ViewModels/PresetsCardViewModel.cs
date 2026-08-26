@@ -155,6 +155,8 @@ public sealed class PrintPresetSample
     // -- KRL export tuning -----------------------------------------------------
     public string? TemperatureOffset { get; init; }
     public string? ExtrusionSpeedOffset { get; init; }
+    public string? FirstLayerPrintSpeedOffset { get; init; }
+    public string? FirstLayerRpmOffset { get; init; }
     public bool? DigitalStartStopEnabled { get; init; }
     public bool? RobotModeEnabled { get; init; }
     public double? ExtrusionStartWaitSec { get; init; }
@@ -395,6 +397,8 @@ public sealed class PrintPresetSample
             {
                 S(s, "Temperature offset", TemperatureOffset);
                 S(s, "Extrusion speed offset", ExtrusionSpeedOffset);
+                S(s, "First layer print speed %", FirstLayerPrintSpeedOffset);
+                S(s, "First layer RPM %", FirstLayerRpmOffset);
                 B(s, "Robot mode", RobotModeEnabled);
                 B(s, "Travel start/stop", DigitalStartStopEnabled);
                 D(s, "Extrusion start wait", ExtrusionStartWaitSec, " s");
@@ -888,6 +892,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
             Temperature1 = d.Temperature1, Temperature2 = d.Temperature2, Temperature3 = d.Temperature3,
 
             TemperatureOffset = d.TemperatureOffset, ExtrusionSpeedOffset = d.ExtrusionSpeedOffset,
+            FirstLayerPrintSpeedOffset = d.FirstLayerPrintSpeedOffset, FirstLayerRpmOffset = d.FirstLayerRpmOffset,
             DigitalStartStopEnabled = d.DigitalStartStopEnabled, RobotModeEnabled = d.RobotModeEnabled, ExtrusionStartWaitSec = d.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec = d.ExtrusionResumeWaitSec,
 
@@ -1198,6 +1203,8 @@ public sealed class PresetsCardViewModel : ViewModelBase
 
         if (p.TemperatureOffset is { } temperatureOffset) _additive.TemperatureOffset = temperatureOffset;
         if (p.ExtrusionSpeedOffset is { } extrusionSpeedOffset) _additive.ExtrusionSpeedOffset = extrusionSpeedOffset;
+        if (p.FirstLayerPrintSpeedOffset is { } firstLayerPrintSpeedOffset) _additive.FirstLayerPrintSpeedOffset = firstLayerPrintSpeedOffset;
+        if (p.FirstLayerRpmOffset is { } firstLayerRpmOffset) _additive.FirstLayerRpmOffset = firstLayerRpmOffset;
         if (p.DigitalStartStopEnabled is { } digitalStartStopEnabled) _additive.DigitalStartStopEnabled = digitalStartStopEnabled;
         if (p.RobotModeEnabled is { } robotModeEnabled)
             _additive.RobotModeEnabled = robotModeEnabled;
@@ -1453,6 +1460,8 @@ public sealed class PresetsCardViewModel : ViewModelBase
 
             TemperatureOffset = krlTuning ? a.TemperatureOffset : null,
             ExtrusionSpeedOffset = krlTuning ? a.ExtrusionSpeedOffset : null,
+            FirstLayerPrintSpeedOffset = krlTuning ? a.FirstLayerPrintSpeedOffset : null,
+            FirstLayerRpmOffset = krlTuning ? a.FirstLayerRpmOffset : null,
             DigitalStartStopEnabled = krlTuning ? a.DigitalStartStopEnabled : null,
             RobotModeEnabled = krlTuning ? a.RobotModeEnabled : null,
             ExtrusionStartWaitSec = krlTuning ? a.ExtrusionStartWaitSec : null,
@@ -1622,6 +1631,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         Temperature1 = p.Temperature1, Temperature2 = p.Temperature2, Temperature3 = p.Temperature3,
 
         TemperatureOffset = p.TemperatureOffset, ExtrusionSpeedOffset = p.ExtrusionSpeedOffset,
+        FirstLayerPrintSpeedOffset = p.FirstLayerPrintSpeedOffset, FirstLayerRpmOffset = p.FirstLayerRpmOffset,
         DigitalStartStopEnabled = p.DigitalStartStopEnabled, RobotModeEnabled = p.RobotModeEnabled, ExtrusionStartWaitSec = p.ExtrusionStartWaitSec,
         ExtrusionResumeWaitSec = p.ExtrusionResumeWaitSec,
 
@@ -1700,6 +1710,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         Temperature1 = r.Temperature1, Temperature2 = r.Temperature2, Temperature3 = r.Temperature3,
 
         TemperatureOffset = r.TemperatureOffset, ExtrusionSpeedOffset = r.ExtrusionSpeedOffset,
+        FirstLayerPrintSpeedOffset = r.FirstLayerPrintSpeedOffset, FirstLayerRpmOffset = r.FirstLayerRpmOffset,
         DigitalStartStopEnabled = r.DigitalStartStopEnabled, RobotModeEnabled = r.RobotModeEnabled, ExtrusionStartWaitSec = r.ExtrusionStartWaitSec,
         ExtrusionResumeWaitSec = r.ExtrusionResumeWaitSec,
 

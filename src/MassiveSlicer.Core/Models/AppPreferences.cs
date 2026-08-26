@@ -366,6 +366,12 @@ public sealed class AppPreferences
     /// <summary>KRL export: ±% adjustment to extrusion speed ("" = no change).</summary>
     public string ExtrusionSpeedOffset { get; set; } = "";
 
+    /// <summary>KRL export: ±% of first-layer print speed only ("" = no change). +20 = 1.20×.</summary>
+    public string FirstLayerPrintSpeedOffset { get; set; } = "";
+
+    /// <summary>KRL export: ± RPM points on the first layer only ("" = no change).</summary>
+    public string FirstLayerRpmOffset { get; set; } = "";
+
     /// <summary>
     /// Calibration-only: forces the exported screw speed (%) regardless of bead geometry.
     /// 0 = off (normal computed flow). Written ONLY by the purge-and-weigh calibration

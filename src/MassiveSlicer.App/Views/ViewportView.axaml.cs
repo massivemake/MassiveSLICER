@@ -18148,9 +18148,9 @@ public partial class ViewportView : UserControl
             // report naming the wrong head's flow is the sort of small lie this avoids.
             FlowRate             = (float)(s.SelectedPreset?.FlowRateFor(s.ActiveExtruderIsHf) ?? 0.463),
             ExtrusionRpmPercent  = s.GetEffectiveExtrusionSpeedPercent(),
-            FirstLayerSpeedMps   = s.FirstLayerAdjustmentsEnabled && s.FirstLayerSpeed > 0.0
+            FirstLayerSpeedMps   = s.HasFirstLayerPrintSpeedAdjust
                                        ? (float)(s.FirstLayerSpeedEffective / 1000.0) : 0f,
-            FirstLayerRpmPercent = s.FirstLayerAdjustmentsEnabled && s.FirstLayerRpm > 0.0
+            FirstLayerRpmPercent = s.HasFirstLayerRpmAdjust
                                        ? (float)s.FirstLayerRpmEffective : 0f,
         };
 

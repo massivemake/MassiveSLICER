@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-25** (LFAM 1 approach PTP uses rail E1 ROBROOT)
+Last updated: **2026-08-26** (first-layer print speed / RPM % increase)
 
 ---
 
@@ -516,6 +516,17 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-26 — First-layer print speed and RPM % increase
+
+- Symptom: wanted KRL Export +/- boxes for print speed and RPM that only
+  change layer 0.
+- Cause: Extrusion Speed +/- applies to every layer. FIRST LAYER in MOVEMENT
+  is an absolute mm/s / RPM override, not a % increase.
+- Fix: two new +/- fields under PRINT TOOLPATH → KRL EXPORT. Print speed is
+  multiplicative (+20 = 1.20×). RPM is additive points (same as Extrusion
+  Speed). Later layers unchanged. Saved on the workspace and on KRL-tuning
+  presets.
 
 ### 2026-08-25 — LFAM 1 approach PTP parked in front of the robot
 
