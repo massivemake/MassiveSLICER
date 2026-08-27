@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Numerics;
-using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.Core.Slicing.Effects;
