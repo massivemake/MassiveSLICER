@@ -4412,10 +4412,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LayerSpeedBasisDisplay    = copy.LayerSpeedBasisDisplay;
         live.LayerSpeedMinMmS          = copy.LayerSpeedMinMmS;
         live.LayerSpeedMaxMmS          = copy.LayerSpeedMaxMmS;
-        live.LayerSpeedUseRpmPercent   = copy.LayerSpeedUseRpmPercent;
-        live.LayerSpeedMinRpmPercent   = copy.LayerSpeedMinRpmPercent;
-        live.LayerSpeedMaxRpmPercent   = copy.LayerSpeedMaxRpmPercent;
-        live.LayerSpeedRobotMaxMmS     = copy.LayerSpeedRobotMaxMmS;
         live.SeamGuidePoints         = copy.SeamGuidePoints;
         live.PaintMarks              = copy.PaintMarks;
         live.StructuralSupports      = copy.StructuralSupports;
@@ -4841,11 +4837,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.LayerSpeedBasisDisplay    = p.LayerSpeedBasisDisplay;
         add.LayerSpeedMinMmS          = p.LayerSpeedMinMmS;
         add.LayerSpeedMaxMmS          = p.LayerSpeedMaxMmS;
-        add.LayerSpeedMinRpmPercent   = p.LayerSpeedMinRpmPercent;
-        add.LayerSpeedMaxRpmPercent   = p.LayerSpeedMaxRpmPercent;
-        add.LayerSpeedRobotMaxMmS     = p.LayerSpeedRobotMaxMmS;
-        // Last: its setter seeds the robot ceiling, which must not overwrite a stored value.
-        add.LayerSpeedUseRpmPercent   = p.LayerSpeedUseRpmPercent;
         add.SetSeamGuides(p.SeamGuidePoints
             .Where(a => a is { Length: >= 3 })
             .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
@@ -5186,10 +5177,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.LayerSpeedBasisDisplay    = add.LayerSpeedBasisDisplay;
         p.LayerSpeedMinMmS          = add.LayerSpeedMinMmS;
         p.LayerSpeedMaxMmS          = add.LayerSpeedMaxMmS;
-        p.LayerSpeedUseRpmPercent   = add.LayerSpeedUseRpmPercent;
-        p.LayerSpeedMinRpmPercent   = add.LayerSpeedMinRpmPercent;
-        p.LayerSpeedMaxRpmPercent   = add.LayerSpeedMaxRpmPercent;
-        p.LayerSpeedRobotMaxMmS     = add.LayerSpeedRobotMaxMmS;
         p.SeamGuidePoints = add.SeamGuides
             .Select(g => new[] { (float)g.X, (float)g.Y, (float)g.Z })
             .ToList();

@@ -2663,63 +2663,6 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _layerSpeedMaxMmS, Math.Clamp(value, 0.1, 2000.0));
     }
 
-    private bool _layerSpeedUseRpmPercent;
-
-    /// <summary>
-    /// State the range as extruder RPM percent instead of robot mm/s. The slicer then works the
-    /// speed out per layer from that layer's real thickness, so a thin layer is given the extra
-    /// speed it needs to reach the same flow — and the target cannot be set past the export gate.
-    /// Seeds the robot ceiling from the current high speed so nothing runs faster until asked.
-    /// </summary>
-    public bool LayerSpeedUseRpmPercent
-    {
-        get => _layerSpeedUseRpmPercent;
-        set
-        {
-            if (!SetField(ref _layerSpeedUseRpmPercent, value)) return;
-            OnPropertyChanged(nameof(LayerSpeedShowMmS));
-            OnPropertyChanged(nameof(LayerSpeedShowRpm));
-            if (!value || _layerSpeedRobotMaxMmS > 0.1) return;
-            _layerSpeedRobotMaxMmS = _layerSpeedMaxMmS;
-            OnPropertyChanged(nameof(LayerSpeedRobotMaxMmS));
-        }
-    }
-
-    /// <summary>Visibility helpers so only one set of range boxes shows at a time.</summary>
-    public bool LayerSpeedShowMmS => !_layerSpeedUseRpmPercent;
-
-    public bool LayerSpeedShowRpm => _layerSpeedUseRpmPercent;
-
-    private double _layerSpeedMinRpmPercent = 40.0;
-
-    /// <summary>Extruder RPM (%) aimed for on the shortest/lightest layer.</summary>
-    public double LayerSpeedMinRpmPercent
-    {
-        get => _layerSpeedMinRpmPercent;
-        set => SetField(ref _layerSpeedMinRpmPercent, Math.Clamp(value, 1.0, 99.0));
-    }
-
-    private double _layerSpeedMaxRpmPercent = 85.0;
-
-    /// <summary>
-    /// Extruder RPM (%) aimed for on the longest/busiest layer. Capped at 99 because that is the
-    /// highest the motor can be commanded — above it the export is refused outright.
-    /// </summary>
-    public double LayerSpeedMaxRpmPercent
-    {
-        get => _layerSpeedMaxRpmPercent;
-        set => SetField(ref _layerSpeedMaxRpmPercent, Math.Clamp(value, 1.0, 99.0));
-    }
-
-    private double _layerSpeedRobotMaxMmS;
-
-    /// <summary>Ceiling on the speed an RPM target may ask for (mm/s). 0 = use the high speed box.</summary>
-    public double LayerSpeedRobotMaxMmS
-    {
-        get => _layerSpeedRobotMaxMmS;
-        set => SetField(ref _layerSpeedRobotMaxMmS, Math.Clamp(value, 0.0, 2000.0));
-    }
-
     private static double ParseSignedOffset(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
