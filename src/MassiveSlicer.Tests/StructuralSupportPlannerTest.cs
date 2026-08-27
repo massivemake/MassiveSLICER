@@ -42,9 +42,18 @@ public sealed class StructuralSupportPlannerTest
             // Wall split into 2 + neck out + 4 rect wrap sides + neck back = 8 moves.
             Assert.True(layer.Moves.Count >= 7, $"L{layer.Index}: {layer.Moves.Count} moves");
 
-            // The split point (anchor) must appear at exactly (150, 0) on every layer.
-            Assert.Contains(layer.Moves, m =>
-                MathF.Abs(m.To.X - 150) < 1e-3f && MathF.Abs(m.To.Y) < 1e-3f);
+            // The wall no longer runs continuously through the anchor — it BREAKS there,
+            // one bead wide and centred on it (a real surface break for the neck mouth).
+            // So instead of a move landing exactly on (150, 0), assert the two wall pieces
+            // straddle it symmetrically.
+            var wallXs = layer.Moves
+                .Where(m => MathF.Abs(m.From.Y) < 1e-3f && MathF.Abs(m.To.Y) < 1e-3f)
+                .SelectMany(m => new[] { m.From.X, m.To.X })
+                .ToList();
+            float leftEnd  = wallXs.Where(x => x < 150f).Max();
+            float rightEnd = wallXs.Where(x => x > 150f).Min();
+            Assert.Equal(150f, (leftEnd + rightEnd) * 0.5f, 1);
+            Assert.Equal(6f, rightEnd - leftEnd, 1);   // default BeadWidth
 
             // The detour must reach the rectangle's far edge (y = 80 + 21 = 101).
             float maxY = layer.Moves.Max(m => MathF.Max(m.From.Y, m.To.Y));

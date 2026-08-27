@@ -10,7 +10,11 @@ export DOTNET_ROLL_FORWARD="${DOTNET_ROLL_FORWARD:-Major}"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APPHOST="$DIR/src/MassiveSlicer.App/bin/Debug/net8.0/MassiveSlicer.App"
-if [ -x "$APPHOST" ]; then
+if [ -f "$APPHOST" ]; then
   killall -q "$(basename "$APPHOST")" 2>/dev/null || true
 fi
-exec dotnet run --project "$DIR/src/MassiveSlicer.App" "$@"
+# MassiveFILES is noexec SMB. `dotnet run` launches the native apphost from
+# bin/Debug and execve() returns Permission denied. UseAppHost=false hosts
+# the DLL with the local `dotnet` binary. launchSettings workingDirectory
+# (repo root) is still honored. Do not ./run.sh on this share — use bash.
+exec dotnet run --project "$DIR/src/MassiveSlicer.App" --property:UseAppHost=false "$@"

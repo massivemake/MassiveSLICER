@@ -288,17 +288,18 @@ public sealed class AppPreferences
     /// <summary>Multi-Planar: tilt about X instead of Y.</summary>
     public bool MultiPlanarAxisX { get; set; }
 
-    /// <summary>Brim: outward offset loops around the first layer for bed adhesion.</summary>
+    /// <summary>Brim: offset loops around the first layer for bed adhesion.</summary>
     public bool BrimEnabled { get; set; }
 
     /// <summary>Number of brim offset loops.</summary>
     public int BrimLoops { get; set; } = 3;
 
-    /// <summary>Fixed brim print speed (mm/s), independent of print speed and Adaptive Speed.</summary>
-    public double BrimSpeedMmS { get; set; } = 60.0;
-
-    /// <summary>Absolute brim extrusion RPM (%). 0 = let RPM follow brim speed.</summary>
-    public double BrimRpmPercent { get; set; }
+    /// <summary>
+    /// Which side of the path the loops sit on: "Outside", "Inside" or "Both".
+    /// Stored as the display string, matching <see cref="WipeModeDisplay"/>. Defaults to
+    /// Outside, so a prefs file written before this existed keeps the old behaviour.
+    /// </summary>
+    public string BrimDirectionDisplay { get; set; } = "Outside";
 
     /// <summary>X-Bracing Wall: cut dual-wall X notches for structural back-support.</summary>
     public bool XBracingEnabled { get; set; }
@@ -396,6 +397,12 @@ public sealed class AppPreferences
     /// <summary>KRL export: ±% adjustment to extrusion speed ("" = no change).</summary>
     public string ExtrusionSpeedOffset { get; set; } = "";
 
+    /// <summary>KRL export: ±% of first-layer print speed only ("" = no change). +20 = 1.20×.</summary>
+    public string FirstLayerPrintSpeedOffset { get; set; } = "";
+
+    /// <summary>KRL export: ± RPM points on the first layer only ("" = no change).</summary>
+    public string FirstLayerRpmOffset { get; set; } = "";
+
     /// <summary>
     /// Calibration-only: forces the exported screw speed (%) regardless of bead geometry.
     /// 0 = off (normal computed flow). Written ONLY by the purge-and-weigh calibration
@@ -451,7 +458,7 @@ public sealed class AppPreferences
     public string WipeModeDisplay { get; set; } = "Same-Direction";
 
     public double WipeLengthMm { get; set; } = 35.0;
-    public double WipeRampMm { get; set; } = 5.0;
+    public double WipeRampMm { get; set; } = -1.0;
     public double WipeSpeed { get; set; } = 600.0;
     /// <summary>Skip wipe when the following travel is shorter than 2× layer height.</summary>
     public bool WipeSkipShortTravels { get; set; }
@@ -492,6 +499,7 @@ public sealed class AppPreferences
     public string LayerSpeedBasisDisplay { get; set; } = "Cut length";
     public double LayerSpeedMinMmS { get; set; } = 10.0;
     public double LayerSpeedMaxMmS { get; set; } = 100.0;
+    public string LayerSpeedNotes { get; set; } = "";
 
     /// <summary>Seam guide points as [x, y, z] world coordinates.</summary>
     public List<float[]> SeamGuidePoints { get; set; } = [];
@@ -506,6 +514,10 @@ public sealed class AppPreferences
     /// [shape, anchorX, anchorY, anchorLayer, layersUp, layersDown,
     ///  centerX, centerY, width, depth, rotationDeg, enabled].</summary>
     public List<float[]> StructuralSupports { get; set; } = [];
+
+    /// <summary>Structural Support names, index-parallel to <see cref="StructuralSupports"/>
+    /// (names can't ride in the float array). Shorter/missing = fall back to "Support N".</summary>
+    public List<string> StructuralSupportNames { get; set; } = [];
 
     /// <summary>Curved slicing boundary source: Auto, Viewport Pick, JSON Import.</summary>
     public string CurvedBoundarySource { get; set; } = "Auto";

@@ -262,6 +262,10 @@ internal static class WorkspaceService
             ShowPaintMarkers         = viewport.ShowPaintMarkers,
             PaintShowBeads           = viewport.PaintShowBeads,
             PaintModifications       = viewport.CapturePaintModifications?.Invoke() ?? [],
+            // Support pockets ride in the workspace now, not in app preferences.
+            StructuralSupports       = viewport.AdditiveSettings is { } addSet
+                ? addSet.StructuralSupports.Select(WorkspaceStructuralSupport.From).ToList()
+                : [],
             ToolpathScrubIndex       = viewport.ToolpathScrubIndex,
             ToolpathScrubLowIndex    = viewport.ToolpathScrubLowIndex,
             ToolpathScrubLayerHigh   = viewport.ToolpathScrubLayerHigh,
@@ -277,6 +281,8 @@ internal static class WorkspaceService
             Lfam3WorkflowPhase       = viewport.CaptureLfam3WorkflowPhaseName(),
             HasPrePrintScanStep      = viewport.ShowLfam3ToolPicker ? viewport.HasPrePrintScanStep : null,
             MountedToolName          = viewport.HasFlangeMountedTool ? viewport.MountedToolName : null,
+            SelectedHomePositionName = viewport.AdditiveSettings?.SelectedHomePositionName,
+            SelectedHomeAngles       = viewport.AdditiveSettings?.SelectedHomeAngles,
             SimCameraKeyframes       = viewport.CaptureSimCameraKeyframes(),
         };
     }

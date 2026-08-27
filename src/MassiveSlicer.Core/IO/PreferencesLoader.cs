@@ -68,7 +68,7 @@ public static class PreferencesLoader
             prefs.WipeModeDisplay = "Same-Direction";
             prefs.WipeLengthMm = 35.0;
             prefs.WipeSpeed = 600.0;
-            prefs.WipeRampMm = prefs.LayerHeight + 2.0;
+            prefs.WipeRampMm = -1.0;
         }
 
         if (!prefs.DigitalStartStopEnabled)

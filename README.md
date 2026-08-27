@@ -163,8 +163,10 @@ dotnet build src/MassiveSlicer.App/MassiveSlicer.App.csproj -c Release
 ### Run
 
 ```bash
-dotnet run --project src/MassiveSlicer.App -c Release
-# or: ./run.sh
+# MassiveFILES is noexec — do not ./run.sh (and do not let `dotnet run`
+# exec the native apphost from bin/). bash run.sh hosts the DLL instead.
+bash run.sh
+# or: dotnet run --project src/MassiveSlicer.App --property:UseAppHost=false
 ```
 
 ### Tests

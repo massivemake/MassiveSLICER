@@ -17,6 +17,10 @@ public static class MovementPostProcessor
         if (!doZHop && !doWipe) return toolpath;
 
         var result = new Toolpath();
+        // Keep the last real bead across layers so a layer-change travel
+        // (first move of layer N+1) still gets smash + wipe. Resetting per
+        // layer dropped every hop at the seam.
+        ToolpathMove? lastExtrude = null;
         foreach (var layer in toolpath.Layers)
         {
             var newLayer = new ToolpathLayer(layer.Index, layer.Z)
@@ -25,7 +29,6 @@ public static class MovementPostProcessor
                 PlaneNormal = layer.PlaneNormal,
             };
 
-            ToolpathMove? lastExtrude = null;
             foreach (var move in layer.Moves)
             {
                 if (move.Kind == MoveKind.Extrude && !move.IsLayerStitch && !move.IsWipe)
@@ -90,23 +93,43 @@ public static class MovementPostProcessor
 
         float total = settings.WipeLengthMm;
         float ramp  = settings.WipeRampMm;
-        float fullLen;
-        float rampLen;
-
-        if (ramp >= 0f)
-        {
-            rampLen = Math.Min(ramp, total);
-            fullLen = total - rampLen;
-        }
-        else
-        {
-            // e.g. 35 mm same-direction + -1.5 mm ramp → 35 mm full extrusion, then 1.5 mm squeeze-down.
-            fullLen = total;
-            rampLen = -ramp;
-        }
-
         var pos  = travelStart;
         var norm = lastExtrude.Normal;
+
+        // Negative ramp: dip −Z into the bead (no RPM), then the full wipe length.
+        // Shop −1 mm smash + reverse on this first wipe LIN cleans the nozzle.
+        if (ramp < 0f)
+        {
+            float smash = -ramp;
+            float layerH = settings.LayerHeight > 0.05f ? settings.LayerHeight : 2f;
+            if (smash > layerH)
+                smash = layerH;
+            if (smash > 0.01f)
+            {
+                var down = pos + new Vector3(0f, 0f, -smash);
+                yield return new ToolpathMove(pos, down, MoveKind.Extrude)
+                {
+                    IsWipe       = true,
+                    WipeRpmScale = 0f,
+                    Normal       = norm,
+                };
+                pos = down;
+            }
+            if (total > 0.01f)
+            {
+                var next = pos + dir * total;
+                yield return new ToolpathMove(pos, next, MoveKind.Extrude)
+                {
+                    IsWipe       = true,
+                    WipeRpmScale = 1f,
+                    Normal       = norm,
+                };
+            }
+            yield break;
+        }
+
+        float rampLen = Math.Min(ramp, total);
+        float fullLen = total - rampLen;
 
         if (fullLen > 0.01f)
         {

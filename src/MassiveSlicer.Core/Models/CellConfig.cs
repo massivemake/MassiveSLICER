@@ -139,7 +139,7 @@ public sealed record HomePositionConfig
     /// <summary>Display name shown in the home position selector.</summary>
     public required string Name { get; init; }
 
-    /// <summary>Joint angles A1-A6 in KRL degrees.</summary>
+    /// <summary>Joint angles A1-A6 (and optional E1) in KRL degrees.</summary>
     public float[] Angles { get; init; } = [0f, -90f, 90f, 0f, 15f, 0f];
 }
 

@@ -409,18 +409,40 @@
                         </Grid>
 
                         <TextBlock Text="HOME POSITIONS" Classes="SectionHeader"/>
+                        <Grid Margin="8,0,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ComboBox Grid.Column="0"
+                                      HorizontalAlignment="Stretch"
+                                      Margin="0,0,4,0"
+                                      ItemsSource="{Binding DataContext.Viewport.AdditiveSettings.AvailableHomePositionNames,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                      SelectedItem="{Binding DataContext.Viewport.AdditiveSettings.SelectedHomePositionName,
+                                                    RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                      ToolTip.Tip="Selected home is the export start PTP. Save the workspace to keep this pick."/>
+                            <Button Grid.Column="1"
+                                    Content="GO"
+                                    Classes="ToolbarButton"
+                                    Command="{Binding DataContext.Viewport.AdditiveSettings.GoToSelectedHomeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    ToolTip.Tip="Put the viewport robot on this pose so you can confirm it. Does not move the live arm — that is GO HOME (MassiveDRIVE)."/>
+                        </Grid>
                         <TextBox Margin="8,0,8,4"
                                  Classes="PanelTextBox"
                                  Text="{Binding DataContext.RightPanel.Settings.Robot.NewHomePositionName,
                                         RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                 PlaceholderText="Home Target..."
+                                 PlaceholderText="New home name..."
                                  VerticalContentAlignment="Center"
-                                 Padding="6,4"/>
+                                 Padding="6,4"
+                                 ToolTip.Tip="Type a new name, then SAVE AS HOME POSITION. Overwrites if that name already exists."/>
                         <Button Content="SAVE AS HOME POSITION"
                                 Command="{Binding DataContext.RightPanel.Settings.Robot.SaveAsHomePositionCommand,
                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                 HorizontalAlignment="Stretch"
-                                Margin="8,0,8,8"/>
+                                Margin="8,0,8,8"
+                                ToolTip.Tip="Save current A1–E1 sliders under the name above and select it for export."/>
 
                         <Expander Classes="SectionExpander" Header="LIMITS" IsExpanded="False">
                           <StackPanel>

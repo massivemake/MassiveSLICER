@@ -71,7 +71,7 @@ Default workspace is a **2×4 grid of dual-wall pairs** printed **serially** (T1
    Too low → drag. Too high → longer drips in air.
 4. **`TravelSpeed` / wipe speed** — 300–600 mm/s  
    Faster travel = less drool time if screw is fully off.
-5. **`WipeRampMm`** — how hard ANOUT ramps down on the wipe tail.
+5. **`WipeRampMm`** — shop **−1**: dip 1 mm −Z into the bead (RPM 0), then wipe length. Positive still ramps RPM on the last N mm of wipe.
 
 Score each print at the **stop seam** (end of wall A) and **start seam** (begin of wall B) on every few layers.
 

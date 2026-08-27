@@ -36,10 +36,11 @@ public sealed class SliceSettings
     public float WipeSpeed { get; init; } = 0.12f;
 
     /// <summary>
-    /// Trailing wipe ramp distance (mm). Positive: last N mm of <see cref="WipeLengthMm"/> ramps RPM to zero.
-    /// Negative: after the full wipe length, extend an additional |N| mm with ramp-down (squeeze segment).
+    /// Wipe ramp (mm). Positive: last N mm of <see cref="WipeLengthMm"/> ramps RPM to zero.
+    /// Negative: first dip |N| mm in −Z (smash into the bead, RPM 0), then the full wipe length.
+    /// Shop default −1 mm. Smash is capped at layer height.
     /// </summary>
-    public float WipeRampMm { get; init; } = 5f;
+    public float WipeRampMm { get; init; } = -1f;
 
     /// <summary>
     /// When true, skip wipe insertion before travels shorter than
@@ -48,7 +49,7 @@ public sealed class SliceSettings
     public bool WipeSkipShortTravels { get; init; }
 
     /// <summary>
-    /// Brim: outward offset loops around the full first-layer footprint for bed adhesion.
+    /// Brim: offset loops around the first-layer footprint for bed adhesion.
     /// Applied as the LAST toolpath step so first-layer additions (X-bracing, patterns)
     /// are enclosed.
     /// </summary>
@@ -58,26 +59,12 @@ public sealed class SliceSettings
     public int BrimLoops { get; init; } = 3;
 
     /// <summary>
-    /// Fixed brim print speed (mm/s), independent of print speed and of the Adaptive Speed
-    /// window. The brim is bed adhesion, not part shape — it has no reason to follow the
-    /// part's speed rule, and following it made the brim the fastest move in the print
-    /// (and the one that hit the 99 % RPM export gate). Capped at
-    /// <see cref="MaxBrimSpeedMmS"/>. RPM follows the speed, so flow stays correct.
+    /// Which side of the path the loops sit on. Defaults to <see cref="BrimDirection.Outside"/>,
+    /// which is what brim did before the setting existed — so old presets and workspaces that
+    /// carry no direction keep behaving exactly as they did.
     /// </summary>
-    public float BrimSpeedMmS { get; init; } = 60f;
+    public BrimDirection BrimDirection { get; init; } = BrimDirection.Outside;
 
-    /// <summary>Upper bound on <see cref="BrimSpeedMmS"/> — a brim never wants to be quick.</summary>
-    public const float MaxBrimSpeedMmS = 60f;
-
-    /// <summary>
-    /// Absolute extrusion RPM (%) for the brim. 0 = off, i.e. let RPM follow brim speed.
-    /// Set it to lay a deliberately fat brim for adhesion despite the slow speed. Capped at
-    /// <see cref="MaxBrimRpmPercent"/> so it can never trip the export gate on its own.
-    /// </summary>
-    public float BrimRpmPercent { get; init; }
-
-    /// <summary>Upper bound on <see cref="BrimRpmPercent"/>, matching the export RPM gate.</summary>
-    public const float MaxBrimRpmPercent = 99f;
 
     /// <summary>Material flow rate (rev/cm³) for RPM ramp scaling.</summary>
     public float FlowRate { get; init; } = 0.463f;
@@ -108,6 +95,12 @@ public sealed class SliceSettings
 
     /// <summary>Print speed (mm/s) applied to the longest/busiest layer.</summary>
     public float LayerSpeedMaxMmS { get; init; } = 100f;
+
+    /// <summary>
+    /// Live print notes, 1-based layer:signed percent (e.g. <c>63:-20</c> = layer 63 twenty
+    /// percent slower than the mapped speed). Applied after the layer metric.
+    /// </summary>
+    public string LayerSpeedNotes { get; init; } = "";
 
     /// <summary>Z height above the part to approach before each pass, in mm.</summary>
     public float ApproachZ { get; init; } = 50f;

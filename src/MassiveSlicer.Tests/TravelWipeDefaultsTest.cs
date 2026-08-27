@@ -24,7 +24,7 @@ public sealed class TravelWipeDefaultsTest
     }
 
     [Fact]
-    public void ApplyShopWipeForTravels_sets_same_direction_35_5_600()
+    public void ApplyShopWipeForTravels_sets_same_direction_35_smash_600()
     {
         var add = new AdditiveSettingsViewModel
         {
@@ -37,7 +37,7 @@ public sealed class TravelWipeDefaultsTest
         Assert.True(add.ApplyShopWipeForTravels());
         Assert.Equal("Same-Direction", add.WipeModeDisplay);
         Assert.Equal(35, add.WipeLengthMm);
-        Assert.Equal(5, add.WipeRampMm);
+        Assert.Equal(-1, add.WipeRampMm);
         Assert.Equal(600, add.WipeSpeed);
         Assert.False(add.ApplyShopWipeForTravels());
     }

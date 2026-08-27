@@ -21,6 +21,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         KrlPostProcess.Owner = this;
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
+        GoToSelectedHomeCommand = new RelayCommand(GoToSelectedHome);
         ReverseTiltDirectionCommand      = new RelayCommand(ReverseTiltDirection);
         SetPatternCommand = new RelayCommand<string>(p => PatternType = p ?? "Smooth");
         AutoTiltCommand       = new RelayCommand(() => OnAutoTiltRequested?.Invoke(false), () => !IsAutoTiltRunning);
@@ -50,8 +51,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 or nameof(SelectedPresetIndex))
             {
                 OnPropertyChanged(nameof(FirstLayerSpeedCalculated));
+                OnPropertyChanged(nameof(FirstLayerSpeedBase));
                 OnPropertyChanged(nameof(FirstLayerSpeedEffective));
                 OnPropertyChanged(nameof(FirstLayerRpmCalculated));
+                OnPropertyChanged(nameof(FirstLayerRpmBase));
                 OnPropertyChanged(nameof(FirstLayerRpmEffective));
             }
 
@@ -592,8 +595,56 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     public bool HasStructuralSupports => StructuralSupports.Count > 0;
-    public string StructuralSupportsLabel =>
-        StructuralSupports.Count == 1 ? "1 support" : $"{StructuralSupports.Count} supports";
+
+    /// <summary>
+    /// Name of the support at <paramref name="index"/>, falling back to a positional
+    /// label for specs saved before names existed (so nothing ever reads as blank).
+    /// </summary>
+    public string SupportNameAt(int index) =>
+        index < 0 || index >= StructuralSupports.Count
+            ? ""
+            : string.IsNullOrWhiteSpace(StructuralSupports[index].Name)
+                ? $"Support {index + 1}"
+                : StructuralSupports[index].Name;
+
+    /// <summary>Next free "Support N" — N is one past the highest existing number, so
+    /// deleting Support 2 of 3 doesn't hand out a name that's still in use.</summary>
+    public string NextStructuralSupportName()
+    {
+        int highest = 0;
+        foreach (var s in StructuralSupports)
+        {
+            if (string.IsNullOrWhiteSpace(s.Name)) continue;
+            var digits = s.Name.AsSpan()[(s.Name.LastIndexOf(' ') + 1)..];
+            if (int.TryParse(digits, out int n) && n > highest) highest = n;
+        }
+        return $"Support {Math.Max(highest + 1, StructuralSupports.Count + 1)}";
+    }
+
+    /// <summary>Selected support's name, e.g. "Support 2" — editable (rename in place).</summary>
+    public string SelectedSupportName
+    {
+        get => SupportNameAt(_selectedSupportIndex);
+        set
+        {
+            if (SelectedSupport is not { } s) return;
+            var trimmed = (value ?? "").Trim();
+            if (trimmed.Length == 0 || string.Equals(trimmed, s.Name, StringComparison.Ordinal)) return;
+            ReplaceSelected(s with { Name = trimmed });
+        }
+    }
+
+    /// <summary>"Support 2 · 2/3" — names the support you're editing, not just a count.</summary>
+    public string StructuralSupportsLabel
+    {
+        get
+        {
+            if (StructuralSupports.Count == 0) return "no supports";
+            if (_selectedSupportIndex < 0) return $"{StructuralSupports.Count} supports · none selected";
+            return $"{SupportNameAt(_selectedSupportIndex)} · "
+                + $"{_selectedSupportIndex + 1}/{StructuralSupports.Count}";
+        }
+    }
 
     public string[] SupportShapeOptions { get; } = ["Rectangle", "Circle"];
 
@@ -610,6 +661,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     void NotifySelectedSupportChanged()
     {
+        OnPropertyChanged(nameof(SelectedSupportName));
         OnPropertyChanged(nameof(SupportShape));
         OnPropertyChanged(nameof(SupportCenterX));
         OnPropertyChanged(nameof(SupportCenterY));
@@ -692,6 +744,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     internal void AddStructuralSupport(Core.Models.StructuralSupportSpec spec)
     {
+        // Every support carries a unique name from birth — the panel, the outliner-style
+        // arrows and the console all identify supports by name, never by raw index.
+        if (string.IsNullOrWhiteSpace(spec.Name))
+            spec = spec with { Name = NextStructuralSupportName() };
         StructuralSupports.Add(spec);
         SelectedSupportIndex = StructuralSupports.Count - 1;
         NotifySelectedSupportChanged();
@@ -1168,7 +1224,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     // -- Brim (bed adhesion) -------------------------------------------------------
 
     private bool _brimEnabled;
-    /// <summary>Outward offset loops around the first layer for bed adhesion (applied last, encloses X-bracing).</summary>
+    /// <summary>Offset loops alongside the first layer for bed adhesion (applied last, encloses X-bracing).</summary>
     public bool BrimEnabled
     {
         get => _brimEnabled;
@@ -1189,33 +1245,45 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _brimLoops, Math.Clamp(value, 1, 50));
     }
 
-    private double _brimSpeed = SliceSettings.MaxBrimSpeedMmS;
+    public string[] BrimDirectionOptions { get; } = ["Outside", "Inside", "Both"];
+
+    private string _brimDirectionDisplay = "Outside";
     /// <summary>
-    /// Fixed brim speed (mm/s). Deliberately ignores print speed and the Adaptive Speed
-    /// window — the brim is bed adhesion, not part shape. Capped at
-    /// <see cref="SliceSettings.MaxBrimSpeedMmS"/>.
+    /// Which side of the path the loops sit on: Outside, Inside, or Both. The loop count,
+    /// speed and RPM are shared — this only selects which stretches of the one offset
+    /// boundary are kept.
     /// </summary>
-    public double BrimSpeed
+    public string BrimDirectionDisplay
     {
-        get => _brimSpeed;
-        set => SetField(ref _brimSpeed, Math.Clamp(value, 1.0, SliceSettings.MaxBrimSpeedMmS));
+        get => _brimDirectionDisplay;
+        set => SetField(ref _brimDirectionDisplay, value);
     }
 
-    private double _brimRpmPercent;
     /// <summary>
-    /// Absolute brim extrusion RPM (%). 0 = off, i.e. RPM follows brim speed as usual.
-    /// Raise it to lay a deliberately fat brim for adhesion despite the slow brim speed —
-    /// this value bypasses every per-move flow scale. Capped at
-    /// <see cref="SliceSettings.MaxBrimRpmPercent"/> so it cannot trip the export gate.
+    /// The canonical display string for a direction — always one of
+    /// <see cref="BrimDirectionOptions"/>. Anything setting the direction programmatically must go
+    /// through here: the console command hard-coded its own strings, they went stale when the
+    /// options were renamed, and the dropdown silently rendered BLANK because the stored value
+    /// matched no option.
     /// </summary>
-    public double BrimRpmPercent
+    public static string BrimDirectionDisplayFor(BrimDirection d) => d switch
     {
-        get => _brimRpmPercent;
-        set => SetField(ref _brimRpmPercent,
-                        value <= 0.0 ? 0.0 : Math.Clamp(value, 1.0, SliceSettings.MaxBrimRpmPercent));
-    }
+        BrimDirection.Inside => "Inside",
+        BrimDirection.Both   => "Both",
+        _                    => "Outside",
+    };
 
-    // -- X-Bracing Wall ----------------------------------------------------------
+    /// <summary>
+    /// Maps the display string onto the slicing enum. Anything unrecognised is Outside, so a
+    /// prefs file or preset written before this setting existed keeps the old behaviour.
+    /// "Outward"/"Inward" are accepted as the earlier wording.
+    /// </summary>
+    public static BrimDirection ParseBrimDirection(string? display) => display switch
+    {
+        "Inside" or "Inward" => BrimDirection.Inside,
+        "Both"               => BrimDirection.Both,
+        _                    => BrimDirection.Outside,
+    };
 
     private bool _xBracingEnabled;
     /// <summary>Cut dual-wall X braces into the perimeter for structural back-support.</summary>
@@ -2213,8 +2281,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (!SetField(ref _firstLayerSpeed, Math.Clamp(value, 0.0, 2000.0))) return;
+            OnPropertyChanged(nameof(FirstLayerSpeedBase));
             OnPropertyChanged(nameof(FirstLayerSpeedEffective));
             OnPropertyChanged(nameof(FirstLayerRpmCalculated));
+            OnPropertyChanged(nameof(FirstLayerRpmBase));
             OnPropertyChanged(nameof(FirstLayerRpmEffective));
         }
     }
@@ -2227,6 +2297,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (!SetField(ref _firstLayerRpm, Math.Clamp(value, 0.0, 100.0))) return;
+            OnPropertyChanged(nameof(FirstLayerRpmBase));
             OnPropertyChanged(nameof(FirstLayerRpmEffective));
         }
     }
@@ -2234,8 +2305,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     /// <summary>Calculated first-layer print speed (mm/s) — same as the normal print speed.</summary>
     public double FirstLayerSpeedCalculated => PrintSpeed;
 
-    /// <summary>Effective first-layer print speed (mm/s): override if set, else calculated.</summary>
-    public double FirstLayerSpeedEffective => _firstLayerSpeed > 0.0 ? _firstLayerSpeed : FirstLayerSpeedCalculated;
+    /// <summary>First-layer print speed before the KRL Export % increase (mm/s).</summary>
+    public double FirstLayerSpeedBase => _firstLayerSpeed > 0.0 ? _firstLayerSpeed : FirstLayerSpeedCalculated;
+
+    /// <summary>Effective first-layer print speed (mm/s): override if set, else calculated, then % increase.</summary>
+    public double FirstLayerSpeedEffective => FirstLayerPercentAdjust.SpeedMmS(FirstLayerSpeedBase, FirstLayerPrintSpeedOffset);
 
     /// <summary>Calculated first-layer RPM (%) — from bead width, FIRST-layer height,
     /// the effective first-layer speed, and material flow.</summary>
@@ -2250,8 +2324,50 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Effective first-layer RPM (%): override if set, else calculated.</summary>
-    public double FirstLayerRpmEffective => _firstLayerRpm > 0.0 ? _firstLayerRpm : FirstLayerRpmCalculated;
+    /// <summary>First-layer RPM before the KRL Export % increase.</summary>
+    public double FirstLayerRpmBase => _firstLayerRpm > 0.0 ? _firstLayerRpm : FirstLayerRpmCalculated;
+
+    /// <summary>Effective first-layer RPM (%): override if set, else calculated, then +/- points.</summary>
+    public double FirstLayerRpmEffective => FirstLayerPercentAdjust.RpmPercent(FirstLayerRpmBase, FirstLayerRpmOffset);
+
+    private string _firstLayerPrintSpeedOffset = "";
+
+    /// <summary>±% of first-layer print speed (KRL Export). Empty = no change. +20 = 1.20×.</summary>
+    public string FirstLayerPrintSpeedOffset
+    {
+        get => _firstLayerPrintSpeedOffset;
+        set
+        {
+            if (!SetField(ref _firstLayerPrintSpeedOffset, value ?? "")) return;
+            OnPropertyChanged(nameof(FirstLayerSpeedEffective));
+            OnPropertyChanged(nameof(FirstLayerRpmCalculated));
+            OnPropertyChanged(nameof(FirstLayerRpmBase));
+            OnPropertyChanged(nameof(FirstLayerRpmEffective));
+        }
+    }
+
+    private string _firstLayerRpmOffset = "";
+
+    /// <summary>± RPM points on the first layer (KRL Export). Empty = no change. Same as Extrusion Speed +/-.</summary>
+    public string FirstLayerRpmOffset
+    {
+        get => _firstLayerRpmOffset;
+        set
+        {
+            if (!SetField(ref _firstLayerRpmOffset, value ?? "")) return;
+            OnPropertyChanged(nameof(FirstLayerRpmEffective));
+        }
+    }
+
+    /// <summary>True when export should write a first-layer print-speed override.</summary>
+    public bool HasFirstLayerPrintSpeedAdjust =>
+        (FirstLayerAdjustmentsEnabled && _firstLayerSpeed > 0.0)
+        || FirstLayerPercentAdjust.Has(_firstLayerPrintSpeedOffset);
+
+    /// <summary>True when export should write a first-layer RPM override.</summary>
+    public bool HasFirstLayerRpmAdjust =>
+        (FirstLayerAdjustmentsEnabled && _firstLayerRpm > 0.0)
+        || FirstLayerPercentAdjust.Has(_firstLayerRpmOffset);
 
     private double _extrusionStartWaitSec;
 
@@ -2449,7 +2565,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public const string ShopWipeMode = "Same-Direction";
     public const double ShopWipeLengthMm = 35.0;
-    public const double ShopWipeRampMm = 5.0;
+    public const double ShopWipeRampMm = -1.0;
     public const double ShopWipeSpeedMmS = 600.0;
 
     /// <summary>
@@ -2500,19 +2616,19 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _wipeLengthMm, Math.Max(0.0, value));
     }
 
-    /// <summary>Shop default: wipe ramp = layer height + 2 mm.</summary>
+    /// <summary>Shop default: −1 mm Z smash (into the bead), then wipe length.</summary>
     public const double WipeRampAboveLayerMm = 2.0;
 
     public static double DefaultWipeRampMm(double layerHeightMm)
-        => layerHeightMm + WipeRampAboveLayerMm;
+        => ShopWipeRampMm;
 
-    private double _wipeRampMm = 5.0;
-    private bool _wipeRampFollowsLayerHeight = true;
+    private double _wipeRampMm = -1.0;
+    private bool _wipeRampFollowsLayerHeight = false;
 
     /// <summary>
     /// Wipe ramp (mm). Positive = last N mm of wipe length ramps RPM down.
-    /// Negative = extra |N| mm past wipe length with ramp-down squeeze.
-    /// Default follows layer height + 2 mm until the operator types a different value.
+    /// Negative = first |N| mm −Z smash into the bead (RPM 0), then wipe length.
+    /// Shop default −1. Smash is capped at layer height.
     /// </summary>
     public double WipeRampMm
     {
@@ -2611,7 +2727,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         }
     }
 
-    public IReadOnlyList<string> LayerSpeedBasisOptions { get; } = ["Cut length", "Layer time"];
+    public IReadOnlyList<string> LayerSpeedBasisOptions { get; } = ["Print feedback", "Cut length", "Layer time"];
 
     private bool _layerSpeedAdaptEnabled;
 
@@ -2641,9 +2757,19 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public LayerSpeedBasis LayerSpeedBasis => _layerSpeedBasisDisplay switch
     {
-        "Layer time" => LayerSpeedBasis.LayerTime,
-        _            => LayerSpeedBasis.CutLength,
+        "Layer time"      => LayerSpeedBasis.LayerTime,
+        "Print feedback"  => LayerSpeedBasis.PrintFeedback,
+        _                 => LayerSpeedBasis.CutLength,
     };
+
+    private string _layerSpeedNotes = "";
+
+    /// <summary>Live print notes, 1-based <c>layer:Δ%</c> (e.g. 63:-20). Applied after the metric.</summary>
+    public string LayerSpeedNotes
+    {
+        get => _layerSpeedNotes;
+        set => SetField(ref _layerSpeedNotes, value ?? "");
+    }
 
     private double _layerSpeedMinMmS = 10.0;
 
@@ -2704,8 +2830,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (value is null) return;
+            int found = _homePositions.FindIndex(p => p.Name == value);
+            if (found < 0) return; // not loaded yet — workspace restore retries after cell swap
             if (!SetField(ref _selectedHomePositionName, value)) return;
-            _selectedHomePositionIndex = Math.Max(0, _homePositions.FindIndex(p => p.Name == value));
+            _selectedHomePositionIndex = found;
             OnHomePositionSelected?.Invoke(SelectedHomeAngles);
         }
     }
@@ -2731,6 +2859,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         else
             _homePositions.Add((name, angles));
         AvailableHomePositionNames = _homePositions.Select(p => p.Name).ToArray();
+        SelectedHomePositionName = name;
     }
 
     /// <summary>Wired by ViewportView.axaml.cs; invoked when "Set as Default" is clicked.</summary>
@@ -2738,6 +2867,12 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     /// <summary>Saves the currently selected home position as the default for this cell.</summary>
     public RelayCommand SetDefaultHomePositionCommand { get; }
+
+    /// <summary>Puts the viewport robot on the selected home so you can confirm it. Does not move the live arm.</summary>
+    public RelayCommand GoToSelectedHomeCommand { get; }
+
+    void GoToSelectedHome()
+        => OnHomePositionSelected?.Invoke(SelectedHomeAngles);
 
     /// <summary>
     /// Refreshes the available home position list from the given cell config and restores

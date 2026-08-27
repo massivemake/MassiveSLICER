@@ -216,6 +216,104 @@
                             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
                                        Text="Applies to the current viewport selection. Click a card below to expand its options; Update Slice bakes changes."/>
 
+                            <!-- STRUCTURAL SUPPORT — the one editor for the live support.
+                                 Driven by selection (viewport click, a card's cursor icon,
+                                 or the ◀ ▶ arrows), so a support with no card left — e.g. one
+                                 restored from preferences on a fresh model — is still
+                                 reachable, nameable and deletable from inside edit mode. -->
+                            <Border IsVisible="{Binding $parent[Window].DataContext.RightPanel.Additive.HasStructuralSupports}"
+                                    Background="#1A33D6FF" CornerRadius="6" Padding="8,7"
+                                    BorderBrush="#5533D6FF" BorderThickness="1">
+                                <StackPanel Spacing="5">
+                                    <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                                        <Border Grid.Column="0" CornerRadius="3" Padding="5,1" Background="#4433D6FF">
+                                            <TextBlock Text="SUPPORT" FontSize="9" FontWeight="Bold"
+                                                       Foreground="#99E8FF" LetterSpacing="0.8"/>
+                                        </Border>
+                                        <TextBlock Grid.Column="1" Margin="6,0,0,0" FontSize="11"
+                                                   FontWeight="SemiBold" VerticalAlignment="Center"
+                                                   Text="{Binding $parent[Window].DataContext.RightPanel.Additive.StructuralSupportsLabel}"/>
+                                        <Button Grid.Column="2" Classes="ToolbarButton" Padding="6,2" Content="◀"
+                                                ToolTip.Tip="Previous support"
+                                                Command="{Binding $parent[Window].DataContext.RightPanel.Additive.PrevSupportCommand}"/>
+                                        <Button Grid.Column="3" Classes="ToolbarButton" Padding="6,2" Content="▶"
+                                                Margin="2,0,0,0" ToolTip.Tip="Next support"
+                                                Command="{Binding $parent[Window].DataContext.RightPanel.Additive.NextSupportCommand}"/>
+                                    </Grid>
+
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBox Grid.Column="0" FontSize="11" Padding="6,3"
+                                                 Text="{Binding $parent[Window].DataContext.RightPanel.Additive.SelectedSupportName, Mode=TwoWay}"
+                                                 ToolTip.Tip="Rename this support."/>
+                                        <Button Grid.Column="1" Classes="ToolbarButton" Padding="7,3" Margin="4,0,0,0"
+                                                ToolTip.Tip="Delete this support and re-slice without it"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.DeleteSelectedStructuralSupportCommand}">
+                                            <ia:Icon Value="mdi-delete-outline" FontSize="13" Foreground="#ff8a8a"/>
+                                        </Button>
+                                    </Grid>
+
+                                    <CheckBox Content="Enabled" FontSize="11"
+                                              IsChecked="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportEnabled, Mode=TwoWay}"/>
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Grid.Column="0" Text="Shape" FontSize="11" Opacity="0.7"
+                                                   VerticalAlignment="Center"/>
+                                        <ComboBox Grid.Column="1" Width="110" FontSize="11"
+                                                  ItemsSource="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportShapeOptions}"
+                                                  SelectedItem="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportShape, Mode=TwoWay}"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,80">
+                                        <TextBlock Grid.Column="0" Text="Center X (mm)" FontSize="11" Opacity="0.7"
+                                                   VerticalAlignment="Center"/>
+                                        <NumericUpDown Grid.Column="1" FontSize="11" Increment="5" FormatString="F1"
+                                                       Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportCenterX, Mode=TwoWay}"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,80">
+                                        <TextBlock Grid.Column="0" Text="Center Y (mm)" FontSize="11" Opacity="0.7"
+                                                   VerticalAlignment="Center"/>
+                                        <NumericUpDown Grid.Column="1" FontSize="11" Increment="5" FormatString="F1"
+                                                       Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportCenterY, Mode=TwoWay}"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,80">
+                                        <TextBlock Grid.Column="0" Text="Width / Ø (mm)" FontSize="11" Opacity="0.7"
+                                                   VerticalAlignment="Center"
+                                                   ToolTip.Tip="Rectangle width, or circle diameter. 2×4 actual = 89 × 38 mm."/>
+                                        <NumericUpDown Grid.Column="1" FontSize="11" Minimum="5" Maximum="2000"
+                                                       Increment="1" FormatString="F0"
+                                                       Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportWidthMm, Mode=TwoWay}"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,80">
+                                        <TextBlock Grid.Column="0" Text="Depth (mm)" FontSize="11" Opacity="0.7"
+                                                   VerticalAlignment="Center"/>
+                                        <NumericUpDown Grid.Column="1" FontSize="11" Minimum="5" Maximum="2000"
+                                                       Increment="1" FormatString="F0"
+                                                       Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportDepthMm, Mode=TwoWay}"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,80">
+                                        <TextBlock Grid.Column="0" Text="Rotation (°)" FontSize="11" Opacity="0.7"
+                                                   VerticalAlignment="Center"/>
+                                        <NumericUpDown Grid.Column="1" FontSize="11" Increment="5" FormatString="F0"
+                                                       Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportRotationDeg, Mode=TwoWay}"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,80">
+                                        <TextBlock Grid.Column="0" Text="Layers up" FontSize="11" Opacity="0.7"
+                                                   VerticalAlignment="Center"
+                                                   ToolTip.Tip="Layers above the anchor that get the pocket (9999 = to the top)."/>
+                                        <NumericUpDown Grid.Column="1" FontSize="11" Minimum="0" Maximum="9999"
+                                                       Increment="10" FormatString="F0"
+                                                       Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportLayersUp, Mode=TwoWay}"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,80">
+                                        <TextBlock Grid.Column="0" Text="Layers down" FontSize="11" Opacity="0.7"
+                                                   VerticalAlignment="Center"/>
+                                        <NumericUpDown Grid.Column="1" FontSize="11" Minimum="0" Maximum="9999"
+                                                       Increment="10" FormatString="F0"
+                                                       Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportLayersDown, Mode=TwoWay}"/>
+                                    </Grid>
+                                    <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
+                                               Text="Click a pocket in the viewport to make it the live support, then drag its gizmo (Move / Rotate in the top toolbar) instead of nudging numbers. The anchor stays fixed on every layer so the neck stacks vertically."/>
+                                </StackPanel>
+                            </Border>
+
                             <!-- Offset path settings (shown after picking 'Offset path' above) -->
                             <Border IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowOffsetPathSettings}"
                                     Background="{DynamicResource Bg3}" CornerRadius="6" Padding="8,7"
@@ -421,70 +519,16 @@
                                                             </StackPanel>
                                                         </StackPanel>
 
-                                                        <!-- STRUCTURAL SUPPORT: pocket helper settings live on the card -->
+                                                        <!-- STRUCTURAL SUPPORT: no duplicate field set here on purpose.
+                                                             These fields always edited the SELECTED support, not this
+                                                             card's own — so with two cards open both edited the same
+                                                             pocket. One editor, at panel level, driven by selection. -->
                                                         <StackPanel IsVisible="{Binding IsStructural}" Spacing="4"
                                                                     Margin="0,2,0,2">
                                                             <TextBlock Text="POCKET SHAPE" FontSize="9" Opacity="0.55"
                                                                        LetterSpacing="0.8" FontWeight="SemiBold"/>
-                                                            <CheckBox Content="Enabled" FontSize="11"
-                                                                      IsChecked="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportEnabled, Mode=TwoWay}"/>
-                                                            <Grid ColumnDefinitions="*,Auto">
-                                                                <TextBlock Grid.Column="0" Text="Shape" FontSize="11" Opacity="0.7"
-                                                                           VerticalAlignment="Center"/>
-                                                                <ComboBox Grid.Column="1" Width="110" FontSize="11"
-                                                                          ItemsSource="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportShapeOptions}"
-                                                                          SelectedItem="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportShape, Mode=TwoWay}"/>
-                                                            </Grid>
-                                                            <Grid ColumnDefinitions="*,80">
-                                                                <TextBlock Grid.Column="0" Text="Center X (mm)" FontSize="11" Opacity="0.7"
-                                                                           VerticalAlignment="Center"/>
-                                                                <NumericUpDown Grid.Column="1" FontSize="11" Increment="5" FormatString="F1"
-                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportCenterX, Mode=TwoWay}"/>
-                                                            </Grid>
-                                                            <Grid ColumnDefinitions="*,80">
-                                                                <TextBlock Grid.Column="0" Text="Center Y (mm)" FontSize="11" Opacity="0.7"
-                                                                           VerticalAlignment="Center"/>
-                                                                <NumericUpDown Grid.Column="1" FontSize="11" Increment="5" FormatString="F1"
-                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportCenterY, Mode=TwoWay}"/>
-                                                            </Grid>
-                                                            <Grid ColumnDefinitions="*,80">
-                                                                <TextBlock Grid.Column="0" Text="Width / Ø (mm)" FontSize="11" Opacity="0.7"
-                                                                           VerticalAlignment="Center"
-                                                                           ToolTip.Tip="Rectangle width, or circle diameter. 2×4 actual = 89 × 38 mm."/>
-                                                                <NumericUpDown Grid.Column="1" FontSize="11" Minimum="5" Maximum="2000"
-                                                                               Increment="1" FormatString="F0"
-                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportWidthMm, Mode=TwoWay}"/>
-                                                            </Grid>
-                                                            <Grid ColumnDefinitions="*,80">
-                                                                <TextBlock Grid.Column="0" Text="Depth (mm)" FontSize="11" Opacity="0.7"
-                                                                           VerticalAlignment="Center"/>
-                                                                <NumericUpDown Grid.Column="1" FontSize="11" Minimum="5" Maximum="2000"
-                                                                               Increment="1" FormatString="F0"
-                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportDepthMm, Mode=TwoWay}"/>
-                                                            </Grid>
-                                                            <Grid ColumnDefinitions="*,80">
-                                                                <TextBlock Grid.Column="0" Text="Rotation (°)" FontSize="11" Opacity="0.7"
-                                                                           VerticalAlignment="Center"/>
-                                                                <NumericUpDown Grid.Column="1" FontSize="11" Increment="5" FormatString="F0"
-                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportRotationDeg, Mode=TwoWay}"/>
-                                                            </Grid>
-                                                            <Grid ColumnDefinitions="*,80">
-                                                                <TextBlock Grid.Column="0" Text="Layers up" FontSize="11" Opacity="0.7"
-                                                                           VerticalAlignment="Center"
-                                                                           ToolTip.Tip="Layers above the anchor that get the pocket (9999 = to the top)."/>
-                                                                <NumericUpDown Grid.Column="1" FontSize="11" Minimum="0" Maximum="9999"
-                                                                               Increment="10" FormatString="F0"
-                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportLayersUp, Mode=TwoWay}"/>
-                                                            </Grid>
-                                                            <Grid ColumnDefinitions="*,80">
-                                                                <TextBlock Grid.Column="0" Text="Layers down" FontSize="11" Opacity="0.7"
-                                                                           VerticalAlignment="Center"/>
-                                                                <NumericUpDown Grid.Column="1" FontSize="11" Minimum="0" Maximum="9999"
-                                                                               Increment="10" FormatString="F0"
-                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportLayersDown, Mode=TwoWay}"/>
-                                                            </Grid>
-                                                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
-                                                                       Text="The anchor (surface break) stays fixed on every layer so the neck stacks vertically. Press Update Slice to apply changes."/>
+                                                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6"
+                                                                       Text="Edited in the SUPPORT panel above. Click this card's cursor icon (or its pocket in the viewport) to make it the live support, then drag the gizmo."/>
                                                         </StackPanel>
 
                                                         <!-- BRIDGE TARGET card (Formbound only — Tree roots to bed) -->
@@ -1192,6 +1236,12 @@
                                         Content="✕" ToolTip.Tip="Remove this support"
                                         Command="{Binding Additive.RemoveSelectedSupportCommand}"/>
                             </Grid>
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Name" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox Grid.Column="1" Width="140" FontSize="11" Padding="6,3"
+                                         Text="{Binding Additive.SelectedSupportName, Mode=TwoWay}"
+                                         ToolTip.Tip="Rename this support — the name is what the arrows, the console and the MODIFICATIONS card all report."/>
+                            </Grid>
                             <CheckBox Content="Enabled" IsChecked="{Binding Additive.SupportEnabled, Mode=TwoWay}"/>
                             <Grid ColumnDefinitions="*,Auto">
                                 <TextBlock Grid.Column="0" Text="Shape" VerticalAlignment="Center" Classes="LabelMuted"/>
@@ -1574,7 +1624,7 @@
                                           IsChecked="{Binding Additive.LayerSpeedAdaptEnabled, Mode=TwoWay}"
                                           Margin="0,0,0,2"/>
                                 <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
-                                           Text="Interpolate robot speed and extrusion RPM per layer. Enabling fills low and high speeds from the current print speed — adjust either end as needed."/>
+                                           Text="Interpolate robot speed and extrusion RPM per layer. Print feedback uses the live notes and caps long layers at print speed — cut length / layer time still stretch the file from low to high."/>
 
                                 <StackPanel IsVisible="{Binding Additive.LayerSpeedAdaptEnabled}" Spacing="8">
                                     <Grid Margin="0,2,0,0">
@@ -1631,7 +1681,18 @@
                                                        Minimum="0.1" Maximum="2000" Increment="1"
                                                        FormatString="F0" FontSize="11"/>
                                     </Grid>
-
+                                    <Grid Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Print notes" Classes="LabelMuted" FontSize="10"
+                                                   VerticalAlignment="Center"
+                                                   ToolTip.Tip="1-based layer:percent from the live print. 63:-20 = layer 63 twenty percent slower than the mapped speed."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                   Text="{Binding Additive.LayerSpeedNotes, Mode=TwoWay}"
+                                                   Watermark="63:-20"/>
+                                    </Grid>
                                 </StackPanel>
 
                                 <!-- Proximity correction. Deliberately ONE checkbox and no numbers:
@@ -1719,7 +1780,7 @@
                                     <ColumnDefinition Width="80"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="Wipe ramp (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                           ToolTip.Tip="Default is layer height + 2 mm and tracks layer height until you type a different value. Positive: last N mm of wipe length ramps RPM to zero. Negative: extend |N| mm past wipe length with squeeze ramp."/>
+                                           ToolTip.Tip="Shop −1 = dip 1 mm in −Z into the bead with RPM 0, then wipe length (reverse fires on that smash). Positive: last N mm of wipe length ramps RPM to zero. Smash depth is capped at layer height."/>
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeRampMm}"/>
                             </Grid>
 
@@ -2235,7 +2296,7 @@
 
                             <!-- Brim (collapsible group under EFFECTS) -->
                             <Expander Classes="SectionExpander" Header="BRIM" IsExpanded="False"
-                                      ToolTip.Tip="Bed-adhesion brim: outward offset loops around the first layer. Generated as the last toolpath step, so it wraps X-bracing and any other first-layer additions.">
+                                      ToolTip.Tip="Bed-adhesion brim: offset loops around the first layer, outside the footprint and/or inside interior holes. Generated as the last toolpath step, so it wraps X-bracing and any other first-layer additions.">
                                 <StackPanel Margin="0,2,0,4">
                                     <CheckBox Margin="8,2,8,4"
                                               Content="Enable brim"
@@ -2247,32 +2308,25 @@
                                         <Grid Margin="8,2,8,4">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="110"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Direction" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Which side of the path the loops sit on.&#x0a;&#x0a;Offsetting the footprint produces ONE boundary that runs down BOTH sides of the path — out along one side, round the end, and back along the other. Measured on a real open wall it comes to 2.01x the path length. So this does not offset twice; it picks which stretches of that one boundary to keep.&#x0a;&#x0a;Outside: the outer side only. What brim did before this setting existed.&#x0a;&#x0a;Inside: the other side — the concave side of an open wall, or the bore of a closed one.&#x0a;&#x0a;Both: the whole boundary, outer side first so the run crosses over once rather than per loop.&#x0a;&#x0a;Side is measured against the path&apos;s direction of travel, so a run stays on one side for its whole length even where the wall bends both ways. If it picks the side you did not want, switch it. The inside runs out of room and stops on its own once the loops no longer fit."/>
+                                            <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
+                                                       ItemsSource="{Binding Additive.BrimDirectionOptions}"
+                                                       SelectedItem="{Binding Additive.BrimDirectionDisplay, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <Grid Margin="8,2,8,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="80"/>
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Grid.Column="0" Text="Offset loops" VerticalAlignment="Center" Classes="LabelMuted"
                                                        ToolTip.Tip="How many loops to print around the part. More loops = wider skirt = stronger hold."/>
                                             <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BrimLoops, Mode=TwoWay}"/>
                                         </Grid>
-                                        <Grid Margin="8,2,8,4">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="80"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="Brim speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"
-                                                       ToolTip.Tip="Fixed speed for the brim only. Ignores print speed and the Adaptive Speed range — the brim is bed adhesion, not part shape. Capped at 60 mm/s. RPM follows the speed, so flow stays correct."/>
-                                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BrimSpeed, Mode=TwoWay}"/>
-                                        </Grid>
-                                        <Grid Margin="8,2,8,4">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="80"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="Brim RPM (%)" VerticalAlignment="Center" Classes="LabelMuted"
-                                                       ToolTip.Tip="Absolute extrusion RPM for the brim. 0 = let RPM follow brim speed. Raise it to lay a deliberately fat brim for adhesion despite the slow speed — this bypasses every flow scale, so it will not be pulled back down. Capped at 99 %."/>
-                                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BrimRpmPercent, Mode=TwoWay}"/>
-                                        </Grid>
                                         <TextBlock Margin="10,0,10,4" FontSize="10" Opacity="0.6" TextWrapping="Wrap"
-                                                   Text="Loops are one bead width apart, printed outermost-in before the part so the innermost loop fuses to the first bead. Brim speed is fixed and independent of Adaptive Speed."/>
+                                                   Text="Loops are one bead width apart and print before the part, farthest edge first, so the last loop fuses to its first bead. Inward loops work the same way measured from each hole edge. Brim speed is fixed and independent of Adaptive Speed."/>
                                     </StackPanel>
                                 </StackPanel>
                             </Expander>
@@ -2630,6 +2684,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <ComboBox Grid.Column="0"
                                       HorizontalAlignment="Stretch"
@@ -2637,6 +2692,12 @@
                                       ItemsSource="{Binding Additive.AvailableHomePositionNames}"
                                       SelectedItem="{Binding Additive.SelectedHomePositionName, Mode=TwoWay}"/>
                             <Button Grid.Column="1"
+                                    Content="GO"
+                                    Classes="ToolbarButton"
+                                    Margin="0,0,4,0"
+                                    Command="{Binding Additive.GoToSelectedHomeCommand}"
+                                    ToolTip.Tip="Put the viewport robot on this pose so you can confirm it. Does not move the live arm."/>
+                            <Button Grid.Column="2"
                                     Content="Set Default"
                                     Classes="ToolbarButton"
                                     Command="{Binding Additive.SetDefaultHomePositionCommand}"
@@ -2845,6 +2906,34 @@
                                        Text="{Binding Additive.ExtrusionSpeedOffset, Mode=TwoWay}"
                                        PlaceholderText="+/-"
                                        ToolTip.Tip="Optional ±% adjustment. +10 exports 10 points higher; -10 exports 10 points lower. Leave empty for no change."/>
+                        </Grid>
+
+                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,44,44">
+                            <TextBlock Grid.Column="0" Text="First layer print speed"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Print speed on layer 0 only. The number is the current first-layer speed (mm/s). +/- is a percent of that speed — +20 exports 1.20×, -20 is 0.80×. Later layers keep the job print speed."/>
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Additive.FirstLayerSpeedBase, StringFormat={}{0:F0}}"
+                                       VerticalAlignment="Center" TextAlignment="Right" Classes="LabelMuted"
+                                       ToolTip.Tip="First-layer print speed (mm/s) before this % increase."/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox" Margin="4,0,0,0"
+                                       Text="{Binding Additive.FirstLayerPrintSpeedOffset, Mode=TwoWay}"
+                                       PlaceholderText="+/-"
+                                       ToolTip.Tip="Optional ±% of first-layer print speed. +20 = 20% faster on layer 0 only. Empty = no change."/>
+                        </Grid>
+
+                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,44,44">
+                            <TextBlock Grid.Column="0" Text="First layer RPM"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Extrusion RPM on layer 0 only. Same +/- box as Extrusion Speed — +10 exports 10 points higher on the first layer. Later layers keep Extrusion Speed."/>
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Additive.FirstLayerRpmBase, StringFormat={}{0:F0}%}"
+                                       VerticalAlignment="Center" TextAlignment="Right" Classes="LabelMuted"
+                                       ToolTip.Tip="First-layer RPM (%) before this +/-."/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox" Margin="4,0,0,0"
+                                       Text="{Binding Additive.FirstLayerRpmOffset, Mode=TwoWay}"
+                                       PlaceholderText="+/-"
+                                       ToolTip.Tip="Optional ± RPM points on layer 0 only. +10 = ten points higher; -10 = lower. Empty = no change."/>
                         </Grid>
 
                         </StackPanel>

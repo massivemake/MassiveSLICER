@@ -4155,6 +4155,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Workflow + TOOL # before models so mesh/toolpath select cannot snap back to PRINT / T1.
         RestoreKrlFramesFromWorkspace(doc);
         RestoreLfam3WorkflowFromWorkspace(doc);
+        RestoreHomePositionFromWorkspace(doc);
 
         if (Enum.TryParse<RightPanelTab>(doc.RightPanelTab, out var tab)
             && tab is RightPanelTab.Settings or RightPanelTab.Toolpath)
@@ -4182,6 +4183,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         // the saved ROBOT CELL pickers so the file opens the way it was closed.
         RestoreKrlFramesFromWorkspace(doc);
         RestoreLfam3WorkflowFromWorkspace(doc);
+        RestoreHomePositionFromWorkspace(doc);
 
         Viewport.RestoreSimCameraKeyframes(doc.UiSession?.SimCameraKeyframes);
 
@@ -4235,6 +4237,25 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (tool <= 0 && bse <= 0) return;
         robot.SelectKrlFrames(tool, bse);
         Console.Log($"[workspace] Restored TOOL #{robot.KrlToolIndex}  BASE #{robot.KrlBaseIndex}.");
+    }
+
+    /// <summary>
+    /// Workspace-selected home wins over the cell default. Stash the name so a
+    /// later cell-swap <c>UpdateFromCell</c> does not snap back to "Home".
+    /// </summary>
+    private void RestoreHomePositionFromWorkspace(WorkspaceDocument doc)
+    {
+        var name = doc.UiSession?.SelectedHomePositionName;
+        if (string.IsNullOrWhiteSpace(name)) return;
+        Viewport.SetPendingWorkspaceHome(name, doc.UiSession?.SelectedHomeAngles);
+        if (Viewport.AdditiveSettings is { } add)
+        {
+            if (doc.UiSession?.SelectedHomeAngles is { Length: >= 6 } ang)
+                add.AddHomePosition(name, ang);
+            else
+                add.SelectedHomePositionName = name;
+        }
+        Console.Log($"[workspace] Home '{name}' — export PTP uses this pose.");
     }
 
     void RestoreLfam3WorkflowFromWorkspace(WorkspaceDocument doc)
@@ -4324,10 +4345,25 @@ public sealed class MainWindowViewModel : ViewModelBase
     private string CapturePrefsJson()
         => JsonSerializer.Serialize(AppPreferences, PrefsJsonOptions);
 
+    /// <summary>Order-sensitive signature of the live structural support set — used to
+    /// detect whether an undo/redo actually changed it (a re-slice is only worth firing
+    /// when it did).</summary>
+    private string DescribeStructuralSupportSet()
+        => string.Join("|", RightPanel.Additive.StructuralSupports.Select(s =>
+            $"{s.Name}:{s.Shape}:{s.AnchorX:0.###},{s.AnchorY:0.###},{s.AnchorLayer}:"
+            + $"{s.CenterX:0.###},{s.CenterY:0.###}:{s.WidthMm:0.###}x{s.DepthMm:0.###}:"
+            + $"{s.RotationDeg:0.###}:{s.LayersUp}/{s.LayersDown}:{s.Enabled}"));
+
     private void ApplyPrefsFromJson(string json)
     {
         var copy = JsonSerializer.Deserialize<AppPreferences>(json, PrefsJsonOptions);
         if (copy is null) return;
+
+        // Structural Supports are baked INTO the toolpath by the slicer, so restoring them
+        // in settings is invisible until a re-slice. Undoing a support delete used to look
+        // like it had failed for exactly this reason: the panel came back, the geometry
+        // didn't. Compare before/after and re-slice when the set actually changed.
+        string supportsBefore = DescribeStructuralSupportSet();
 
         _applyingUndoRedo = true;
         try
@@ -4341,6 +4377,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         finally
         {
             _applyingUndoRedo = false;
+        }
+
+        if (DescribeStructuralSupportSet() != supportsBefore)
+        {
+            Console.Log("[support] undo/redo changed the structural supports — re-slicing so "
+                + "the toolpath matches what the panel now shows.");
+            Viewport.UpdateSliceCommand?.Execute(null);
         }
     }
 
@@ -4412,6 +4455,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LayerSpeedBasisDisplay    = copy.LayerSpeedBasisDisplay;
         live.LayerSpeedMinMmS          = copy.LayerSpeedMinMmS;
         live.LayerSpeedMaxMmS          = copy.LayerSpeedMaxMmS;
+        live.LayerSpeedNotes           = copy.LayerSpeedNotes;
         live.SeamGuidePoints         = copy.SeamGuidePoints;
         live.PaintMarks              = copy.PaintMarks;
         live.StructuralSupports      = copy.StructuralSupports;
@@ -4460,8 +4504,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
         live.BrimEnabled            = copy.BrimEnabled;
         live.BrimLoops              = copy.BrimLoops;
-        live.BrimSpeedMmS           = copy.BrimSpeedMmS;
-        live.BrimRpmPercent         = copy.BrimRpmPercent;
+        live.BrimDirectionDisplay   = copy.BrimDirectionDisplay;
         live.XBracingEnabled        = copy.XBracingEnabled;
         live.XBracingDepthMm        = copy.XBracingDepthMm;
         live.XBracingDepthBottomMm  = copy.XBracingDepthBottomMm;
@@ -4495,6 +4538,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.WaveGradientCurve      = copy.WaveGradientCurve;
         live.TemperatureOffset      = copy.TemperatureOffset;
         live.ExtrusionSpeedOffset   = copy.ExtrusionSpeedOffset;
+        live.FirstLayerPrintSpeedOffset = copy.FirstLayerPrintSpeedOffset;
+        live.FirstLayerRpmOffset    = copy.FirstLayerRpmOffset;
         live.ExtrusionRpmOverridePercent = copy.ExtrusionRpmOverridePercent;
         live.PatternType            = copy.PatternType;
         live.PatternMapping         = copy.PatternMapping;
@@ -4742,8 +4787,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.BumpMultiPlanarStamp();
         add.BrimEnabled         = p.BrimEnabled;
         add.BrimLoops           = p.BrimLoops;
-        add.BrimSpeed           = p.BrimSpeedMmS;
-        add.BrimRpmPercent      = p.BrimRpmPercent;
+        add.BrimDirectionDisplay = p.BrimDirectionDisplay;
         add.XBracingEnabled     = p.XBracingEnabled;
         add.XBracingDepthMm     = p.XBracingDepthMm;
         add.XBracingDepthBottomMm = p.XBracingDepthBottomMm;
@@ -4791,6 +4835,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         };
         add.TemperatureOffset    = p.TemperatureOffset;
         add.ExtrusionSpeedOffset = p.ExtrusionSpeedOffset;
+        add.FirstLayerPrintSpeedOffset = p.FirstLayerPrintSpeedOffset;
+        add.FirstLayerRpmOffset  = p.FirstLayerRpmOffset;
         add.ExtrusionRpmOverridePercent = p.ExtrusionRpmOverridePercent;
         add.PatternType         = p.PatternType;
         add.PatternMapping      = add.PatternMappingOptions.Contains(p.PatternMapping)
@@ -4837,22 +4883,21 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.LayerSpeedBasisDisplay    = p.LayerSpeedBasisDisplay;
         add.LayerSpeedMinMmS          = p.LayerSpeedMinMmS;
         add.LayerSpeedMaxMmS          = p.LayerSpeedMaxMmS;
+        add.LayerSpeedNotes           = p.LayerSpeedNotes ?? "";
         add.SetSeamGuides(p.SeamGuidePoints
             .Where(a => a is { Length: >= 3 })
             .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
-        add.StructuralSupports.Clear();
-        add.StructuralSupports.AddRange(p.StructuralSupports
-            .Where(a => a is { Length: >= 12 })
-            .Select(a => new StructuralSupportSpec
-            {
-                Shape = a[0] >= 1f ? SupportShapeKind.Circle : SupportShapeKind.Rectangle,
-                AnchorX = a[1], AnchorY = a[2], AnchorLayer = (int)a[3],
-                LayersUp = (int)a[4], LayersDown = (int)a[5],
-                CenterX = a[6], CenterY = a[7],
-                WidthMm = a[8], DepthMm = a[9], RotationDeg = a[10],
-                Enabled = a[11] >= 0.5f,
-            }));
-        add.SelectedSupportIndex = add.StructuralSupports.Count > 0 ? 0 : -1;
+        // Structural Supports are NOT read from preferences any more — they belong to the
+        // workspace (WorkspaceUiSession.StructuralSupports). Reading them here is what made
+        // a support survive app close/reopen and reappear on an unrelated model, invisibly
+        // modifying its toolpath. Meshes do not come back on relaunch; neither should these.
+        // The preferences fields are deliberately LEFT IN PLACE rather than deleted, so
+        // restoring global storage stays a one-line change if it is ever wanted.
+        //
+        // Deliberately NOT clearing add.StructuralSupports here. This method runs on every
+        // settings undo/redo (ApplyPrefsFromJson) and on preset apply, so clearing would
+        // delete the user's pockets whenever they pressed Ctrl+Z on an unrelated setting.
+        // A fresh app already starts with none, and opening a workspace fills them in.
         add.SetPaintMarks(p.PaintMarks
             .Where(a => a is { Length: >= 5 })
             .Select(a => new PaintMark(
@@ -5097,8 +5142,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.MultiPlanarAxisX = add.MultiPlanarAxisX;
         p.BrimEnabled          = add.BrimEnabled;
         p.BrimLoops            = add.BrimLoops;
-        p.BrimSpeedMmS         = add.BrimSpeed;
-        p.BrimRpmPercent       = add.BrimRpmPercent;
+        p.BrimDirectionDisplay = add.BrimDirectionDisplay;
         p.XBracingEnabled      = add.XBracingEnabled;
         p.XBracingDepthMm      = add.XBracingDepthMm;
         p.XBracingDepthBottomMm = add.XBracingDepthBottomMm;
@@ -5132,6 +5176,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.WaveGradientCurve    = add.WaveGradientCurve;
         p.TemperatureOffset    = add.TemperatureOffset;
         p.ExtrusionSpeedOffset = add.ExtrusionSpeedOffset;
+        p.FirstLayerPrintSpeedOffset = add.FirstLayerPrintSpeedOffset;
+        p.FirstLayerRpmOffset  = add.FirstLayerRpmOffset;
         p.ExtrusionRpmOverridePercent = add.ExtrusionRpmOverridePercent;
         p.PatternType          = add.PatternType;
         p.PatternMapping       = add.PatternMapping;
@@ -5177,6 +5223,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.LayerSpeedBasisDisplay    = add.LayerSpeedBasisDisplay;
         p.LayerSpeedMinMmS          = add.LayerSpeedMinMmS;
         p.LayerSpeedMaxMmS          = add.LayerSpeedMaxMmS;
+        p.LayerSpeedNotes           = add.LayerSpeedNotes ?? "";
         p.SeamGuidePoints = add.SeamGuides
             .Select(g => new[] { (float)g.X, (float)g.Y, (float)g.Z })
             .ToList();
@@ -5186,14 +5233,12 @@ public sealed class MainWindowViewModel : ViewModelBase
                 (float)m.Kind, (float)m.BridgeRole, (float)m.SupportStyle,
                 (float)m.SupportSide })
             .ToList();
-        p.StructuralSupports = add.StructuralSupports
-            .Select(s => new[] {
-                s.Shape == SupportShapeKind.Circle ? 1f : 0f,
-                s.AnchorX, s.AnchorY, s.AnchorLayer,
-                s.LayersUp, s.LayersDown,
-                s.CenterX, s.CenterY, s.WidthMm, s.DepthMm, s.RotationDeg,
-                s.Enabled ? 1f : 0f })
-            .ToList();
+        // Supports live in the workspace now. Write these EMPTY rather than skipping them:
+        // skipping would leave whatever the last build wrote sitting in prefs.json forever,
+        // and stale pockets that outlive their own deletion are the whole bug being fixed.
+        // The fields stay in AppPreferences so re-enabling global storage is a one-liner.
+        p.StructuralSupports = [];
+        p.StructuralSupportNames = [];
         p.CurvedBoundarySource       = add.CurvedBoundarySourceDisplay;
         p.CurvedAutoDetectBandMm     = add.CurvedAutoDetectBandMm;
         p.CurvedEnableRegionSplit    = add.CurvedEnableRegionSplit;
