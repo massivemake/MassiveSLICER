@@ -787,10 +787,25 @@ public static class PlanarSlicer
             }
         }
 
-        // Bead width as the stitch threshold, the same number the layer-change step uses, so the two
-        // levels cannot disagree about what counts as "close enough to keep printing".
+        // PARKED 2026-08-27 — passing 0 restores the original behaviour: every contour-to-contour
+        // step becomes a travel, with no distance test.
+        //
+        // The stitch existed because those travels carried a real penalty: extruder off, exact
+        // stop, WAIT SEC 0.5, move, restart, WAIT SEC 0.15 — measured at 206 dead stops and 137 s
+        // of pure WAIT on Cow_Collumn_Bottom_01. That penalty is GONE: the Lab KRL recipe now
+        // ships ExtrusionStartWaitSec / ExtrusionResumeWaitSec / SsPreTravelWaitSec all at 0, so
+        // every wait in an export is WAIT SEC 0 — an $ADVANCE flush, not a dwell. Verified on
+        // main 610 and on this branch: byte-identical travel profiles, 14 exact stops in 88k moves.
+        //
+        // What remains without the stitch is the motion cost only — a travel still drops C_VEL, so
+        // the robot decelerates to a stop and accelerates again. Unquantified on current geometry.
+        //
+        // ⚠️ The dwells being 0 is a LAB SETTING, not a code guarantee — the recipe is re-pulled on
+        // every sign-in and every export. If Thom ever restores non-zero waits, the pauses come
+        // back and this wants switching on again. To re-enable: pass settings.BeadWidth.
+        // ContourSeamPlanner keeps the parameter and its tests, so nothing needs rebuilding.
         ContourSeamPlanner.EmitOptimizedContours(
-            tracks, z, layer, settings.ZigZagSeam, layer.Index, settings.BeadWidth);
+            tracks, z, layer, settings.ZigZagSeam, layer.Index, stitchMaxXyMm: 0f);
         var partPolys = FilterFillPolys(insetContours, insetClosed, surfaceMode);
         if (partPolys.Count == 0)
             partPolys = insetContours.Where(c => c.Count >= 3).ToList();
