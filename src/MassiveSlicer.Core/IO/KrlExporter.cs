@@ -160,9 +160,9 @@ public sealed record KrlExportSettings
 
     public float[] HomePosition { get; init; } = [0f, -90f, 90f, 0f, 15f, 0f];
     /// <summary>
-    /// Joint PTP for the Z+50 approach (A1–A6). Same cartesian pose as the old
-    /// approach LIN. Null = emit that LIN (do not write <c>PTP {X Y Z}</c> —
-    /// missing S/T is a different config).
+    /// Unused. Approach is a cartesian PTP at first-LIN XY / Z+<see cref="ApproachZMm"/>
+    /// with S/T from <see cref="HomePosition"/> so the controller IK hits that pose.
+    /// Viewport joint IK of the same point was not FK-true on the robot (TCP through the bed).
     /// </summary>
     public float[]? ApproachJoints { get; init; }
     /// <summary>LFAM 1 rail: E1 position (mm) emitted in the header HOME PTP. NaN = omit.</summary>
@@ -605,16 +605,11 @@ public static class KrlExporter
         float e1Approach = E1ForBase(p0, s, ref lastE1);
         var approach = new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm);
         sb.AppendLine(";approach");
-        if (s.ApproachJoints is { Length: >= 6 } aj)
-        {
-            // Joint PTP of the same cartesian pose as the LIN below.
-            // Do not emit PTP {X Y Z} — no S/T is a different wrist.
-            sb.AppendLine(FormatPtpJoints(aj, e1Approach, s));
-        }
-        else
-        {
-            sb.AppendLine(FormatLin(approach, a0, b0, c0, e1Approach));
-        }
+        // Cartesian PTP at Z+ApproachZ, same ABC as the first LIN. S/T from the home
+        // joint PTP so KUKA IK keeps that wrist — not S=0 T=0, and not viewport joint
+        // IK (those joints converted on the controller to Z through the bed).
+        var (apprS, apprT) = KukaStatusTurn.FromJoints(s.HomePosition);
+        sb.AppendLine(FormatPtpCartesian(approach, a0, b0, c0, e1Approach, apprS, apprT));
         // Exact-stop LIN down to the bed (same ABC — no wrist change).
         sb.AppendLine(FormatLinExact(p0, a0, b0, c0, e1Approach));
         // Approach is a travel. First print start writes the single RPM =.
@@ -1460,8 +1455,8 @@ public static class KrlExporter
         => E1ForMove(null, basePt, s, ref lastE1);
 
     /// <summary>
-    /// First-print approach in BASE (Z = touchdown + ApproachZ). Viewport IK uses this
-    /// to solve the joint PTP that matches the old approach LIN.
+    /// First-print approach in BASE (Z = touchdown + ApproachZ). Export writes this
+    /// pose as a cartesian PTP with S/T from home.
     /// </summary>
     public static bool TryGetApproachCartesian(
         Toolpath toolpath, KrlExportSettings s,
@@ -1500,19 +1495,15 @@ public static class KrlExporter
         return approachWorld - baseW;
     }
 
-    private static string FormatPtpJoints(float[] h, float e1, KrlExportSettings s)
-    {
-        var ptp = $"PTP {{A1 {h[0].ToString("F3", Inv)}, A2 {h[1].ToString("F3", Inv)}, " +
-                  $"A3 {h[2].ToString("F3", Inv)}, A4 {h[3].ToString("F3", Inv)}, " +
-                  $"A5 {h[4].ToString("F3", Inv)}, A6 {h[5].ToString("F3", Inv)}";
-        if (!float.IsNaN(s.HomeE1Mm) || s.RotaryExternalKinematic)
-        {
-            ptp += $", E1 {e1.ToString("F3", Inv)}";
-            if (s.RotaryExternalKinematic)
-                ptp += ", E2 0.000, E3 0.000";
-        }
-        return ptp + "}";
-    }
+    /// <summary>
+    /// Cartesian PTP of the approach TCP. S/T must be present — omitting them is S=0 T=0.
+    /// </summary>
+    private static string FormatPtpCartesian(
+        Vector3 p, float a, float b, float c, float e1, int status, int turn)
+        => $"PTP {{X {p.X.ToString("F2", Inv)}, Y {p.Y.ToString("F2", Inv)}, Z {p.Z.ToString("F2", Inv)}, " +
+           $"A {a.ToString("F3", Inv)}, B {b.ToString("F3", Inv)}, C {c.ToString("F3", Inv)}, " +
+           $"E1 {e1.ToString("F3", Inv)}, E2 0.000, E3 0.000, E4 0.000, E5 0.000, E6 0.000, " +
+           $"S {status}, T {turn}}}";
 
     // C_VEL: approximate (blended) positioning — used for extrude moves so the robot
     // never fully stops mid-bead and maintains a smooth velocity profile.

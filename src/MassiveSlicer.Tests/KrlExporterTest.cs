@@ -500,14 +500,14 @@ public sealed class KrlExporterTest
 
         var krl = KrlExporter.Export(tp, settings);
 
-        var zValues = Regex.Matches(krl, @"Z (-?\d+\.\d+)")
+        var motionZ = Regex.Matches(krl, @"(?:PTP|LIN) \{[^}]*Z (-?\d+\.\d+)")
             .Select(m => float.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture))
-            .Take(3)
+            .Take(2)
             .ToArray();
 
-        Assert.Equal(3, zValues.Length);
-        Assert.InRange(zValues[0], 52f, 54f);   // approach: layer Z 3 + 50 mm
-        Assert.InRange(zValues[1], 2.5f, 3.5f);  // first layer touch-down at BASE Z ≈ 0
+        Assert.Equal(2, motionZ.Length);
+        Assert.InRange(motionZ[0], 52f, 54f);   // approach PTP: layer Z 3 + 50 mm
+        Assert.InRange(motionZ[1], 2.5f, 3.5f);  // first layer touch-down at BASE Z ≈ 0
     }
 
     [Fact]
@@ -565,7 +565,7 @@ public sealed class KrlExporterTest
     }
 
     [Fact]
-    public void Export_first_approach_is_joint_ptp_when_joints_known()
+    public void Export_first_approach_is_cartesian_ptp_50mm_above_first_lin()
     {
         var tp = new Toolpath();
         var layer = new ToolpathLayer(0, 0.5f) { PlaneNormal = new Vector3(0, 0.7071068f, 0.7071068f) };
@@ -575,6 +575,7 @@ public sealed class KrlExporterTest
             MoveKind.Extrude) { Normal = layer.PlaneNormal });
         tp.Layers.Add(layer);
 
+        var home = new float[] { -0.220f, -79.080f, 115.260f, 179.690f, 22.580f, -179.830f };
         var krl = KrlExporter.Export(tp, new KrlExportSettings
         {
             ProgramName             = "approach_ptp",
@@ -582,17 +583,20 @@ public sealed class KrlExporterTest
             RotaryExternalKinematic = true,
             RotaryMachineDefIndex   = 2,
             BaseDataIndex           = 1,
-            ApproachJoints          = [0f, -85f, 90f, 15f, 0f, 0f],
+            HomePosition            = home,
+            // Viewport IK joints must not win — they converted to Z through the bed.
+            ApproachJoints          = [5.020f, -22.698f, 92.743f, 185.693f, 70.064f, -137.272f],
         });
 
         Assert.Contains(";approach", krl);
-        Assert.Contains("PTP {A1 0.000, A2 -85.000, A3 90.000, A4 15.000, A5 0.000, A6 0.000, E1 0.000, E2 0.000, E3 0.000}", krl);
-        Assert.DoesNotContain("PTP {X", krl);
+        Assert.DoesNotContain("PTP {A1 5.020", krl);
+        Assert.Contains("PTP {X -101.13, Y -451.46, Z 50.50", krl);
+        Assert.Contains("S 4, T 35", krl);
         Assert.Contains("LIN {X -101.13, Y -451.46, Z 0.50", krl);
     }
 
     [Fact]
-    public void Export_first_approach_stays_lin_without_joints()
+    public void Export_first_approach_cartesian_ptp_uses_home_status_turn()
     {
         var tp = new Toolpath();
         var layer = new ToolpathLayer(0, 0.5f) { PlaneNormal = Vector3.UnitZ };
@@ -608,8 +612,9 @@ public sealed class KrlExporterTest
             ApproachZMm = 50f,
         });
 
-        Assert.Contains("LIN {X -101.13, Y -451.46, Z 50.50", krl);
-        Assert.DoesNotContain("PTP {X", krl);
+        Assert.Contains("PTP {X -101.13, Y -451.46, Z 50.50", krl);
+        Assert.Contains("S 4, T 2", krl); // default home A2=-90, A5=15
+        Assert.DoesNotContain("LIN {X -101.13, Y -451.46, Z 50.50", krl);
     }
 
     [Fact]

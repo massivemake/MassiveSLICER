@@ -18277,27 +18277,6 @@ public partial class ViewportView : UserControl
         return false;
     }
 
-    /// <summary>
-    /// Joints for the Z+50 approach — same TCP as the old approach LIN.
-    /// Cartesian PTP {X Y Z} without S/T is a different KUKA config; do not use it.
-    /// </summary>
-    float[]? TrySolveApproachJoints(Toolpath toolpath, KrlExportSettings s)
-    {
-        if (_ikSolver is null) return null;
-        if (!KrlExporter.TryGetApproachCartesian(toolpath, s, out var basePt, out var a, out var b, out var c))
-            return null;
-        RefreshIkSceneKinematics();
-        var world = KrlExporter.BaseToWorld(basePt, s.RobrootWorldPos, s.BaseDataOffset, s.SliceBedWorldZ);
-        // LFAM 1: subtract ROBROOT at HomeE1, not the E1=0 cell origin.
-        var rel = KrlExporter.ApproachIkTargetRobroot(world, s);
-        var tgt = new TkVector3(rel.X, rel.Y, rel.Z);
-        var seed = s.HomePosition is { Length: >= 6 } h
-            ? new[] { h[0], h[1], h[2], h[3], h[4], h[5] }
-            : new[] { 0f, -90f, 90f, 0f, 15f, 0f };
-        var rot = _ikSolver.TargetRotFromKukaAbc(a, b, c);
-        return _ikSolver.Solve(tgt, seed, rot);
-    }
-
     private async Task<bool> WriteKrlAsync(
         ViewportViewModel vm,
         Toolpath toolpath,
@@ -18474,9 +18453,9 @@ public partial class ViewportView : UserControl
         };
         exportSettings = WithRpmInputs(exportSettings, settings);
         exportSettings = KrlPostProcessRecipe.Apply(exportSettings, postProcess);
-        var approachJ = TrySolveApproachJoints(toolpath, exportSettings);
-        if (approachJ is { Length: >= 6 })
-            exportSettings = exportSettings with { ApproachJoints = approachJ };
+        // Approach is cartesian PTP at Z+ApproachZ with S/T from home. Do not
+        // attach viewport IK joints — those converted on the controller to a TCP
+        // through the bed (Rev108 Z ≈ −5 instead of +50).
 
         string krl;
         try
