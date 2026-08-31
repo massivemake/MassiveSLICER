@@ -28,6 +28,18 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     public bool  IsWipe { get; init; }
 
     /// <summary>
+    /// Print move that starts at the Drive lookahead vertex
+    /// (<c>;Pre-Travel Start</c>, 100 mm before the next wipe/travel).
+    /// </summary>
+    public bool IsPreTravelStart { get; init; }
+
+    /// <summary>
+    /// Print move that ends at the Drive lookbehind vertex
+    /// (<c>;Post-Travel Start</c>, 100 mm after travel end).
+    /// </summary>
+    public bool IsPostTravelEnd { get; init; }
+
+    /// <summary>
     /// Part of a perimeter/shell loop — the printed skin, as opposed to infill, X-bracing,
     /// Formbound fill, supports or brim. Set only by <c>ContourSeamPlanner</c>, the single
     /// place walls are emitted, so everything else defaults to false.
@@ -65,7 +77,7 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     /// rendered as its own display layer so fingers can be isolated/hidden.</summary>
     public bool IsLightning { get; init; }
 
-    /// <summary>RPM scale [0, 1] for wipe ramp-down (1 = full extrusion speed).</summary>
+    /// <summary>RPM scale [0, 1] on wipe / resume (1 = full extrusion speed).</summary>
     public float WipeRpmScale { get; init; } = 1f;
 
     /// <summary>Post-travel resume ramp segment (stepped speed + RPM after travel).</summary>

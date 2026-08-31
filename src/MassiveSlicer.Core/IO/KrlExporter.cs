@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using MassiveSlicer.Core.Kinematics;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Slicing.Effects;
 
 namespace MassiveSlicer.Core.IO;
 
@@ -594,6 +595,8 @@ public static class KrlExporter
             return sb.ToString();
         }
 
+        toolpath = TravelMarkerPostProcessor.Apply(toolpath);
+
         var (firstMove, firstLayer) = firstEntry.Value;
         var (a0, b0, c0) = KukaAbc(firstLayer.PlaneNormal, s);
         var p0 = ToBase(firstMove.From, s);
@@ -669,12 +672,11 @@ public static class KrlExporter
                     float gapMm = MathF.Max(s.BeadWidthMm, 2f);
                     if (xy2 > gapMm * gapMm)
                     {
-                        WriteAn1HeatRestore(sb, s, ref an1Dipped);
                         inWipeSequence = false;
                         inZHopSequence = false;
                         if (s.UseTravelStartStop && !ssStopActive)
                         {
-                            WriteTravelStart(sb, s);
+                            WriteTravelStart(sb, s, ref an1Dipped);
                             ssStopActive = true;
                         }
                         else if (!s.UseTravelStartStop)
@@ -692,7 +694,6 @@ public static class KrlExporter
 
                 if (move.Kind == MoveKind.Travel)
                 {
-                    WriteAn1HeatRestore(sb, s, ref an1Dipped);
                     inWipeSequence = false;
                     if (move.ResumeWaitSec is { } tw)
                         pendingResumeWaitSec = tw;
@@ -703,7 +704,7 @@ public static class KrlExporter
                         {
                             if (s.UseTravelStartStop && !ssStopActive)
                             {
-                                WriteTravelStart(sb, s);
+                                WriteTravelStart(sb, s, ref an1Dipped);
                                 ssStopActive = true;
                             }
                             sb.AppendLine(";z-hop");
@@ -734,7 +735,7 @@ public static class KrlExporter
                         // Wipe/z-hop may already have opened ;travel start + RPM = 0.
                         if (!ssStopActive)
                         {
-                            WriteTravelStart(sb, s);
+                            WriteTravelStart(sb, s, ref an1Dipped);
                             ssStopActive = true;
                         }
                         if (move.IsLayerChange)
@@ -780,7 +781,7 @@ public static class KrlExporter
                         // Wipe opens a travel: RPM = 0 at ;travel start.
                         if (s.UseTravelStartStop && !ssStopActive)
                         {
-                            WriteTravelStart(sb, s);
+                            WriteTravelStart(sb, s, ref an1Dipped);
                             ssStopActive = true;
                         }
                         // First wipe LIN: E2 1.000 is a MassiveDRIVE suck-back flag
@@ -791,8 +792,10 @@ public static class KrlExporter
                         {
                             sb.AppendLine(";wipe");
                             if (!s.UseTravelStartStop)
+                            {
                                 sb.AppendLine(FormatExtruderOff(s, "extruder off (wipe)"));
-                            an1Dipped = WriteAn1WipeDip(sb, s) || an1Dipped;
+                                an1Dipped = WriteAn1WipeDip(sb, s) || an1Dipped;
+                            }
                             inWipeSequence = true;
                             wipeE2 = 1f;
                         }
@@ -847,7 +850,9 @@ public static class KrlExporter
                         }
 
                         WriteVelIfChanged(sb, speedMps, ref lastVelText);
+                        WritePreTravelTag(sb, move);
                         sb.AppendLine(FormatLin(to, ma, mb, mc, E1ForMove(move, to, s, ref lastE1)));
+                        WritePostTravelTag(sb, move);
                         lastAbc = (ma, mb, mc);
                         lastPos = to;
                         lastExtrudeSpeedMps = speedMps;
@@ -906,7 +911,9 @@ public static class KrlExporter
                         lastExtrudeAnoutText = extrudeKey;
                     }
 
+                    WritePreTravelTag(sb, move);
                     sb.AppendLine(FormatLin(to, ma, mb, mc, E1ForMove(move, to, s, ref lastE1)));
+                    WritePostTravelTag(sb, move);
                     lastExtrudeSpeedMps = extrudeSpeedMps;
                     lastExtrudeRpmScale = extrudeRpmScale;
                     lastAbc = (ma, mb, mc);
@@ -1197,6 +1204,7 @@ public static class KrlExporter
                 sb.AppendLine($"; First layer RPM {s.FirstLayerRpmPercent.ToString("F1", Inv)} %");
             sb.AppendLine($"; T1 {s.Temperature1.ToString("F0", Inv)} C  T2 {s.Temperature2.ToString("F0", Inv)} C  T3 {s.Temperature3.ToString("F0", Inv)} C");
             sb.AppendLine($"; Approach Z {s.ApproachZMm.ToString("F1", Inv)} mm");
+            sb.AppendLine($"; Pre-Travel / Post-Travel markers {TravelMarkerPostProcessor.MarkerDistanceMm.ToString("F0", Inv)} mm");
         }
 
         sb.AppendLine(";ENDFOLD (MassiveSLICER export)");
@@ -1532,21 +1540,35 @@ public static class KrlExporter
             : $"$ANOUT[4] = {text} ; {comment}";
 
     /// <summary>
-    /// Travel start: comment + <c>WAIT SEC 0</c> + <c>RPM = 0.00</c>.
-    /// The wait empties <c>$ADVANCE</c> so the screw does not stop mid-bead.
+    /// Travel start: comment + <c>WAIT SEC 0</c> + <c>RPM = 0.00</c> +
+    /// <c>T1 = 180</c> (A-10 reverse analog). The wait empties <c>$ADVANCE</c>
+    /// so the screw / analog do not change mid-bead. Dip lives here — not only
+    /// on <c>;wipe</c> — so a travel with wipe off still fires reverse.
     /// </summary>
-    private static void WriteTravelStart(StringBuilder sb, KrlExportSettings s)
+    private static void WriteTravelStart(StringBuilder sb, KrlExportSettings s, ref bool an1Dipped)
     {
-        _ = s;
         sb.AppendLine(";travel start");
         WriteAdvanceSync(sb);
         sb.AppendLine(FormatTravelRpmOff());
+        an1Dipped = WriteAn1WipeDip(sb, s, sync: false) || an1Dipped;
     }
 
     /// <summary>Close the travel. Print resume writes the single <c>RPM =</c>.</summary>
     private static void WriteTravelEnd(StringBuilder sb)
     {
         sb.AppendLine(";travel end");
+    }
+
+    private static void WritePreTravelTag(StringBuilder sb, ToolpathMove move)
+    {
+        if (move.IsPreTravelStart)
+            sb.AppendLine(TravelMarkerPostProcessor.PreTravelStartComment);
+    }
+
+    private static void WritePostTravelTag(StringBuilder sb, ToolpathMove move)
+    {
+        if (move.IsPostTravelEnd)
+            sb.AppendLine(TravelMarkerPostProcessor.PostTravelEndComment);
     }
 
     private static string FormatTravelRpmOff() => "RPM = 0.00";
@@ -1566,11 +1588,11 @@ public static class KrlExporter
     /// </summary>
     internal const int An1WipeTempC = 180;
 
-    private static bool WriteAn1WipeDip(StringBuilder sb, KrlExportSettings s)
+    private static bool WriteAn1WipeDip(StringBuilder sb, KrlExportSettings s, bool sync = true)
     {
         if (s.IsMilling) return false;
         if (s.Temperature1 < An1WipeTempC + 20f) return false;
-        WriteAdvanceSync(sb);
+        if (sync) WriteAdvanceSync(sb);
         sb.AppendLine($"T1 = {An1WipeTempC.ToString(Inv)}");
         return true;
     }

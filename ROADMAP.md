@@ -27,7 +27,8 @@ the Electron/JS prototype (`MassiveSlice`).
   (Fixed and Dynamic phase methods), relief patterns with twist/fade, and
   live effector points that locally shape amplitude.
 - **Export KRL** for KUKA KRC4: motion, temperatures, extruder RPM
-  (`$ANOUT`), per-layer adaptive speed/flow, resume ramps, wipes.
+  (`$ANOUT`), per-layer adaptive speed/flow, resume ramps, wipes,
+  Drive hop tags (`;Pre-Travel Start` / `;Post-Travel Start` at 100 mm).
 - **Validate before printing**: per-move reachability + wrist-singularity IK
   analysis, TCP auto-rotation repair, loud warnings and an export gate.
 - **Preview**: full toolpath rendering with bead (deposited material) view,
@@ -192,14 +193,18 @@ and the file ends with `END`; refuse/warn on mismatch. Strongest on the
 Send-to-Robot network path where the original transfer died.
 **Size:** small.
 
-### 2. Trustworthy reachability validation (placement workflow)
+### 2. Trustworthy reachability validation (placement workflow + hard export gate)
 **Why:** validation flagged 29k "unreachable" moves at Z 1690–2809 on a
 toolpath the robot physically printed through — because the model's in-app
 position didn't match its real position on the bed. A validator that cries
-wolf gets ignored.
-**What:** make placement-for-validation explicit: verify cell + model
-placement matches production before validating, so red/purple markers are
-predictions, not noise.
+wolf gets ignored. **Shop 2026-08-27 (opposite failure):** LFAM 2 Cow Column
+Rev46 exported and ran to ~73% then stopped fully extended (LIN X 2700 Z 0
+B=45 after X 2487 Z 305). IK counted the pose reachable (≤10 mm residual
+with A2/A3 clamped); export is Cartesian; "Export anyway" / NAS dump.
+Lab Print Note #88.
+**What:** make placement-for-validation explicit so red/purple markers are
+predictions, not noise; **refuse export** when IK is at joint clamp with
+residual; sync `lfam2.json` from live `$machine.dat`.
 **Size:** medium (workflow design more than code).
 
 ## P2 — Print quality & motion

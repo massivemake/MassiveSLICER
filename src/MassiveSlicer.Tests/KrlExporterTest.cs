@@ -502,12 +502,13 @@ public sealed class KrlExporterTest
 
         var motionZ = Regex.Matches(krl, @"(?:PTP|LIN) \{[^}]*Z (-?\d+\.\d+)")
             .Select(m => float.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture))
-            .Take(2)
+            .Take(3)
             .ToArray();
 
-        Assert.Equal(2, motionZ.Length);
-        Assert.InRange(motionZ[0], 52f, 54f);   // approach PTP: layer Z 3 + 50 mm
-        Assert.InRange(motionZ[1], 2.5f, 3.5f);  // first layer touch-down at BASE Z ≈ 0
+        Assert.Equal(3, motionZ.Length);
+        Assert.InRange(motionZ[0], 52f, 54f);   // fly hold-ori
+        Assert.InRange(motionZ[1], 52f, 54f);   // reorient in place
+        Assert.InRange(motionZ[2], 2.5f, 3.5f);  // first layer touch-down at BASE Z ≈ 0
     }
 
     [Fact]
@@ -543,6 +544,44 @@ public sealed class KrlExporterTest
         Assert.Equal(2135.45f, off.X, 2);
         Assert.Equal(-52.54f, off.Y, 2);
         Assert.Equal(916.31f, off.Z, 2);
+    }
+
+    [Fact]
+    public void Export_lfam3_first_layer_is_base_z_3_not_pos_act_919()
+    {
+        // Live make Send (555563084d9b): world first bead ≈ bed origin + (43.9, -359, 3).
+        // SRC / Drive file must be print-bed BASE (Z=3). $POS_ACT 919 = 916.31+3 after
+        // Drive adds meta.bed_origin — do not write 919 into the SRC.
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 919.31f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        layer.Moves.Add(new ToolpathMove(
+            new Vector3(2179.363f, -411.473f, 919.31f),
+            new Vector3(2179.363f, -300f, 919.31f),
+            MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+            PrintSpeedScale = 1f,
+        });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName     = "make",
+            ApproachZMm     = 50f,
+            RobrootWorldPos = new Vector3(0, 0, 1000),
+            BaseDataOffset  = new Vector3(2135.45f, -52.54f, -83.69f),
+            SliceBedWorldZ  = 916.31f,
+        });
+
+        var zValues = Regex.Matches(krl, @"(?:PTP|LIN) \{[^}]*Z (-?\d+\.\d+)")
+            .Select(m => float.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture))
+            .Take(3)
+            .ToArray();
+        Assert.Equal(3, zValues.Length);
+        Assert.InRange(zValues[0], 52.5f, 53.5f); // fly hold-ori
+        Assert.InRange(zValues[1], 52.5f, 53.5f); // reorient
+        Assert.InRange(zValues[2], 2.9f, 3.1f);   // first layer
+        Assert.DoesNotContain("Z 919", krl);
     }
 
     [Fact]
@@ -584,7 +623,6 @@ public sealed class KrlExporterTest
             RotaryMachineDefIndex   = 2,
             BaseDataIndex           = 1,
             HomePosition            = home,
-            // Viewport IK joints must not win — they converted to Z through the bed.
             ApproachJoints          = [5.020f, -22.698f, 92.743f, 185.693f, 70.064f, -137.272f],
         });
 
@@ -828,9 +866,10 @@ public sealed class KrlExporterTest
         });
         int wipeIdx = krl.IndexOf(";wipe", StringComparison.Ordinal);
         Assert.True(wipeIdx >= 0);
-        Assert.Contains("T1 = 180", krl);
-        int dipIdx = krl.IndexOf("T1 = 180", wipeIdx, StringComparison.Ordinal);
-        Assert.True(dipIdx > wipeIdx);
+        int travel = krl.IndexOf(";travel start", StringComparison.Ordinal);
+        Assert.True(travel >= 0 && travel < wipeIdx);
+        int dipIdx = krl.IndexOf("T1 = 180", travel, StringComparison.Ordinal);
+        Assert.True(dipIdx > travel && dipIdx < wipeIdx, "T1 = 180 is at travel start, not only at ;wipe");
         int restoreIdx = krl.IndexOf("T1 = 230", dipIdx, StringComparison.Ordinal);
         Assert.True(restoreIdx > dipIdx);
         int firstLin = krl.IndexOf("LIN {", wipeIdx, StringComparison.Ordinal);
@@ -844,6 +883,38 @@ public sealed class KrlExporterTest
         var wipeLin = krl.Substring(secondLin, secondNl - secondLin);
         Assert.Contains("C_VEL", wipeLin);
         Assert.Contains("E2 0.000", wipeLin);
+    }
+
+    [Fact]
+    public void Export_travel_without_wipe_still_dips_t1_at_travel_start()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(100, 0, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(150, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName            = "travel_no_wipe",
+            ExtrusionRpmPercent    = 20f,
+            PrintSpeedMps          = 0.04f,
+            Temperature1           = 230f,
+            TravelStartStopEnabled = true,
+        });
+
+        Assert.DoesNotContain(";wipe", krl);
+        int travel = krl.IndexOf(";travel start", StringComparison.Ordinal);
+        Assert.True(travel >= 0);
+        int rpmOff = krl.IndexOf("RPM = 0.00", travel, StringComparison.Ordinal);
+        int dip = krl.IndexOf("T1 = 180", travel, StringComparison.Ordinal);
+        int travelEnd = krl.IndexOf(";travel end", travel, StringComparison.Ordinal);
+        int restore = krl.IndexOf("T1 = 230", dip, StringComparison.Ordinal);
+        Assert.True(rpmOff > travel && dip > rpmOff && dip < travelEnd);
+        Assert.True(restore > travelEnd);
     }
 
     static int CountOccurrences(string haystack, string needle)
@@ -1195,6 +1266,7 @@ public sealed class KrlExporterTest
         Assert.Contains("; Extrusion RPM 50.0 %", krl);
         Assert.Contains("; T1 230 C  T2 225 C  T3 220 C", krl);
         Assert.Contains("; TOOL 1  BASE 2", krl);
+        Assert.Contains("; Pre-Travel / Post-Travel markers 100 mm", krl);
         Assert.Contains(";ENDFOLD (MassiveSLICER export)", krl);
     }
 
@@ -1204,6 +1276,7 @@ public sealed class KrlExporterTest
         var block = KrlExporter.BuildExportCommentBlock(new KrlExportSettings { ProgramName = "x" });
         Assert.Contains("; Material preset (none)", block);
         Assert.Contains("; MassiveSLICER (unknown)", block);
+        Assert.Contains("; Pre-Travel / Post-Travel markers 100 mm", block);
         Assert.DoesNotContain("; Workspace ", block);
     }
 
@@ -1215,6 +1288,45 @@ public sealed class KrlExporterTest
         Assert.Null(KrlExporter.MassWorkspaceFileName(@"Z:\Projects\job.src"));
         Assert.Null(KrlExporter.MassWorkspaceFileName(null));
         Assert.Null(KrlExporter.MassWorkspaceFileName(""));
+    }
+
+    [Fact]
+    public void Export_tags_pre_travel_start_wipe_and_post_travel_end()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(200, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(200, 0, 10), new Vector3(210, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ, IsWipe = true });
+        layer.Moves.Add(new ToolpathMove(new Vector3(210, 0, 10), new Vector3(250, 0, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(250, 0, 10), new Vector3(450, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName            = "drive_tags",
+            ExtrusionRpmPercent    = 20f,
+            PrintSpeedMps          = 0.04f,
+            TravelSpeedMps         = 0.6f,
+            WipeSpeedMps           = 0.6f,
+            TravelStartStopEnabled = true,
+        });
+
+        Assert.Contains("; Pre-Travel / Post-Travel markers 100 mm", krl);
+        int pre = krl.IndexOf(";Pre-Travel Start", StringComparison.Ordinal);
+        int travel = krl.IndexOf(";travel start", StringComparison.Ordinal);
+        int wipe = krl.IndexOf(";wipe", StringComparison.Ordinal);
+        int end = krl.IndexOf(";travel end", travel + 1, StringComparison.Ordinal);
+        int post = krl.IndexOf(";Post-Travel Start", StringComparison.Ordinal);
+        Assert.True(pre >= 0 && travel > pre && wipe > travel && end > wipe && post > end);
+
+        int lin100 = krl.LastIndexOf("LIN {X 100.00", pre, StringComparison.Ordinal);
+        Assert.True(lin100 >= 0 && lin100 < pre);
+        Assert.Contains("LIN {X 200.00", krl.Substring(pre, Math.Min(250, krl.Length - pre)));
+        Assert.Contains("LIN {X 350.00", krl.Substring(end, post - end + 80));
+        AssertNoDuplicateTravelResumeRpm(krl);
     }
 
     static void AssertNoDuplicateTravelResumeRpm(string krl)
