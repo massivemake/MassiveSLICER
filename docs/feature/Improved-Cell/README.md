@@ -1,615 +1,204 @@
-# Improved Cell Frames — Adaptation Plan
+# Improved Cell — what we are integrating, and why
 
-> **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task.
-> Branch: `feature/Improved-Cell` (already exists, tracks `origin/feature/Improved-Cell` at `0baf2e0`). Do **not** commit to `main`. This changes robot motion / IK / cell frames — keep it off `main` until LFAM 3 mill scrub + a print export are verified on the machine.
+**Branch:** `feature/Improved-Cell`  
+**Status:** contract + plan only. No kinematics code on this branch yet (`414bd21` was the first docs commit).  
+**Not for `main` until:** LFAM 3 mill scrub (nose on the path, not 0.5 m beside it) and a print export are verified on the machine.
 
-**Goal:** Steal the *kinematics contract* from the Robotics Library / RAPID proposal (named frames, cell-owned chain, TCP is not a joint, mill/print query the cell) and implement it in C# on the existing GLB FK — without importing `rl::mdl`, entity UUIDs, or `wobj0`/`tool0`.
-
-**Architecture:** Add a small Core model of **named frames** and a **tool kinematics spec**. Viewport IK stays `GltfNumericalIkSolver` (DLS on a fixed flange-local TCP). Mill and print stop inventing their own TCP meaning; they pass a target pose in BASE and a `SolveRecipe`. External axes stay typed: rail = moving ROBROOT, rotary = work-object spin.
-
-**Tech Stack:** C# / net8, existing `SceneNode` graph, `RobotFkController`, `GltfNumericalIkSolver`, cell JSON (`assets/cells/LFAM*/`). No new native deps.
+Task-by-task TDD lives in [PLAN.md](PLAN.md). This file is the product decision.
 
 ---
 
-## Do not adapt (non-goals — reject if a task drifts here)
+## One-sentence decision
 
-| Proposal item | Why we skip it |
+We are **not** porting the Robotics Library / RAPID cell architecture. We **are** taking its *contract* — named frames, cell-owned kinematics, TCP is a tool on the flange, mill and print do not own the arm — and implementing that contract in C# on the GLB FK we already trust.
+
+---
+
+## Why this exists
+
+A change proposal asked MassiveSLICER to stop assuming a hard-coded 6-axis mill chain, treat the robot as an `rl::mdl` model, invert the tool, Jacobian-solve the **flange**, hang tracks / heads / work objects off entity UUIDs, and post `wobj0` / `tool0`.
+
+That document describes a different product (ABB + Robotics Library + cartesian machines). Dropping it onto this repo would replace a working KUKA + GLB stack with a solver that **does not match the arm we draw**.
+
+The shop bugs it is trying to prevent are real, though:
+
+| What actually broke | Why a named contract helps |
 |---|---|
-| `rl::mdl::Model` / `JacobianInverseKinematics` | Viewport IK exists so joints match `LFAM3Robot.glb`. DH/OPW (`KukaIkSolver`) already diverges from the mesh. |
-| Entity UUIDs / `ENTITY_ROBOT` | JSON path + `SceneNode.Name` is the identity. |
-| `wobj0` / `tool0` in the post | We emit KRL `$BASE` / `$TOOL` / `TOOL_DATA[n]`. |
-| Invert-tool-then-solve-flange as a *rewrite* | Equivalent to DLS-on-TCP iff `_tcpLocal` is rigid. Live mill/print already DLS on TCP. Optional later as an equivalence test, not a swap. |
-| One `PrintingHead` ToolAsset swap for mill vs print | T12 pad XYZ is ~455 mm off `spindle.glb`. Unifying TCP sources re-breaks mill-beside-the-stick. |
-| Rotary E1 as `attachedKinematicEntity → Robot` | LFAM 3 E1 spins the **work object** (BASE), not A7. |
-| Hard-coded 6-axis *inside mill ops* as the bug | Mill/print already call the cell solver. The 6-bone lock is in `RobotFkController.JointNames`. Leave it until a 7th *robot* joint exists. |
+| Mill over the table, green stick on the path, mill **0.5 m beside it** | Pad `TOOL_DATA[12]` XYZ (−78 / 325 / 637) is ~455 mm off `spindle.glb`. IK used “TCP” without saying *which* TCP. |
+| Path all red, pose mill-down, arm parked at Mill Start | 6D T12 ABC + mill Z-up from `0/−90/90/0/45/105` returns null. Mill must be **position-first**. |
+| Overlay / triad / IK / pad all called “TCP” | Four different frames. Mixing any two looks like an IK bug. |
+| “IK never solves TCP; it solves the flange” | True as **kinematics**. False as the **live loop**. People “fix” the wrong solver. |
+| LFAM 1 rail vs LFAM 3 rotary both called E1 | Rail translates **ROBROOT**. Rotary spins **BASE**. Treating both as A7 is wrong. |
 
-## What we *do* adapt (the contract)
+So we integrate the **vocabulary and ownership**, not the C++ scene graph.
 
-1. **Named frames**, queryable: `WORLD`, `ROBROOT`, `FLANGE` (`joint_6`), `TOOL` (taught `TOOL_DATA` XYZ+ABC), `CUTTER` (mill nose / spindle bit), `BASE` (print bed / rotary).
-2. **TCP is a tool frame on the flange, not a 7th joint.** Already true. Make it a type, not a pile of `_tcpOffsetLocal` fields.
-3. **Cell owns the chain.** Mill/print pass `TargetPose` in BASE + `SolveRecipe`. They do not pick `_tcpLocal` themselves.
-4. **External axes are typed**, not “another PrintingHead axis.”
-5. **Tool convention is data**, not `if (KrlIndex == 12)` scattered through `ViewportView.axaml.cs`.
+---
 
-## Current vs target (one picture)
+## What we have today (the baseline)
 
-```
-TODAY (implicit)                         TARGET (named, cell-owned)
-SceneRoot mm                             WORLD
-  LFAM 3_Robot  T(ROBROOT)                 ROBROOT
-    GLB × GltfToScene                        joints 1–6  (unchanged GLB FK)
-      joint_6  FlangeNode                      FLANGE
-        GLB "tcp"  (unused mill)               (keep node; never call it TOOL)
-        Staubli / Tool_*                       mesh only
-        _tcpOffsetLocal  (fields)              TOOL  = taught XYZ+ABC  (not a mesh)
-        mill AABB nose     (ad-hoc)            CUTTER = mill-local collet
-        TcpFrameMatrix overlay                 overlay samples TOOL or CUTTER or world+Z
-  RotaryBed / bed                          BASE  (E1 rotates BASE, not ROBROOT)
-  LFAM 1 rail rewrite of robot T           RAIL  translates ROBROOT
-```
+Live path (scrub, drag, reachability, mill/print feasibility):
 
-Invariant to keep: `TCP_scene = _tcpLocal × World(joint_6)` with `_tcpLocal` a **pure translation** in GLTF metres. Taught ABC is orientation-only and never baked into `_tcpLocal`.
+1. Cell JSON loads a robot GLB (`LFAM3Robot.glb`) into `SceneNode`s.
+2. `RobotFkController` turns A1–A6 into `joint_1`…`joint_6`.
+3. `GltfNumericalIkSolver` is damped least-squares on **TCP**:
+   - `TCP_scene = _tcpLocal × World(joint_6)`
+   - `_tcpLocal` is a **pure translation** in GLTF metres (rebuilt on mount)
+   - Taught ABC is orientation-only and is **never** baked into `_tcpLocal`
+4. Target is TCP in ROBROOT millimetres. Jacobian columns come from `ComputeTcpPosScene`.
+5. Mill vs print already share that solver. They do **not** share the tool frame:
+   - **Print T1:** position = taught XYZ, orientation = taught ABC, triad = tool frame.
+   - **Mill T12:** position = mill-local AABB nose (`TryMillLocalCollet`), orientation = pad ABC, triad = path cartesian **world +Z**. Position-only from Mill Start, then optional 6D.
 
-## Landmines (read before coding)
+Unused for the viewport: analytic `KukaIkSolver` (OPW). That one *does* invert the tool and solve the flange. Comments already say its flange **does not** match the GLTF flange. We will not make it the live path.
 
-- `CellEnvironmentBuilder.FlangeTcpName = "SpindleBitTCP"` is a rotation-only child under flange. Overlay lime stick is `SpindleBitCylinder.NodeName = "__SpindleBitCylinder"` parented to **SceneRoot**. Do not merge these.
-- T12 mill IK **position** = mill-local AABB (`TryMillLocalCollet`), **orientation** = pad `TOOL_DATA[12]` ABC. Triad = path cartesian, **world +Z**. Three different frames.
-- `ToolAxisConvention` already exists and is **display/triad only** — “Does not change TOOL_DATA.” Do not overload it as mill IK convention.
-- `KukaIkSolver.Solve` (analytic, invert-then-flange) is **not** the live path. Comments already say its flange ≠ GLTF flange.
-- 15 known test failures: `docs/KNOWN-TEST-FAILURES.md`. Do not treat those as the regression baseline.
-- After any stash/test run: `dotnet build src/MassiveSlicer.App/MassiveSlicer.App.csproj --no-incremental`.
+External axes already exist, but as two different mechanisms:
 
-## Files likely to change
+- **LFAM 1 E1** — linear rail. `RailE1Planner` moves ROBROOT, then 6-axis IK in the carriage frame.
+- **LFAM 3 E1** — rotary table. Work-object / BASE spin. Not a seventh robot joint.
 
-| Role | Path |
+The 6-bone lock is in `RobotFkController.JointNames`, **not** inside mill ops. Mill/print already call the cell solver. The proposal overstated mill-op coupling.
+
+---
+
+## What we will integrate
+
+Five pieces. Each is a thin C# type or a move of existing code, not a new kinematics library.
+
+### 1. Named frames
+
+**Integrate:** `CellFrameKind` + `CellFrame` so code cannot say “TCP” without saying which one.
+
+| Name in Slicer | Meaning | Today it is buried as |
+|---|---|---|
+| `WORLD` | SceneRoot millimetres | implicit |
+| `ROBROOT` | Robot wrapper origin | `Robot.WorldPosition` / live rail rewrite |
+| `FLANGE` | `joint_6` | `FlangeNode` |
+| `GLB_tcp` | Bone named `tcp` under the robot GLB | unused for mill (~125 mm bone Y) |
+| `TOOL` / `TOOL_DATA` | Taught pendant XYZ + ABC | `_tcpOffsetLocal` + N-menu Dev Mode |
+| `CUTTER` | Mill nose / collet | `TryMillLocalCollet` AABB |
+| `BASE` | Print bed / rotary | `Bed.BaseMarkerWorld` / `$BASE` |
+
+**Why:** Every recent mill bug was two of these getting the same name. A dump that prints `delta(TOOL_DATA, CUTTER)` makes the 455 mm lie visible instead of “IK is wrong.”
+
+**Not:** entity UUIDs. JSON path + `SceneNode.Name` is identity.
+
+### 2. Tool kinematics spec (data, not Viewport `if`s)
+
+**Integrate:** `ToolKinematicsSpec.FromTool(ToolCellConfig)` derived from existing cell JSON (`krlIndex`, TCP, `toolFrameRoll`). No schema change in the first slice.
+
+Per mounted tool it states:
+
+- **Position source** — taught XYZ, mill collet, spindle cutter, or flange
+- **Orientation source** — taught ABC vs flange
+- **Triad source** — tool frame vs world-up-at-path vs flange
+- **Holder yaw** — T12 is Ry = 0; HV / other GLB tools stay Ry(+90°)
+
+**Why:** `IsKukaTool12()`, `UsesSpindleCutterTriad()`, and `ToolHolderYaw` are the same policy copied through `ViewportView.axaml.cs`. One record is the policy. Mill vs print **must** keep different sources — unifying them onto pad XYZ is how mill-beside-the-stick happens.
+
+**Not:** one `PrintingHead` that “just swaps ToolAsset.” T12 pad XYZ is not the cutter.
+
+### 3. Solve recipes (mill vs print as data)
+
+**Integrate:** `SolveRecipe.Mill` and `SolveRecipe.Print` with the numbers already in `ScrubIkForNode` / `ToolpathFeasibilityEvaluator`.
+
+| | Print | Mill T12 |
+|---|---|---|
+| First pass | 6D from current pose | Position-only, Mill Start seed `0/−90/90/0/45/105` |
+| Then | — | Optional 6D (keep position if 6D is null) |
+| Workspace reject | on | off (bed is outside a naive envelope from Mill Start) |
+| Iters | 300 orient | 400 position, 120 orient |
+
+**Why:** The mill 6D-first path parks the arm. That is a **recipe**, not a second IK library. Naming it stops the next change from “simplifying” mill back to print 6D.
+
+**Not:** a Jacobian rewrite. Internals stay `GltfNumericalIkSolver.Solve`.
+
+### 4. Cell-owned solve facade
+
+**Integrate:** `CellKinematics.Solve(targetRobroot, seed, recipe, targetRot, namedHomeSeed)`.
+
+Mill and print pass a **target pose in BASE/ROBROOT** and a recipe. They do not pick `_tcpLocal`. `_tcpLocal` is built from `ToolKinematicsSpec.PositionSource` when the tool mounts (`RebuildIkSolver`).
+
+**Why:** This is the proposal’s useful invariant — *the cell owns the chain; ops query it* — without `rl::mdl`. One call site for scrub and batch feasibility so they cannot drift again.
+
+**Not:** invert-tool-then-solve-flange as the live algorithm. DLS-on-TCP and invert-then-flange are the same **if** `_tcpLocal` is rigid. Live mill/print already differentiate TCP. An optional later test may prove equivalence; if they disagree, keep TCP-DLS.
+
+### 5. Typed external axes + a `frames` dump
+
+**Integrate:**
+
+- `ExternalAxisKind { None, RobotRail, RotaryWork }` — documentation and a type, no planner rewrite.
+- Console `frames` — print ROBROOT, FLANGE, GLB_tcp, TOOL_DATA world, CUTTER world, BASE, and `delta(TOOL_DATA, CUTTER)`.
+
+**Why:** The proposal’s “dump the entity UUID chain and one solved sample” is the right **next shop step**, minus UUIDs. Rotary E1 must not grow a `getDepositionExternalAxis()` onto the robot. Rail stays `RailE1Planner`.
+
+---
+
+## What we will not integrate (and why)
+
+| Proposal | Skip | Why |
+|---|---|---|
+| `rl::mdl::Model` + `JacobianInverseKinematics` | Yes | Viewport IK exists so joints match `LFAM3Robot.glb`. Analytic DH already diverges from the mesh. Native C++ dep, 3–6 months, every SRC at risk. |
+| Invert TCP, Jacobian on flange, as a rewrite | Yes | Slogan, not a capability unlock. Live solver already DLS on TCP. |
+| Entity UUIDs / `ENTITY_ROBOT` | Yes | We already have cell JSON + scene names. |
+| Post `wobj0` / `tool0` | Yes | Wrong language. We emit `$BASE` / `$TOOL` / `TOOL_DATA[n]`. |
+| Head = ToolAsset swap for mill and print | Yes | Different TCP sources on purpose. |
+| Rotary / gantry as `attachedKinematicEntity → Robot` | Yes | LFAM 3 E1 is BASE motion, not A7. LFAM 1 E1 is ROBROOT motion. |
+| Hard-coded 6-axis *inside mill ops* as the bug | N/A | Not the bug. Leave `joint_1…6` until a seventh **robot** joint exists. |
+
+---
+
+## How it maps onto files
+
+| New | Role |
 |---|---|
-| New types | `src/MassiveSlicer.Core/Kinematics/CellFrame.cs` (new) |
-| New types | `src/MassiveSlicer.Core/Kinematics/ToolKinematicsSpec.cs` (new) |
-| New types | `src/MassiveSlicer.Core/Kinematics/SolveRecipe.cs` (new) |
-| New facade | `src/MassiveSlicer.Viewport/FK/CellKinematics.cs` (new) |
-| Tests | `src/MassiveSlicer.Tests/CellFrameTest.cs`, `ToolKinematicsSpecTest.cs`, `CellKinematicsSolveTest.cs` (new) |
-| Existing tests that must stay green | `Lfam3MillIkPathTest`, `T12HolderYawTest`, `Lfam3ToolheadGlbTest`, `GltfNumericalIkSolverRailTest`, `RailE1PlannerTest`, `Lfam3MillingConfigTest` |
-| Wire | `ViewportView.axaml.cs` (`ResolveIkTcpLocal`, `RebuildIkSolver`, `ScrubIkForNode`, `SyncTcpReadout`) — **targeted**, not a file rewrite |
-| Wire | `ToolpathFeasibilityEvaluator.cs` mill vs print branch |
-| Console dump | `ConsoleCommandRegistry.cs` |
-| JSON (optional, later) | `ToolCellConfig` in `CellConfig.cs` + `lfam3.json` — only if a new field is required; prefer deriving spec from existing `krlIndex` / name |
-| Docs | `docs/CODE-MAP.md`, `memory.md` (changelog), this plan |
+| `Core/Kinematics/CellFrame.cs` | Named frames |
+| `Core/Kinematics/ToolKinematicsSpec.cs` | Per-tool IK/triad policy |
+| `Core/Kinematics/SolveRecipe.cs` | Mill vs print DLS policy |
+| `Core/Kinematics/ExternalAxisKind.cs` | Rail vs rotary |
+| `Viewport/FK/CellKinematics.cs` | One Solve() mill and print call |
+| `Viewport/FK/ToolFrameMaps.cs` | Taught mm + roll → `_tcpLocal` metres (extracted, not rewritten) |
+| `Viewport/FK/CellFrameSnapshot.cs` | Dump for console / tests |
 
-`ViewportView.axaml.cs` is ~178k tokens. Grep section labels (`Scrub IK`, `TCP readout`, `LFAM tool TCP`). Do not read the whole file.
+Wire (behavior-neutral): `ViewportView.axaml.cs` (`ResolveIkTcpLocal`, `RebuildIkSolver`, `ScrubIkForNode`), `ToolpathFeasibilityEvaluator.cs`, `ConsoleCommandRegistry.cs`. Targeted greps only — do not read ViewportView whole.
+
+Must stay green: `Lfam3MillIkPathTest` (especially `Mill_collet_vs_tool_data_after_pos_ik`), `T12HolderYawTest`, `Lfam3ToolheadGlbTest`, `GltfNumericalIkSolverRailTest`, `RailE1PlannerTest`, `Lfam3MillingConfigTest`.
 
 ---
 
-### Task 1: Named frame types (no scene yet)
+## Invariant we will not break
 
-**Objective:** Core has a `CellFrameKind` + `CellFrame` value type so later code cannot say “TCP” without saying which one.
+> IK solves the six joints so a **fixed flange-local TCP** lands on the target. The tool is not a seventh joint. Viewport DLS differentiates TCP; it does not invert the tool and solve the flange. Analytic `KukaIkSolver` does invert-then-flange, and is not the live path.
 
-**Files:**
-- Create: `src/MassiveSlicer.Core/Kinematics/CellFrame.cs`
-- Test: `src/MassiveSlicer.Tests/CellFrameTest.cs`
+Plus the T12 split, which is shop-correct:
 
-**Step 1: Write failing test**
-
-```csharp
-using MassiveSlicer.Core.Kinematics;
-using Xunit;
-
-public class CellFrameTest
-{
-    [Fact]
-    public void Kinds_are_distinct_and_named()
-    {
-        Assert.NotEqual(CellFrameKind.Tool, CellFrameKind.Cutter);
-        Assert.NotEqual(CellFrameKind.Flange, CellFrameKind.GlbTcp);
-        Assert.Equal("TOOL_DATA", CellFrameKind.Tool.DumpName());
-        Assert.Equal("CUTTER", CellFrameKind.Cutter.DumpName());
-        Assert.Equal("FLANGE", CellFrameKind.Flange.DumpName());
-        Assert.Equal("GLB_tcp", CellFrameKind.GlbTcp.DumpName());
-        Assert.Equal("BASE", CellFrameKind.Base.DumpName());
-        Assert.Equal("ROBROOT", CellFrameKind.Robroot.DumpName());
-    }
-
-    [Fact]
-    public void Frame_stores_origin_mm_and_optional_abc()
-    {
-        var f = new CellFrame(
-            CellFrameKind.Tool,
-            OriginMm: new System.Numerics.Vector3(-78.4f, 325.2f, 637.4f),
-            AbcDeg: new System.Numerics.Vector3(103.7f, -43.7f, 40.5f));
-        Assert.Equal(CellFrameKind.Tool, f.Kind);
-        Assert.True(f.HasOrientation);
-    }
-}
-```
-
-**Step 2: Run test to verify failure**
-
-Run: `dotnet test src/MassiveSlicer.Tests/MassiveSlicer.Tests.csproj --filter FullyQualifiedName~CellFrameTest -v q`
-
-Expected: FAIL — `CellFrameKind` not defined.
-
-**Step 3: Write minimal implementation**
-
-```csharp
-using System.Numerics;
-
-namespace MassiveSlicer.Core.Kinematics;
-
-public enum CellFrameKind
-{
-    World,
-    Robroot,
-    Flange,
-    GlbTcp,
-    Tool,
-    Cutter,
-    Base,
-}
-
-public readonly record struct CellFrame(
-    CellFrameKind Kind,
-    Vector3 OriginMm,
-    Vector3? AbcDeg = null)
-{
-    public bool HasOrientation => AbcDeg is { } a
-        && (MathF.Abs(a.X) + MathF.Abs(a.Y) + MathF.Abs(a.Z) > 1e-3f);
-}
-
-public static class CellFrameKindNames
-{
-    public static string DumpName(this CellFrameKind kind) => kind switch
-    {
-        CellFrameKind.World   => "WORLD",
-        CellFrameKind.Robroot => "ROBROOT",
-        CellFrameKind.Flange  => "FLANGE",
-        CellFrameKind.GlbTcp  => "GLB_tcp",
-        CellFrameKind.Tool    => "TOOL_DATA",
-        CellFrameKind.Cutter  => "CUTTER",
-        CellFrameKind.Base    => "BASE",
-        _ => kind.ToString(),
-    };
-}
-```
-
-**Step 4: Run test to verify pass**
-
-Same `dotnet test` filter. Expected: PASS.
-
-**Step 5: Commit**
-
-```bash
-git add src/MassiveSlicer.Core/Kinematics/CellFrame.cs src/MassiveSlicer.Tests/CellFrameTest.cs
-git commit -m "feat(cell): named kinematic frames (TOOL vs CUTTER vs FLANGE)"
-```
+- IK **position** = CUTTER (mill nose)
+- IK **orientation** = TOOL_DATA ABC
+- Overlay triad on a mill path = world +Z at the path cartesian
+- Overlay FLANGE = A6 when TCP axes are on
+- Lime stick = SceneRoot overlay, not a mill child
+- `SpindleBitTCP` = rotation-only empty under flange for coupler parenting — **not** TOOL_DATA XYZ
 
 ---
 
-### Task 2: Tool kinematics spec (data, not Viewport ifs)
-
-**Objective:** One record describes how a mounted tool maps flange → IK TCP and which overlay to draw. Derived from existing `ToolCellConfig` — no JSON schema change yet.
-
-**Files:**
-- Create: `src/MassiveSlicer.Core/Kinematics/ToolKinematicsSpec.cs`
-- Test: `src/MassiveSlicer.Tests/ToolKinematicsSpecTest.cs`
-- Read: `src/MassiveSlicer.Core/Models/CellConfig.cs` (`ToolCellConfig`)
-
-**Step 1: Write failing test** (load `assets/cells/LFAM3/lfam3.json` via `CellLoader` like `Lfam3MillingConfigTest`)
-
-```csharp
-using MassiveSlicer.Core.IO;
-using MassiveSlicer.Core.Kinematics;
-using Xunit;
-
-public class ToolKinematicsSpecTest
-{
-    static string Lfam3()
-    {
-        var cells = AssetPaths.FindCellsDirectory()
-            ?? throw new DirectoryNotFoundException("assets/cells");
-        return Path.Combine(cells, "LFAM3", "lfam3.json");
-    }
-
-    [Fact]
-    public void T12_uses_cutter_position_and_taught_abc()
-    {
-        var cell = CellLoader.Load(Lfam3());
-        var t12 = cell.EffectiveTools.First(t => t.KrlIndex == 12);
-        var spec = ToolKinematicsSpec.FromTool(t12);
-        Assert.Equal(IkTcpSource.MillCollet, spec.PositionSource);
-        Assert.Equal(IkOrientSource.TaughtAbc, spec.OrientSource);
-        Assert.Equal(TriadSource.WorldUpAtPath, spec.TriadSource);
-        Assert.Equal(0f, spec.HolderYawDeg);
-    }
-
-    [Fact]
-    public void Extruder_uses_taught_xyz_and_abc()
-    {
-        var cell = CellLoader.Load(Lfam3());
-        var t1 = cell.EffectiveTools.First(t => t.KrlIndex == 1);
-        var spec = ToolKinematicsSpec.FromTool(t1);
-        Assert.Equal(IkTcpSource.TaughtXyz, spec.PositionSource);
-        Assert.Equal(IkOrientSource.TaughtAbc, spec.OrientSource);
-        Assert.Equal(TriadSource.ToolFrame, spec.TriadSource);
-        Assert.Equal(90f, spec.HolderYawDeg);
-    }
-
-    [Fact]
-    public void Spindle_no_bit_uses_cutter_if_present_else_taught()
-    {
-        var cell = CellLoader.Load(Lfam3());
-        var t2 = cell.EffectiveTools.First(t => t.KrlIndex == 2);
-        var spec = ToolKinematicsSpec.FromTool(t2);
-        Assert.Equal(IkTcpSource.SpindleCutter, spec.PositionSource);
-    }
-}
-```
-
-**Step 2: Run** `dotnet test … --filter FullyQualifiedName~ToolKinematicsSpecTest`
-
-Expected: FAIL — type missing.
-
-**Step 3: Minimal implementation**
-
-```csharp
-using MassiveSlicer.Core.Models;
-
-namespace MassiveSlicer.Core.Kinematics;
-
-public enum IkTcpSource
-{
-    TaughtXyz,      // TOOL_DATA XYZ → GLTF metres via existing roll map
-    MillCollet,     // mill-local AABB nose (T12)
-    SpindleCutter,  // SpindleBitTCP / cutter world → flange local
-    Flange,         // identity (No Tool / T4)
-}
-
-public enum IkOrientSource
-{
-    Flange,
-    TaughtAbc,
-}
-
-public enum TriadSource
-{
-    ToolFrame,        // taught TCP + ABC (print / scan)
-    WorldUpAtPath,    // T12 Drive Cell 3D
-    Flange,
-}
-
-public sealed record ToolKinematicsSpec(
-    int KrlIndex,
-    string Name,
-    IkTcpSource PositionSource,
-    IkOrientSource OrientSource,
-    TriadSource TriadSource,
-    float HolderYawDeg,
-    float ToolFrameRollDeg,
-    float TcpX, float TcpY, float TcpZ,
-    float TcpA, float TcpB, float TcpC)
-{
-    public static ToolKinematicsSpec FromTool(ToolCellConfig t)
-    {
-        bool t12 = t.KrlIndex == 12
-            || t.Name.Contains("Tool 12", StringComparison.OrdinalIgnoreCase);
-        bool spindle = !t12
-            && t.KrlIndex is 2 or 3 or 7 or 8 or 9 or 10
-            || t.Name.Contains("Spindle", StringComparison.OrdinalIgnoreCase);
-        bool noTool = t.KrlIndex == 4
-            || t.Name.Equals("No Tool", StringComparison.OrdinalIgnoreCase);
-
-        var pos = t12 ? IkTcpSource.MillCollet
-                : noTool ? IkTcpSource.Flange
-                : spindle ? IkTcpSource.SpindleCutter
-                : IkTcpSource.TaughtXyz;
-
-        return new ToolKinematicsSpec(
-            t.KrlIndex, t.Name, pos,
-            IkOrientSource.TaughtAbc,
-            t12 ? TriadSource.WorldUpAtPath : TriadSource.ToolFrame,
-            HolderYawDeg: t12 ? 0f : 90f,
-            t.ToolFrameRoll, t.TcpX, t.TcpY, t.TcpZ, t.TcpA, t.TcpB, t.TcpC);
-    }
-}
-```
-
-Match today’s `IsKukaTool12` / `UsesSpindleCutterTriad` / `ToolHolderYaw` exactly. Do not “improve” T2 mill bits in this task.
-
-**Step 4:** test PASS.
-
-**Step 5: Commit** `feat(cell): ToolKinematicsSpec from TOOL_DATA without JSON change`
-
----
-
-### Task 3: SolveRecipe (mill vs print policy as data)
-
-**Objective:** The mill position-first vs print 6D split is a named recipe, not comments in `ScrubIkForNode`.
-
-**Files:**
-- Create: `src/MassiveSlicer.Core/Kinematics/SolveRecipe.cs`
-- Test: `src/MassiveSlicer.Tests/SolveRecipeTest.cs`
-
-**Step 1: Failing test**
-
-```csharp
-using MassiveSlicer.Core.Kinematics;
-using Xunit;
-
-public class SolveRecipeTest
-{
-    [Fact]
-    public void Mill_is_position_first_then_optional_6d()
-    {
-        var r = SolveRecipe.Mill;
-        Assert.True(r.PositionFirst);
-        Assert.True(r.ThenOrient);
-        Assert.False(r.RequireWorkspace);
-        Assert.Equal(400, r.PositionMaxIter);
-        Assert.Equal(120, r.OrientMaxIter);
-        Assert.True(r.PreferNamedHomeSeed);
-    }
-
-    [Fact]
-    public void Print_is_6d_from_current_pose()
-    {
-        var r = SolveRecipe.Print;
-        Assert.False(r.PositionFirst);
-        Assert.True(r.ThenOrient);
-        Assert.Equal(300, r.OrientMaxIter);
-        Assert.False(r.PreferNamedHomeSeed);
-    }
-}
-```
-
-**Step 3: Implementation** — copy the numbers from `ViewportView.axaml.cs` mill scrub (~15347) and print `Solve(..., targetRot, 300)`.
-
-```csharp
-namespace MassiveSlicer.Core.Kinematics;
-
-public sealed record SolveRecipe(
-    bool PositionFirst,
-    bool ThenOrient,
-    bool RequireWorkspace,
-    int PositionMaxIter,
-    int OrientMaxIter,
-    bool PreferNamedHomeSeed)
-{
-    public static readonly SolveRecipe Mill = new(
-        PositionFirst: true, ThenOrient: true, RequireWorkspace: false,
-        PositionMaxIter: 400, OrientMaxIter: 120, PreferNamedHomeSeed: true);
-
-    public static readonly SolveRecipe Print = new(
-        PositionFirst: false, ThenOrient: true, RequireWorkspace: true,
-        PositionMaxIter: 0, OrientMaxIter: 300, PreferNamedHomeSeed: false);
-}
-```
-
-**Step 5: Commit** `feat(cell): mill vs print SolveRecipe constants`
-
----
-
-### Task 4: Frame snapshot from a synthetic FK chain
-
-**Objective:** Given a tiny scene graph (robot wrapper → GltfToScene → joint_6 → glb tcp), dump WORLD/ROBROOT/FLANGE/GLB_tcp origins without the full cell load.
-
-**Files:**
-- Create: `src/MassiveSlicer.Viewport/FK/CellFrameSnapshot.cs`
-- Test: `src/MassiveSlicer.Tests/CellFrameSnapshotTest.cs`
-- Read: `RobotFkController.cs`, `GltfLoader.GltfToScene`
-
-**Step 1: Failing test** — build the same mini-chain as `Lfam3ToolheadGlbTest` (robot root `GltfToScene`, joint_6 with a millimetre pose). Assert:
-
-- `Robroot` origin = wrapper translation
-- `Flange` origin = `joint_6.WorldTransform.Row3`
-- `GlbTcp` origin ≠ `Flange` when local T is nonzero
-- `Tool` is **not** inferred from the GLB node (snapshot takes taught XYZ as an argument, or leaves Tool empty)
-
-Do **not** parent a mill mesh in this test.
-
-**Step 3: Implementation sketch**
-
-```csharp
-public sealed record CellFrameSnapshot(
-    CellFrame World,      // identity / unused
-    CellFrame Robroot,
-    CellFrame Flange,
-    CellFrame? GlbTcp,
-    CellFrame? Tool,      // taught, flange-local mm + ABC — origin in WORLD after map
-    CellFrame? Cutter,    // optional, filled by caller
-    CellFrame? Base);
-
-public static class CellFrameDump
-{
-    public static CellFrameSnapshot FromFk(
-        SceneNode robotWrapper,
-        RobotFkController fk,
-        Vector3 robrootMm,
-        ToolKinematicsSpec? spec,
-        Vector3? cutterWorldMm,
-        Vector3? baseOriginMm);
-}
-```
-
-World math: row-vector, mm. Tool world origin = flange world + taught XYZ mapped with the **existing** `RebuildFrameMatrices` GLTF↔KUKA map. If that map is trapped in `ViewportView`, extract a static helper in this task or the next — do not duplicate a third roll formula.
-
-Prefer extracting `ToolFrameMaps` from `ViewportView.RebuildFrameMatrices` / `ResolveIkTcpLocal` into `src/MassiveSlicer.Viewport/FK/ToolFrameMaps.cs` **as a move**, same numbers.
-
-**Step 5: Commit** `feat(cell): dump ROBROOT/FLANGE/GLB_tcp from FK chain`
-
----
-
-### Task 5: Extract ToolFrameMaps (no behavior change)
-
-**Objective:** One place converts taught mm + roll → `_tcpLocal` metres. `ResolveIkTcpLocal` and the dump both call it.
-
-**Files:**
-- Create: `src/MassiveSlicer.Viewport/FK/ToolFrameMaps.cs`
-- Modify: `ViewportView.axaml.cs` `ResolveIkTcpLocal`, `RebuildFrameMatrices` — call the helper
-- Test: `src/MassiveSlicer.Tests/ToolFrameMapsTest.cs` — T12 mill collet path is **not** this helper; taught XYZ path is.
-
-**Golden:** For roll=0, taught `(tx,ty,tz)` mm → GLTF metres `(tx, tz, -ty)/1000` (see `Lfam3MillIkPathTest` line ~50). HV roll uses the existing `_gltfToKukaLocal` matrix. Copy, don’t invent.
-
-**Verification:** `Lfam3MillIkPathTest` + `T12HolderYawTest` still pass.
-
-**Commit:** `refactor(cell): extract ToolFrameMaps from ViewportView`
-
----
-
-### Task 6: CellKinematics.Solve — wrap existing DLS
-
-**Objective:** One method mill and print both call. Internals still `GltfNumericalIkSolver.Solve`. No Jacobian rewrite.
-
-**Files:**
-- Create: `src/MassiveSlicer.Viewport/FK/CellKinematics.cs`
-- Test: `src/MassiveSlicer.Tests/CellKinematicsSolveTest.cs` — can reuse mill-start seed + a bed TCP from `Lfam3MillIkPathTest` (position-only, requireWorkspace false)
-
-**API:**
-
-```csharp
-public sealed class CellKinematics
-{
-    public CellKinematics(GltfNumericalIkSolver solver, ToolKinematicsSpec spec);
-
-    public float[]? Solve(
-        Vector3 targetRobrootMm,
-        float[] seed,
-        SolveRecipe recipe,
-        (Vector3 r0, Vector3 r1, Vector3 r2)? targetRot,
-        float[]? namedHomeSeed = null);
-}
-```
-
-Behavior:
-
-- `recipe.PositionFirst`: `Solve(pos, posSeed)` then optional `Solve(pos, result, rot)`.
-- Else: `Solve(pos, seed, rot)`.
-- `PreferNamedHomeSeed` uses `namedHomeSeed` (Mill Start) as `posSeed` when length ≥ 6.
-
-Copy the mill/print branches from `ScrubIkForNode` (~15345–15359) and `ToolpathFeasibilityEvaluator` (~205–217) **verbatim**.
-
-**Commit:** `feat(cell): CellKinematics.Solve wraps mill/print DLS recipes`
-
----
-
-### Task 7: Wire mill/print to CellKinematics (behavior-neutral)
-
-**Objective:** `ScrubIkForNode` and `ToolpathFeasibilityEvaluator` call `CellKinematics.Solve`. Same seeds, same tolerances, same T12 collet `_tcpLocal` (still built in `RebuildIkSolver` via spec.PositionSource).
-
-**Files:**
-- Modify: `ViewportView.axaml.cs` (~15341–15359)
-- Modify: `ToolpathFeasibilityEvaluator.cs` (~205–217)
-- Modify: `RebuildIkSolver` / `ResolveIkTcpLocal` to switch on `ToolKinematicsSpec.PositionSource` instead of `IsKukaTool12()` / `UsesSpindleCutterTriad()` — **same branches**, just named.
-
-**Do not** change mill triad (world +Z) in this task.
-
-**Tests:** `Lfam3MillIkPathTest`, `GltfNumericalIkSolverRailTest`. If a number moves, stop and diff — this task is a move, not a fix.
-
-**Commit:** `refactor(cell): mill/print IK go through CellKinematics`
-
----
-
-### Task 8: Console `frames` dump
-
-**Objective:** On a live cell, one command prints the UUID-less chain the proposal wanted: origins of ROBROOT, FLANGE, GLB_tcp, TOOL_DATA world, CUTTER world, BASE.
-
-**Files:**
-- Modify: `src/MassiveSlicer.App/Console/ConsoleCommandRegistry.cs`
-- Test: a unit test that formats a `CellFrameSnapshot` to text (no GL). Example:
-
-```
-ROBROOT   0.0  0.0  1000.0
-FLANGE    … …
-GLB_tcp   … …   (unused mill)
-TOOL_DATA … …  ABC=103.7 -43.7 40.5   (pad, not cutter)
-CUTTER    … …  (mill nose)
-BASE      2135.4  -52.5  916.3
-delta(TOOL_DATA, CUTTER) = … mm
-```
-
-Register as `frames` next to `cal-check`.
-
-**Commit:** `feat(cell): frames console dump ROBROOT→CUTTER`
-
----
-
-### Task 9: External axis kind (document + type only)
-
-**Objective:** Stop the next person hanging rotary E1 on the robot. Add `ExternalAxisKind { None, RobotRail, RotaryWork }` on a small helper; `CellKinematics` does not solve E1.
-
-**Files:**
-- Create: `src/MassiveSlicer.Core/Kinematics/ExternalAxisKind.cs`
-- Test: rail cell → `RobotRail`, LFAM3 → `RotaryWork`, a cell with neither → `None`
-- Docs only in CODE-MAP: “E1 rail rewrites ROBROOT; E1 rotary rewrites BASE. IK is always 6-axis in the current ROBROOT.”
-
-No planner changes. `RailE1Planner` stays the rail owner.
-
-**Commit:** `feat(cell): ExternalAxisKind rail vs rotary work object`
-
----
-
-### Task 10: CODE-MAP + memory.md
-
-**Objective:** Future agents find the contract without rereading ViewportView.
-
-**Files:**
-- Modify: `docs/CODE-MAP.md` — add a “Cell frames / IK” row pointing at `CellFrame.cs`, `ToolKinematicsSpec.cs`, `CellKinematics.cs`, `GltfNumericalIkSolver.cs`, `RobotFkController.cs`
-- Modify: `memory.md` session changelog (newest first):
-
-```
-### 2026-09-02 — Cell frames contract (feature/Improved-Cell)
-- Symptom: proposal wanted RL Jacobian + flange-first IK + wobj0
-- Cause: that stack is the wrong product
-- Fix: named frames + ToolKinematicsSpec + CellKinematics wrapper; GLB FK kept
-- Key files: CellFrame.cs, ToolKinematicsSpec.cs, CellKinematics.cs
-```
-
-Do **not** mark ROADMAP “Built” until mill scrub is print-verified.
-
-**Commit:** `docs: cell frame contract (no rl::mdl)`
-
----
-
-### Task 11 (optional, later — not this slice): invert-then-flange equivalence
-
-Only after Tasks 1–8 are green on a machine:
-
-- Add `GltfNumericalIkSolver.SolveFlangeFirst` that does `flangeTarget = TCP × inv(_tcpLocal)` then DLS on `ComputeJoint6` translation.
-- Test: same mill-start seed, same bed point, position error vs TCP-DLS < 1 mm.
-
-If they disagree, **keep TCP-DLS**. Do not switch live path.
-
----
-
-## Tests / validation (every wiring task)
-
-```bash
-dotnet test src/MassiveSlicer.Tests/MassiveSlicer.Tests.csproj \
-  --filter "FullyQualifiedName~CellFrameTest|FullyQualifiedName~ToolKinematicsSpecTest|FullyQualifiedName~SolveRecipeTest|FullyQualifiedName~Lfam3MillIkPathTest|FullyQualifiedName~T12HolderYawTest|FullyQualifiedName~Lfam3ToolheadGlbTest|FullyQualifiedName~GltfNumericalIkSolverRailTest|FullyQualifiedName~RailE1PlannerTest|FullyQualifiedName~Lfam3MillingConfigTest"
-```
-
-Compare any extra failures to `docs/KNOWN-TEST-FAILURES.md`.
-
-Shop check after Task 7 (human): LFAM 3, Tool 12, mill path — green stick on path, mill nose on stick, not 0.5 m beside it. Print T1 triad still on taught nozzle.
-
-## Effort (honest)
-
-| Tasks 1–4, 9–10 | ~1–2 days | types + dump + docs |
-| Task 5–7 | ~2–4 days | extract maps + wrap solver; regression risk is T12 |
-| Task 8 | ~half day | console |
-| Task 11 | skip until proven | |
+## Effort and risk
+
+| Slice | Time | Risk |
+|---|---|---|
+| Types, dump, docs (PLAN tasks 1–4, 8–10) | 1–2 days | Low |
+| Extract maps + wrap solver (tasks 5–7) | 2–4 days | **T12** — one wrong `_tcpLocal` and mill is beside the stick again |
+| Invert-then-flange equivalence (task 11) | later / skip | Do not switch live path if they disagree |
 | Full RL port | do not | 3–6 months, wrong product |
 
-## Risks
+This is a **big** change in AGENTS.md terms (robot motion). Work stays on this branch. Push at every stopping point. Do not mix the unrelated dirty working tree into these commits.
 
-- Touching `ResolveIkTcpLocal` without the mill-collet test green = mill-beside-stick again.
-- Renaming `SpindleBitTCP` while the overlay still searches that string.
-- “Flange-first” comments in new code that do not match DLS-on-TCP — keep the comment: *IK solves joints so a fixed flange-local TCP lands on the target.*
-- Dirty tree on this checkout is **unrelated** WIP. Do not commit it with these tasks. Commit only the files listed.
+---
 
-## Open questions (do not block Tasks 1–8)
+## What “done” looks like
 
-1. Persist `IkTcpSource` in `lfam3.json` later, or keep deriving from `krlIndex`? Default: derive.
-2. LFAM 1/2 tool parented to SceneRoot vs flange — out of scope. Spec still applies; parenting is a later visual cleanup.
-3. Dev Mode live ABC vs triad world+Z — leave as-is; dump both TOOL ABC and triad source.
+1. Console `frames` on a live LFAM 3 cell prints ROBROOT → FLANGE → TOOL_DATA → CUTTER → BASE, and TOOL vs CUTTER is ~455 mm, not ~0.
+2. Mill T12 scrub: mill nose on the green stick, arm not parked at Mill Start.
+3. Print T1 triad still on the taught nozzle.
+4. Mill and print feasibility both call `CellKinematics.Solve` with different recipes, same GLB solver.
+5. No `rl::mdl`, no `wobj0`, no JSON schema break unless a later task proves a field is required.
 
-## First implementer action
-
-Stay on `feature/Improved-Cell`. Do not merge `main` dirty files. Start Task 1. Push at each commit.
+Until (2) is machine-verified, this branch is **not print-verified**. Do not merge to `main`.
