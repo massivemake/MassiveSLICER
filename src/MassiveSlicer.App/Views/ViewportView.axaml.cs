@@ -6253,9 +6253,9 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Mills the selected workpiece (or the painted mill area) with the live subtractive
-    /// settings. Does not require a heightmap or UVs — those stay on the MORE displaced /
-    /// relief paths. Used by TOOLPATHING → Generate Toolpath and by mill-tab realtime slice.
+    /// Mills the selected workpiece (or the painted mill area) with the AdaOne mill planner.
+    /// Bit presets still supply cutter geometry and feeds. Used by TOOLPATHING → Generate
+    /// Toolpath and by mill-tab realtime slice.
     /// </summary>
     private async Task RunMillFromMeshAsync(ViewportViewModel vm)
     {
@@ -6306,9 +6306,8 @@ public partial class ViewportView : UserControl
         try
         {
             var mill = BuildMillSettings(sub);
-            bool planar = sub.IsPlanarFacing || sub.IsPlanarClearing;
             NVec3? approach = null;
-            bool lockAxis = false;
+            bool planar = sub.ShowsPlanarToolAxis;
             if (planar)
             {
                 if (sub.PlanarToolAxis.Kind == MillPlanarAxisKind.PaintedFace)
@@ -6319,17 +6318,20 @@ public partial class ViewportView : UserControl
                 else if (sub.PlanarToolAxis.Kind == MillPlanarAxisKind.Camera)
                     ApplyCameraToolAxis(sub);
                 approach = sub.ResolvePlanarApproach();
-                lockAxis = true;
             }
+            var ada = sub.ToAdaMachining();
+            var millReq = new MassiveSlicer.Core.Models.AdaMillRequest
+            {
+                Settings     = ada,
+                Positions    = positions,
+                Normals      = normals,
+                Indices      = indices,
+                ApproachAxis = approach,
+            };
             var toolpath = await Task.Run(() =>
             {
                 cancel.ThrowIfCancellationRequested();
-                return planar
-                    ? MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.Generate(
-                        positions, normals, indices, mill,
-                        approachAxis: approach, lockToolToApproach: lockAxis)
-                    : MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.GenerateMultiAxis(
-                        positions, normals, indices, mill);
+                return MassiveSlicer.Core.Slicing.AdaMillPlanner.Generate(millReq);
             }, cancel);
 
             cancel.ThrowIfCancellationRequested();
@@ -6780,6 +6782,21 @@ public partial class ViewportView : UserControl
         nameof(SubtractiveSettingsViewModel.RetractHeightMm),
         nameof(SubtractiveSettingsViewModel.RapidZMm),
         nameof(SubtractiveSettingsViewModel.SelectedBit),
+        nameof(SubtractiveSettingsViewModel.CutoutCutDepthMm),
+        nameof(SubtractiveSettingsViewModel.CutoutLayerHeightMm),
+        nameof(SubtractiveSettingsViewModel.CutoutMillingDirection),
+        nameof(SubtractiveSettingsViewModel.DrillingBreakthroughMm),
+        nameof(SubtractiveSettingsViewModel.DrillingPeck),
+        nameof(SubtractiveSettingsViewModel.WaterfallMill),
+        nameof(SubtractiveSettingsViewModel.ContouringWaterfall),
+        nameof(SubtractiveSettingsViewModel.SwarfLeadDeg),
+        nameof(SubtractiveSettingsViewModel.SwarfLeanDeg),
+        nameof(SubtractiveSettingsViewModel.StabilizeHeadRotation),
+        nameof(SubtractiveSettingsViewModel.MorphSteps),
+        nameof(SubtractiveSettingsViewModel.LeadInMm),
+        nameof(SubtractiveSettingsViewModel.LeadOutMm),
+        nameof(SubtractiveSettingsViewModel.ToolCompensation),
+        nameof(SubtractiveSettingsViewModel.FeedHeightMm),
     ];
 
     private void WireRealtimeSlicing(ViewportViewModel vm)

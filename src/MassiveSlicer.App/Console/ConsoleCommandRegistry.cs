@@ -1020,7 +1020,7 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "mill",
-            Description = "Milling SELECT AREA / brush / operation (SPSM mill workflow)",
+            Description = "Milling SELECT AREA / brush / AdaOne operation",
             Usage = "mill status | mill area <whole|face|box|lasso|brush|clear> | mill brush size <mm> | mill brush falloff <0-1> | mill op <name>",
             Execute = (ctx, args) =>
             {
@@ -1031,7 +1031,7 @@ public sealed class ConsoleCommandRegistry
                 {
                     ctx.Log("[mill] status | area <whole|face|box|lasso|brush|clear>");
                     ctx.Log("[mill] brush size <mm> | brush falloff <0..1>");
-                    ctx.Log("[mill] op <MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf>");
+                    ctx.Log("[mill] op <MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf|Morph>");
                     ctx.Log("[mill] axis <-z|+z|+x|-x|+y|-y|paint|camera|custom> | tilt <deg> | azimuth <deg>");
                     ctx.Log("[mill] speed <mm/s> | travel <mm/s> | offset <mm>");
                     return;
@@ -1114,7 +1114,7 @@ public sealed class ConsoleCommandRegistry
                         }
                         else
                         {
-                            ctx.LogError("[mill] op: MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf");
+                            ctx.LogError("[mill] op: MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf|Morph");
                         }
                         break;
                     }

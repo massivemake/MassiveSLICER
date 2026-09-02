@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-26** (first-layer print speed / RPM % increase)
+Last updated: **2026-09-02** (AdaOne mill rewrite on `feature/Milling-Features`)
 
 ---
 
@@ -516,6 +516,24 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-02 — AdaOne mill rewrite (`feature/Milling-Features`)
+
+- Symptom: mill OPERATION tiles were SPSM stubs (“parameters coming next”);
+  the mill tab still led with relief heightmap / displaced-surface tools that
+  never became the shop CAM.
+- Keep: mill bit library + cutting-data presets (`MillBitTool`,
+  `MillBitLibraryDialog`, `%AppData%/MassiveSlicer/mill_tools.json`).
+- Scrap from the mill tab: MORE → relief heightmap, displaced surface,
+  placement, relief “Generate Mill Toolpath”.
+- Implement AdaOne ops: Cutout, Planar facing, Planar clearing, Contouring,
+  Swarf, Drilling, Multi-axis finishing, Morph — plus engagement, tool
+  compensation, feed height. Planner: `AdaMillPlanner` + `MeshWaterline`.
+- Branch: `feature/Milling-Features` off `origin/main` (MassiveFILES
+  `feature/Improved-Cell` left dirty and unmoved).
+- Files: `AdaMachiningSettings.cs`, `AdaMillPlanner.cs`, `MeshWaterline.cs`,
+  mill catalog, `SubtractiveSettingsViewModel`, `RightPanelView.axaml`,
+  `ViewportView` mill generate, `AdaMillPlannerTest`.
 
 ### 2026-08-26 — First-layer print speed and RPM % increase
 

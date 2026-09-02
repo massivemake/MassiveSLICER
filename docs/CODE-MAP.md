@@ -25,7 +25,9 @@ subsystem to read in full.
 | KRL output, ANOUT/URM, temps, RPM | `Core/IO/KrlExporter.cs`, `Core/IO/KrlAnout.cs` |
 | A setting's plumbing | `Core/Models/SliceSettings.cs` → `Core/Models/AppPreferences.cs` → `App/ViewModels/AdditiveSettingsViewModel.cs` → `App/Views/RightPanelView.axaml` (+ the reslice watchlist in `ViewportView.axaml.cs`) |
 | Cell/robot definitions (LFAM 1/2/3, bed, tools) | `assets/cells/<CELL>/*.json`, `Core/Models/CellConfig.cs` |
-| Right-panel UI | `App/Views/RightPanelView.axaml` (3,357 lines — grep the section label) |
+| Right-panel UI | `App/Views/RightPanelView.axaml` (grep the section label) |
+| Mill bit library (kept) | `Core/Models/MillBitTool.cs`, `Core/IO/MillBitLibraryLoader.cs`, `App/Views/MillBitLibraryDialog.axaml` |
+| AdaOne mill operations | `Core/Models/AdaMachiningSettings.cs`, `Core/Models/MillOperationKind.cs`, `Core/Slicing/AdaMillPlanner.cs`, `Core/Slicing/MeshWaterline.cs` |
 | Viewport overlay / HUD / pills | `App/Views/ViewportOverlayView.axaml` |
 | Bead / toolpath rendering | `Viewport/Rendering/ToolpathRenderer.cs` |
 

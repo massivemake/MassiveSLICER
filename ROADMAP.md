@@ -159,6 +159,10 @@ Key facts:
   panel UI, auto build numbering, macOS port (app bundle + Dock icon)
 - Diagnostics: SliceLogger, `tools/wave_analysis.py` phase-coherence measurement
 
+- **AdaOne mill (in progress on `feature/Milling-Features`):** cutout, planar facing,
+  planar clearing, contouring, swarf, drilling, multi-axis finishing, morph.
+  Mill bit presets / library kept. Old relief-heightmap mill UI removed from the mill tab.
+
 ### Planned 🔲 (prioritized backlog below)
 - Per-move geometry-adaptive speed & flow (width variation → bumps/holes)
 - Non-planar slicing using the articulating head (overhang from the side)

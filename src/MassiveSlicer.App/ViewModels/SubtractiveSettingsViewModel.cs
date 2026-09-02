@@ -8,9 +8,9 @@ using MassiveSlicer.ViewModels.Base;
 namespace MassiveSlicer.ViewModels;
 
 /// <summary>
-/// Parameters for subtractive (relief milling) toolpaths: tool + cutting params, the relief
-/// heightmap and its placement, and the editable KRL post-processor header/footer templates.
-/// Spindle on/RPM control lives in the templates (KUKA 0-10V → ATV340 VFD), not hardcoded.
+/// Subtractive mill panel: bit library (kept) + AdaOne operations (cutout, planar facing /
+/// clearing, contouring, swarf, drilling, multi-axis finishing, morph). Cutting data comes
+/// from mill bit presets. Spindle on/RPM lives in the KRL templates.
 /// </summary>
 public sealed class SubtractiveSettingsViewModel : ViewModelBase
 {
@@ -200,7 +200,7 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     private bool _stepBitsExpanded = true;
     private bool _stepOperationExpanded = true;
     private bool _stepToolpathingExpanded = true;
-    private bool _stepMoreExpanded;
+    private bool _stepMoreExpanded = true;
 
     /// <summary>Step 1 BITS card expansion.</summary>
     public bool StepBitsExpanded
@@ -240,7 +240,16 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
             OnPropertyChanged(nameof(IsCutout));
             OnPropertyChanged(nameof(IsContouring));
             OnPropertyChanged(nameof(IsSwarf));
+            OnPropertyChanged(nameof(IsMorph));
             OnPropertyChanged(nameof(ShowsPlanarToolAxis));
+            OnPropertyChanged(nameof(ShowsCutoutCard));
+            OnPropertyChanged(nameof(ShowsClearingCard));
+            OnPropertyChanged(nameof(ShowsDrillingCard));
+            OnPropertyChanged(nameof(ShowsSwarfCard));
+            OnPropertyChanged(nameof(ShowsFinishingCard));
+            OnPropertyChanged(nameof(ShowsMorphCard));
+            OnPropertyChanged(nameof(ShowsContouringCard));
+            OnPropertyChanged(nameof(ShowsPassRaster));
         }
     }
 
@@ -263,7 +272,16 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     public bool IsCutout             => SelectedOperation == MillOperationKind.Cutout;
     public bool IsContouring         => SelectedOperation == MillOperationKind.Contouring;
     public bool IsSwarf              => SelectedOperation == MillOperationKind.Swarf;
-    public bool ShowsPlanarToolAxis  => IsPlanarFacing || IsPlanarClearing;
+    public bool IsMorph              => SelectedOperation == MillOperationKind.Morph;
+    public bool ShowsPlanarToolAxis  => IsPlanarFacing || IsPlanarClearing || IsContouring;
+    public bool ShowsCutoutCard      => IsCutout;
+    public bool ShowsClearingCard    => IsPlanarClearing;
+    public bool ShowsDrillingCard    => IsDrilling;
+    public bool ShowsSwarfCard       => IsSwarf;
+    public bool ShowsFinishingCard   => IsMultiAxisFinishing;
+    public bool ShowsMorphCard       => IsMorph;
+    public bool ShowsContouringCard  => IsContouring;
+    public bool ShowsPassRaster      => IsPlanarFacing || IsPlanarClearing || IsMultiAxisFinishing;
 
     /// <summary>Step 2 OPERATION card expansion.</summary>
     public bool StepOperationExpanded
@@ -536,6 +554,15 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     public static IReadOnlyList<SpindleDirection> SpindleDirectionOptions { get; } =
         [SpindleDirection.Clockwise, SpindleDirection.CounterClockwise];
 
+    public static IReadOnlyList<AdaMillingDirection> MillingDirectionOptions { get; } =
+        [AdaMillingDirection.TowardSurface, AdaMillingDirection.FromSurface];
+
+    public static IReadOnlyList<AdaToolCompensation> ToolCompensationOptions { get; } =
+        [AdaToolCompensation.Off, AdaToolCompensation.Left, AdaToolCompensation.Right];
+
+    public static IReadOnlyList<AdaCutoutOrientationMode> CutoutOrientationOptions { get; } =
+        [AdaCutoutOrientationMode.Auto, AdaCutoutOrientationMode.SelectedEdges, AdaCutoutOrientationMode.Sketch];
+
     /// <summary>
     /// Offset the mill path along the surface normal (mm). + pushes the cutter out
     /// (shallower / leave stock). − cuts into the work. Not print/stock-to-leave.
@@ -634,7 +661,143 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         set => SetField(ref _spindleDirection, value);
     }
 
-    // -- Relief heightmap ------------------------------------------------------
+    // -- AdaOne per-operation cards --------------------------------------------
+
+    private double _feedHeightMm = 5;
+    private AdaMillingDirection _cutoutMillingDirection = AdaMillingDirection.TowardSurface;
+    private double _cutoutCutDepthMm = 2;
+    private double _cutoutLayerHeightMm = 2;
+    private AdaCutoutOrientationMode _cutoutOrientationMode = AdaCutoutOrientationMode.Auto;
+    private double _drillingBreakthroughMm = 5;
+    private bool _drillingPeck;
+    private double _drillingPeckDepthMm = 2;
+    private bool _waterfallMill;
+    private bool _allAroundMill;
+    private bool _flickEnds;
+    private bool _clearingInfill = true;
+    private bool _contouringWaterfall;
+    private bool _contouringMaxDepthEnabled;
+    private double _swarfLeadDeg;
+    private double _swarfLeanDeg;
+    private bool _stabilizeHeadRotation = true;
+    private double _surfaceFinishingCutDepthMm;
+    private int _morphSteps = 8;
+    private double _leadInMm;
+    private double _leadOutMm;
+    private AdaToolCompensation _toolCompensation = AdaToolCompensation.Off;
+    private double _topHeightMm;
+    private double _bottomHeightMm;
+
+    /// <summary>AdaOne feed height above the surface before the cut (mm).</summary>
+    public double FeedHeightMm { get => _feedHeightMm; set => SetField(ref _feedHeightMm, value); }
+
+    public AdaMillingDirection CutoutMillingDirection
+    {
+        get => _cutoutMillingDirection;
+        set => SetField(ref _cutoutMillingDirection, value);
+    }
+
+    public double CutoutCutDepthMm { get => _cutoutCutDepthMm; set => SetField(ref _cutoutCutDepthMm, Math.Max(0.05, value)); }
+    public double CutoutLayerHeightMm { get => _cutoutLayerHeightMm; set => SetField(ref _cutoutLayerHeightMm, Math.Max(0.05, value)); }
+
+    public AdaCutoutOrientationMode CutoutOrientationMode
+    {
+        get => _cutoutOrientationMode;
+        set => SetField(ref _cutoutOrientationMode, value);
+    }
+
+    public double DrillingBreakthroughMm { get => _drillingBreakthroughMm; set => SetField(ref _drillingBreakthroughMm, Math.Max(0, value)); }
+    public bool DrillingPeck { get => _drillingPeck; set => SetField(ref _drillingPeck, value); }
+    public double DrillingPeckDepthMm { get => _drillingPeckDepthMm; set => SetField(ref _drillingPeckDepthMm, Math.Max(0.05, value)); }
+
+    public bool WaterfallMill { get => _waterfallMill; set => SetField(ref _waterfallMill, value); }
+    public bool AllAroundMill { get => _allAroundMill; set => SetField(ref _allAroundMill, value); }
+    public bool FlickEnds { get => _flickEnds; set => SetField(ref _flickEnds, value); }
+    public bool ClearingInfill { get => _clearingInfill; set => SetField(ref _clearingInfill, value); }
+
+    public bool ContouringWaterfall { get => _contouringWaterfall; set => SetField(ref _contouringWaterfall, value); }
+    public bool ContouringMaxDepthEnabled { get => _contouringMaxDepthEnabled; set => SetField(ref _contouringMaxDepthEnabled, value); }
+
+    public double SwarfLeadDeg { get => _swarfLeadDeg; set => SetField(ref _swarfLeadDeg, value); }
+    public double SwarfLeanDeg { get => _swarfLeanDeg; set => SetField(ref _swarfLeanDeg, value); }
+
+    public bool StabilizeHeadRotation { get => _stabilizeHeadRotation; set => SetField(ref _stabilizeHeadRotation, value); }
+    public double SurfaceFinishingCutDepthMm { get => _surfaceFinishingCutDepthMm; set => SetField(ref _surfaceFinishingCutDepthMm, value); }
+
+    public int MorphSteps
+    {
+        get => _morphSteps;
+        set => SetField(ref _morphSteps, Math.Clamp(value, 2, 200));
+    }
+
+    public double LeadInMm { get => _leadInMm; set => SetField(ref _leadInMm, Math.Max(0, value)); }
+    public double LeadOutMm { get => _leadOutMm; set => SetField(ref _leadOutMm, Math.Max(0, value)); }
+
+    public AdaToolCompensation ToolCompensation
+    {
+        get => _toolCompensation;
+        set => SetField(ref _toolCompensation, value);
+    }
+
+    public double TopHeightMm { get => _topHeightMm; set => SetField(ref _topHeightMm, value); }
+    public double BottomHeightMm { get => _bottomHeightMm; set => SetField(ref _bottomHeightMm, value); }
+
+    /// <summary>AdaOne machining card from the live mill panel + selected bit.</summary>
+    public AdaMachiningSettings ToAdaMachining() => new()
+    {
+        Operation                   = SelectedOperation,
+        StockToLeaveMm              = (float)FinishAllowanceMm,
+        PassCount                   = NumberOfDepthCuts,
+        CuttingDirection            = CuttingDirection,
+        AvoidGouging                = EnableAntiGouging,
+        ClipPath                    = ClipPath,
+        KeepToolWithinSurface       = KeepToolWithinSurface,
+        OffsetDistanceMm            = (float)OffsetDistanceMm,
+        ClearanceMm                 = (float)ApproachClearanceMm,
+        FeedHeightMm                = (float)FeedHeightMm,
+        RetractHeightMm             = (float)RapidZMm,
+        CuttingFeedMmS              = (float)CuttingFeedMmS,
+        SkimFeedMmS                 = (float)SkimFeedMmS,
+        TravelSpeedMmS              = (float)TravelSpeedMmS,
+        PlungeFeedMmMin             = (float)PlungeFeedMmMin,
+        SpindleRpm                  = (float)SpindleRpm,
+        SpindleDirection            = SpindleDirection,
+        ToolDiameterMm              = (float)ToolDiameterMm,
+        BallEnd                     = BallEnd,
+        StepoverMm                  = (float)StepoverMm,
+        StepdownMm                  = (float)StepdownMm,
+        MaxDepthMm                  = (float)MaxDepthMm,
+        TopHeightMm                 = (float)TopHeightMm,
+        BottomHeightMm              = (float)BottomHeightMm,
+        AxialPassCount              = NumberOfDepthCuts,
+        CutoutMillingDirection      = CutoutMillingDirection,
+        CutoutCutDepthMm            = (float)CutoutCutDepthMm,
+        CutoutLayerHeightMm         = (float)CutoutLayerHeightMm,
+        CutoutOrientationMode       = CutoutOrientationMode,
+        DrillingBreakthroughMm      = (float)DrillingBreakthroughMm,
+        DrillingPeck                = DrillingPeck,
+        DrillingPeckDepthMm         = (float)DrillingPeckDepthMm,
+        WaterfallMill               = WaterfallMill,
+        AllAroundMill               = AllAroundMill,
+        FlickEnds                   = FlickEnds,
+        ClearingInfill              = ClearingInfill,
+        PlanarPattern               = PassStrategy,
+        PlanarLinearPassAngleDeg    = (float)PassAngleDeg,
+        PlanarFacingNormal          = ResolvePlanarApproach(),
+        ContouringWaterfall         = ContouringWaterfall,
+        ContouringMaxDepthEnabled   = ContouringMaxDepthEnabled,
+        ContouringPassAngleDeg      = (float)PassAngleDeg,
+        SwarfLeadDeg                = (float)SwarfLeadDeg,
+        SwarfLeanDeg                = (float)SwarfLeanDeg,
+        StabilizeHeadRotation       = StabilizeHeadRotation,
+        SurfaceFinishingCutDepthMm  = (float)SurfaceFinishingCutDepthMm,
+        MorphSteps                  = MorphSteps,
+        LeadInMm                    = (float)LeadInMm,
+        LeadOutMm                   = (float)LeadOutMm,
+        ToolCompensation            = ToolCompensation,
+    };
+
+    // -- Relief heightmap (kept for old .mass files; not the mill product) ------
 
     private string _heightmapPath = string.Empty;
     private double _heightScaleMm = 5;
@@ -754,6 +917,30 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
             FootprintLengthMm = FootprintLengthMm,
             HeaderTemplate = HeaderTemplate,
             FooterTemplate = FooterTemplate,
+            FeedHeightMm = FeedHeightMm,
+            CutoutMillingDirection = CutoutMillingDirection.ToString(),
+            CutoutCutDepthMm = CutoutCutDepthMm,
+            CutoutLayerHeightMm = CutoutLayerHeightMm,
+            CutoutOrientationMode = CutoutOrientationMode.ToString(),
+            DrillingBreakthroughMm = DrillingBreakthroughMm,
+            DrillingPeck = DrillingPeck,
+            DrillingPeckDepthMm = DrillingPeckDepthMm,
+            WaterfallMill = WaterfallMill,
+            AllAroundMill = AllAroundMill,
+            FlickEnds = FlickEnds,
+            ClearingInfill = ClearingInfill,
+            ContouringWaterfall = ContouringWaterfall,
+            ContouringMaxDepthEnabled = ContouringMaxDepthEnabled,
+            SwarfLeadDeg = SwarfLeadDeg,
+            SwarfLeanDeg = SwarfLeanDeg,
+            StabilizeHeadRotation = StabilizeHeadRotation,
+            SurfaceFinishingCutDepthMm = SurfaceFinishingCutDepthMm,
+            MorphSteps = MorphSteps,
+            LeadInMm = LeadInMm,
+            LeadOutMm = LeadOutMm,
+            ToolCompensation = ToolCompensation.ToString(),
+            TopHeightMm = TopHeightMm,
+            BottomHeightMm = BottomHeightMm,
         };
     }
 
@@ -836,5 +1023,33 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
 
         if (Enum.TryParse<MillAreaSelectTool>(s.AreaSelectTool, ignoreCase: true, out var area))
             AreaSelectTool = area;
+
+        FeedHeightMm = s.FeedHeightMm > 0 ? s.FeedHeightMm : FeedHeightMm;
+        if (Enum.TryParse<AdaMillingDirection>(s.CutoutMillingDirection, ignoreCase: true, out var millDir))
+            CutoutMillingDirection = millDir;
+        if (s.CutoutCutDepthMm > 0) CutoutCutDepthMm = s.CutoutCutDepthMm;
+        if (s.CutoutLayerHeightMm > 0) CutoutLayerHeightMm = s.CutoutLayerHeightMm;
+        if (Enum.TryParse<AdaCutoutOrientationMode>(s.CutoutOrientationMode, ignoreCase: true, out var ori))
+            CutoutOrientationMode = ori;
+        DrillingBreakthroughMm = s.DrillingBreakthroughMm;
+        DrillingPeck = s.DrillingPeck;
+        if (s.DrillingPeckDepthMm > 0) DrillingPeckDepthMm = s.DrillingPeckDepthMm;
+        WaterfallMill = s.WaterfallMill;
+        AllAroundMill = s.AllAroundMill;
+        FlickEnds = s.FlickEnds;
+        ClearingInfill = s.ClearingInfill;
+        ContouringWaterfall = s.ContouringWaterfall;
+        ContouringMaxDepthEnabled = s.ContouringMaxDepthEnabled;
+        SwarfLeadDeg = s.SwarfLeadDeg;
+        SwarfLeanDeg = s.SwarfLeanDeg;
+        StabilizeHeadRotation = s.StabilizeHeadRotation;
+        SurfaceFinishingCutDepthMm = s.SurfaceFinishingCutDepthMm;
+        if (s.MorphSteps >= 2) MorphSteps = s.MorphSteps;
+        LeadInMm = s.LeadInMm;
+        LeadOutMm = s.LeadOutMm;
+        if (Enum.TryParse<AdaToolCompensation>(s.ToolCompensation, ignoreCase: true, out var comp))
+            ToolCompensation = comp;
+        TopHeightMm = s.TopHeightMm;
+        BottomHeightMm = s.BottomHeightMm;
     }
 }

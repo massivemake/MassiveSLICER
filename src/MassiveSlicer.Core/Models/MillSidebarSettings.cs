@@ -67,4 +67,30 @@ public sealed class MillSidebarSettings
 
     public string HeaderTemplate { get; set; } = "";
     public string FooterTemplate { get; set; } = "";
+
+    // AdaOne per-op cards
+    public double FeedHeightMm { get; set; } = 5;
+    public string CutoutMillingDirection { get; set; } = nameof(AdaMillingDirection.TowardSurface);
+    public double CutoutCutDepthMm { get; set; } = 2;
+    public double CutoutLayerHeightMm { get; set; } = 2;
+    public string CutoutOrientationMode { get; set; } = nameof(AdaCutoutOrientationMode.Auto);
+    public double DrillingBreakthroughMm { get; set; } = 5;
+    public bool DrillingPeck { get; set; }
+    public double DrillingPeckDepthMm { get; set; } = 2;
+    public bool WaterfallMill { get; set; }
+    public bool AllAroundMill { get; set; }
+    public bool FlickEnds { get; set; }
+    public bool ClearingInfill { get; set; } = true;
+    public bool ContouringWaterfall { get; set; }
+    public bool ContouringMaxDepthEnabled { get; set; }
+    public double SwarfLeadDeg { get; set; }
+    public double SwarfLeanDeg { get; set; }
+    public bool StabilizeHeadRotation { get; set; } = true;
+    public double SurfaceFinishingCutDepthMm { get; set; }
+    public int MorphSteps { get; set; } = 8;
+    public double LeadInMm { get; set; }
+    public double LeadOutMm { get; set; }
+    public string ToolCompensation { get; set; } = nameof(AdaToolCompensation.Off);
+    public double TopHeightMm { get; set; }
+    public double BottomHeightMm { get; set; }
 }

@@ -3454,7 +3454,7 @@
                             </Expander.Header>
                             <StackPanel Margin="0,0,0,6">
                                 <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
-                                           Text="Choose the milling strategy. Multi-axis finishing is wired today; the rest are scaffolded for SPSM."/>
+                                           Text="AdaOne milling strategies. Geometry, passes, travel, and engagement follow the selected operation. Cutting data comes from the bit library."/>
 
                                 <Border Margin="10,0,10,8" Padding="10,8" CornerRadius="6"
                                         Background="{DynamicResource Bg1}"
@@ -3540,6 +3540,16 @@
                                         <StackPanel Spacing="4" HorizontalAlignment="Center">
                                             <ia:Icon Value="mdi-rotate-3d-variant" FontSize="18" HorizontalAlignment="Center"/>
                                             <TextBlock Text="Swarf" FontSize="9" HorizontalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Classes="PatternTile"
+                                            Classes.active="{Binding Subtractive.IsMorph}"
+                                            Command="{Binding Subtractive.SetOperationCommand}"
+                                            CommandParameter="Morph"
+                                            ToolTip.Tip="AdaOne morph — blend top and bottom rails">
+                                        <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                            <ia:Icon Value="mdi-set-merge" FontSize="18" HorizontalAlignment="Center"/>
+                                            <TextBlock Text="Morph" FontSize="9" HorizontalAlignment="Center"/>
                                         </StackPanel>
                                     </Button>
                                 </UniformGrid>
@@ -3706,7 +3716,7 @@
                             </Expander.Header>
                             <StackPanel Margin="0,0,0,6">
                                 <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
-                                           Text="Pass strategy, travel clearances, and motion rates for the selected operation. Values seed from the active bit preset."/>
+                                           Text="AdaOne passes, travel, engagement, and motion for the selected operation. Feeds and RPM seed from the active bit preset."/>
 
                                 <Expander Classes="SectionExpander" Header="PASSES" IsExpanded="True">
                                     <StackPanel Margin="0,2,0,6" Spacing="4">
@@ -3777,6 +3787,133 @@
                                         <CheckBox Margin="8,0,8,4" Content="Enable anti gouging" FontSize="11"
                                                   IsChecked="{Binding Subtractive.EnableAntiGouging, Mode=TwoWay}"
                                                   ToolTip.Tip="Uses cutter diameter for inverse-offset anti-gouge when generating paths"/>
+
+                                        <StackPanel IsVisible="{Binding Subtractive.ShowsCutoutCard}" Margin="0,6,0,0" Spacing="4">
+                                            <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10"
+                                                       Text="CUTOUT — closed outline, then step deeper each pass"/>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,140">
+                                                <TextBlock Text="Milling direction" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                                                          ItemsSource="{x:Static vm:SubtractiveSettingsViewModel.MillingDirectionOptions}"
+                                                          SelectedItem="{Binding Subtractive.CutoutMillingDirection, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                <TextBlock Text="Cut depth" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                    <NumericUpDown Value="{Binding Subtractive.CutoutCutDepthMm, Mode=TwoWay}"
+                                                                   Minimum="0.05" Maximum="500" Increment="0.1" FormatString="F2" FontSize="11"/>
+                                                    <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Grid>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                <TextBlock Text="Layer height" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                    <NumericUpDown Value="{Binding Subtractive.CutoutLayerHeightMm, Mode=TwoWay}"
+                                                                   Minimum="0.05" Maximum="100" Increment="0.1" FormatString="F2" FontSize="11"/>
+                                                    <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Grid>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,140">
+                                                <TextBlock Text="Orientation" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                                                          ItemsSource="{x:Static vm:SubtractiveSettingsViewModel.CutoutOrientationOptions}"
+                                                          SelectedItem="{Binding Subtractive.CutoutOrientationMode, Mode=TwoWay}"/>
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <StackPanel IsVisible="{Binding Subtractive.ShowsClearingCard}" Margin="0,6,0,0" Spacing="4">
+                                            <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10"
+                                                       Text="PLANAR CLEARING — waterfall / all-around / flick ends"/>
+                                            <CheckBox Margin="8,0,8,2" Content="Waterfall mill" FontSize="11"
+                                                      IsChecked="{Binding Subtractive.WaterfallMill, Mode=TwoWay}"/>
+                                            <CheckBox Margin="8,0,8,2" Content="All-around mill" FontSize="11"
+                                                      IsChecked="{Binding Subtractive.AllAroundMill, Mode=TwoWay}"/>
+                                            <CheckBox Margin="8,0,8,2" Content="Flick ends" FontSize="11"
+                                                      IsChecked="{Binding Subtractive.FlickEnds, Mode=TwoWay}"/>
+                                            <CheckBox Margin="8,0,8,2" Content="Infill" FontSize="11"
+                                                      IsChecked="{Binding Subtractive.ClearingInfill, Mode=TwoWay}"/>
+                                        </StackPanel>
+
+                                        <StackPanel IsVisible="{Binding Subtractive.ShowsContouringCard}" Margin="0,6,0,0" Spacing="4">
+                                            <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10"
+                                                       Text="CONTOURING — waterline loops at each Z"/>
+                                            <CheckBox Margin="8,0,8,2" Content="Waterfall mill" FontSize="11"
+                                                      IsChecked="{Binding Subtractive.ContouringWaterfall, Mode=TwoWay}"/>
+                                            <CheckBox Margin="8,0,8,2" Content="Max depth enabled" FontSize="11"
+                                                      IsChecked="{Binding Subtractive.ContouringMaxDepthEnabled, Mode=TwoWay}"/>
+                                        </StackPanel>
+
+                                        <StackPanel IsVisible="{Binding Subtractive.ShowsDrillingCard}" Margin="0,6,0,0" Spacing="4">
+                                            <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10"
+                                                       Text="DRILLING — plunge / peck, no raster passes"/>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                <TextBlock Text="Breakthrough" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                    <NumericUpDown Value="{Binding Subtractive.DrillingBreakthroughMm, Mode=TwoWay}"
+                                                                   Minimum="0" Maximum="100" Increment="0.5" FormatString="F2" FontSize="11"/>
+                                                    <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Grid>
+                                            <CheckBox Margin="8,0,8,2" Content="Peck cycle" FontSize="11"
+                                                      IsChecked="{Binding Subtractive.DrillingPeck, Mode=TwoWay}"/>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100"
+                                                  IsEnabled="{Binding Subtractive.DrillingPeck}">
+                                                <TextBlock Text="Peck depth" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                    <NumericUpDown Value="{Binding Subtractive.DrillingPeckDepthMm, Mode=TwoWay}"
+                                                                   Minimum="0.05" Maximum="50" Increment="0.5" FormatString="F2" FontSize="11"/>
+                                                    <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <StackPanel IsVisible="{Binding Subtractive.ShowsSwarfCard}" Margin="0,6,0,0" Spacing="4">
+                                            <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10"
+                                                       Text="SWARF — side-of-tool contact, lead / lean"/>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                <TextBlock Text="Lead" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                    <NumericUpDown Value="{Binding Subtractive.SwarfLeadDeg, Mode=TwoWay}"
+                                                                   Minimum="-90" Maximum="90" Increment="1" FormatString="F1" FontSize="11"/>
+                                                    <TextBlock Grid.Column="1" Text="°" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Grid>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                <TextBlock Text="Lean" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                    <NumericUpDown Value="{Binding Subtractive.SwarfLeanDeg, Mode=TwoWay}"
+                                                                   Minimum="-90" Maximum="90" Increment="1" FormatString="F1" FontSize="11"/>
+                                                    <TextBlock Grid.Column="1" Text="°" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <StackPanel IsVisible="{Binding Subtractive.ShowsFinishingCard}" Margin="0,6,0,0" Spacing="4">
+                                            <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10"
+                                                       Text="MULTI-AXIS FINISHING"/>
+                                            <CheckBox Margin="8,0,8,2" Content="Stabilize head rotation" FontSize="11"
+                                                      IsChecked="{Binding Subtractive.StabilizeHeadRotation, Mode=TwoWay}"
+                                                      ToolTip.Tip="AdaOne smoothLayerOriTransitions — lerp tool ABC along the path"/>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                <TextBlock Text="Cut depth" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                    <NumericUpDown Value="{Binding Subtractive.SurfaceFinishingCutDepthMm, Mode=TwoWay}"
+                                                                   Minimum="0" Maximum="200" Increment="0.1" FormatString="F2" FontSize="11"/>
+                                                    <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <StackPanel IsVisible="{Binding Subtractive.ShowsMorphCard}" Margin="0,6,0,0" Spacing="4">
+                                            <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10"
+                                                       Text="MORPH — blend top rail into bottom rail"/>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                <TextBlock Text="Morph steps" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <NumericUpDown Grid.Column="1"
+                                                               Value="{Binding Subtractive.MorphSteps, Mode=TwoWay}"
+                                                               Minimum="2" Maximum="200" Increment="1" FormatString="F0" FontSize="11"/>
+                                            </Grid>
+                                        </StackPanel>
                                     </StackPanel>
                                 </Expander>
 
@@ -3791,6 +3928,15 @@
                                             </Grid>
                                         </Grid>
                                         <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                            <TextBlock Text="Feed height" Classes="LabelMuted" VerticalAlignment="Center"
+                                                       ToolTip.Tip="AdaOne feed height — drop from clearance to this before the cut"/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                <NumericUpDown Value="{Binding Subtractive.FeedHeightMm, Mode=TwoWay}"
+                                                               Minimum="0" Maximum="500" Increment="1" FormatString="F2" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
+                                        <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                             <TextBlock Text="Retract height" Classes="LabelMuted" VerticalAlignment="Center"
                                                        ToolTip.Tip="Safe rapid / retract Z above the reference plane"/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
@@ -3799,8 +3945,6 @@
                                                 <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                             </Grid>
                                         </Grid>
-                                        <TextBlock Margin="8,6,8,2" Classes="LabelMuted" FontSize="10" Opacity="0.55"
-                                                   Text="Advanced motion editor coming later."/>
                                     </StackPanel>
                                 </Expander>
 
@@ -3899,137 +4043,90 @@
                                     </StackPanel>
                                 </Expander>
 
+                                <Expander Classes="SectionExpander" Header="ENGAGEMENT" IsExpanded="False">
+                                    <StackPanel Margin="0,2,0,6" Spacing="4">
+                                        <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
+                                                   Text="AdaOne milling engagement — lead-in / lead-out at the start and end of each pass."/>
+                                        <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                            <TextBlock Text="Lead in" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                <NumericUpDown Value="{Binding Subtractive.LeadInMm, Mode=TwoWay}"
+                                                               Minimum="0" Maximum="200" Increment="0.5" FormatString="F2" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
+                                        <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                            <TextBlock Text="Lead out" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                <NumericUpDown Value="{Binding Subtractive.LeadOutMm, Mode=TwoWay}"
+                                                               Minimum="0" Maximum="200" Increment="0.5" FormatString="F2" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Classes="SectionExpander" Header="TOOL COMPENSATION" IsExpanded="False">
+                                    <StackPanel Margin="0,2,0,6" Spacing="4">
+                                        <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
+                                                   Text="AdaOne cutting-tool compensation — offset the programmed path by the cutter radius."/>
+                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,140">
+                                            <TextBlock Text="Compensation" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                            <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                                                      ItemsSource="{x:Static vm:SubtractiveSettingsViewModel.ToolCompensationOptions}"
+                                                      SelectedItem="{Binding Subtractive.ToolCompensation, Mode=TwoWay}"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </Expander>
+
                                 <Button Margin="10,10,10,8"
                                         Content="Generate Toolpath"
                                         Classes="PrimaryButton"
                                         HorizontalAlignment="Stretch"
-                                        ToolTip.Tip="Build a mill toolpath from the current bit, operation, area selection, and toolpathing settings. Paints only the selected region when an area is painted; otherwise mills the selected model."
+                                        ToolTip.Tip="Build an AdaOne mill toolpath from the current bit, operation, area selection, and toolpathing settings."
                                         Command="{Binding $parent[Window].DataContext.Viewport.GenerateMillFromSettingsCommand}"/>
                             </StackPanel>
                         </Expander>
 
-                        <!-- Catch-all: leftover mill panels — reorganize into steps later -->
+                        <!-- 4 OUTPUT — mill KRL / send. Bit presets stay in BITS. -->
                         <Expander Classes="StepCard"
                                   IsExpanded="{Binding Subtractive.StepMoreExpanded, Mode=TwoWay}">
                             <Expander.Header>
                                 <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <Border Width="18" Height="18" CornerRadius="9" Background="#2a2a2a">
-                                        <ia:Icon Value="mdi-dots-horizontal" FontSize="12"
-                                                 Foreground="{DynamicResource TextSecondary}"
-                                                 HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
+                                        <TextBlock Text="4" FontSize="10" FontWeight="Bold"
+                                                   Foreground="{DynamicResource AccentHover}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
-                                    <TextBlock Text="MORE" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"
-                                               Opacity="0.85"/>
+                                    <TextBlock Text="OUTPUT" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Expander.Header>
                             <StackPanel Margin="0,0,0,6">
                                 <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55" Margin="10,4,10,6"
-                                           Text="Catch-all for stock, surface, placement, and output controls until they move under BITS / OPERATION."/>
-
-                                <Expander Classes="SectionExpander" Header="RELIEF HEIGHTMAP" IsExpanded="False">
-                                    <StackPanel Margin="0,2,0,6">
-                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,Auto">
-                                            <TextBox Grid.Column="0" Classes="PanelTextBox" FontSize="11"
-                                                     Watermark="grayscale .png / .jpg"
-                                                     Text="{Binding Subtractive.HeightmapPath, Mode=TwoWay}"/>
-                                            <Button Grid.Column="1" Content="Browse" Margin="4,0,0,0" FontSize="11"
-                                                    Classes="ToolbarButton"
-                                                    Command="{Binding Subtractive.BrowseHeightmapCommand}"
-                                                    ToolTip.Tip="Pick a grayscale relief image (white = high surface)"/>
-                                        </Grid>
-                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                                            <TextBlock Grid.Column="0" Text="Height scale (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.HeightScaleMm, Mode=TwoWay}"
-                                                           Minimum="0" Maximum="200" Increment="0.5" FormatString="F1" FontSize="11"/>
-                                        </Grid>
-                                        <CheckBox Margin="8,0,8,4" Content="Invert (black = high)" FontSize="11"
-                                                  IsChecked="{Binding Subtractive.InvertHeightmap, Mode=TwoWay}"/>
-                                    </StackPanel>
-                                </Expander>
-
-                                <Expander Classes="SectionExpander" Header="DISPLACED SURFACE" IsExpanded="False">
-                                    <StackPanel Margin="0,2,0,6">
-                                        <TextBlock Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"
-                                                   Text="Pushes the low-poly mesh along its normals by the map above (or the model's normal map if none). This is the surface the mill follows."/>
-                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                                            <TextBlock Grid.Column="0" Text="Displacement distance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.DisplacementDistanceMm, Mode=TwoWay}"
-                                                           Minimum="0" Maximum="100" Increment="0.25" FormatString="F2" FontSize="11"/>
-                                        </Grid>
-                                        <Button Margin="8,2,8,4"
-                                                Content="Preview Displaced Surface"
-                                                Classes="SecondaryButton"
-                                                HorizontalAlignment="Stretch"
-                                                ToolTip.Tip="Build and show the detailed surface from the model's maps (the geometry the mill rides)"
-                                                Command="{Binding $parent[Window].DataContext.Viewport.PreviewDisplacedCommand}"/>
-                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                                            <TextBlock Grid.Column="0" Text="Analysis tolerance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.AnalysisToleranceMm, Mode=TwoWay}"
-                                                           Minimum="0.01" Maximum="5" Increment="0.05" FormatString="F2" FontSize="11"/>
-                                        </Grid>
-                                        <Button Margin="8,0,8,4"
-                                                Content="Generate Multi-Axis Toolpath"
-                                                Classes="PrimaryButton"
-                                                HorizontalAlignment="Stretch"
-                                                ToolTip.Tip="Surface-following finish pass over the displaced surface (tool axis follows the surface normal)"
-                                                Command="{Binding $parent[Window].DataContext.Viewport.GenerateMultiAxisCommand}"/>
-                                        <Border Margin="8,0,8,6" Padding="6" CornerRadius="5" Background="{DynamicResource Bg1}"
-                                                IsVisible="{Binding Subtractive.MillAnalysisText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                                            <TextBlock Text="{Binding Subtractive.MillAnalysisText}" Classes="LabelMuted"
-                                                       FontSize="11" TextWrapping="Wrap"/>
-                                        </Border>
-                                    </StackPanel>
-                                </Expander>
-
-                                <Expander Classes="SectionExpander" Header="PLACEMENT" IsExpanded="False">
-                                    <StackPanel Margin="0,2,0,6">
-                                        <CheckBox Margin="8,0,8,4" Content="Reference Z from part top" FontSize="11"
-                                                  IsChecked="{Binding Subtractive.AutoReferenceFromTop, Mode=TwoWay}"/>
-                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,80" IsEnabled="{Binding !Subtractive.AutoReferenceFromTop}">
-                                            <TextBlock Grid.Column="0" Text="Reference Z (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.ReferencePlaneZ, Mode=TwoWay}"
-                                                           Increment="1" FormatString="F1" FontSize="11"/>
-                                        </Grid>
-                                        <CheckBox Margin="8,0,8,8" Content="Footprint from part bounds" FontSize="11"
-                                                  IsChecked="{Binding Subtractive.AutoFootprint, Mode=TwoWay}"/>
-                                    </StackPanel>
-                                </Expander>
-
-                                <Expander Classes="SectionExpander" Header="OUTPUT" IsExpanded="True">
-                                    <StackPanel Margin="0,2,0,6" Spacing="4">
-                                        <Button Margin="8,4,8,4"
-                                                Content="Generate Mill Toolpath"
-                                                Classes="PrimaryButton"
-                                                HorizontalAlignment="Stretch"
-                                                ToolTip.Tip="Carve the relief into the selected blank (relief milling)"
-                                                Command="{Binding $parent[Window].DataContext.Viewport.MillCommand}"/>
-
-                                        <Button Margin="8,0,8,4"
-                                                Content="Export Mill KRL"
-                                                Classes="PrimaryButton"
-                                                HorizontalAlignment="Stretch"
-                                                ToolTip.Tip="Export spindle finish program (uses global home and orientation above)"
-                                                Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
-
-                                        <ComboBox Margin="8,0,8,4"
-                                                  HorizontalAlignment="Stretch"
-                                                  ItemsSource="{Binding $parent[Window].DataContext.Viewport.SendTargets}"
-                                                  SelectedItem="{Binding $parent[Window].DataContext.Viewport.SelectedSendTarget}"
-                                                  ToolTip.Tip="Robot (KRL) or MassiveDRIVE (package)">
-                                            <ComboBox.ItemTemplate>
-                                                <DataTemplate>
-                                                    <TextBlock Text="{Binding Label}"/>
-                                                </DataTemplate>
-                                            </ComboBox.ItemTemplate>
-                                        </ComboBox>
-                                        <Button Margin="8,0,8,8"
-                                                Content="{Binding $parent[Window].DataContext.Viewport.SendActionLabel}"
-                                                Classes="SecondaryButton"
-                                                HorizontalAlignment="Stretch"
-                                                ToolTip.Tip="{Binding $parent[Window].DataContext.Viewport.SendActionTip}"
-                                                Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"/>
-                                    </StackPanel>
-                                </Expander>
+                                           Text="Export the mill toolpath as a spindle KRL program, or send it to the robot / MassiveDRIVE."/>
+                                <Button Margin="10,4,10,4"
+                                        Content="Export Mill KRL"
+                                        Classes="PrimaryButton"
+                                        HorizontalAlignment="Stretch"
+                                        ToolTip.Tip="Export spindle finish program (uses global home and orientation)"
+                                        Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
+                                <ComboBox Margin="10,0,10,4"
+                                          HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding $parent[Window].DataContext.Viewport.SendTargets}"
+                                          SelectedItem="{Binding $parent[Window].DataContext.Viewport.SelectedSendTarget}"
+                                          ToolTip.Tip="Robot (KRL) or MassiveDRIVE (package)">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Label}"/>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Margin="10,0,10,8"
+                                        Content="{Binding $parent[Window].DataContext.Viewport.SendActionLabel}"
+                                        Classes="SecondaryButton"
+                                        HorizontalAlignment="Stretch"
+                                        ToolTip.Tip="{Binding $parent[Window].DataContext.Viewport.SendActionTip}"
+                                        Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"/>
                             </StackPanel>
                         </Expander>
                     </StackPanel>
