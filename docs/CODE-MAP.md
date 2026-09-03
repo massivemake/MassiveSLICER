@@ -16,6 +16,7 @@ subsystem to read in full.
 | I need to change… | Go to |
 |---|---|
 | Slicing (planar layers, contours, seams, shells) | `Core/Slicing/PlanarSlicer.cs` |
+| AdaOne mill ops (cutout / facing / clearing / contour / swarf / drill / morph) | `Core/Slicing/AdaMillPlanner.cs`, `Core/Models/AdaMachiningSettings.cs`, `Core/Models/MillOperationKind.cs` |
 | Angled / Multi-Planar slicing | `Core/Slicing/AngledPlanarSlicer.cs` |
 | Formbound / Lightning / tree support | `Core/Slicing/Lightning/LightningPlanner.cs`, `Core/Slicing/TreeSupport/` |
 | X-bracing | `Core/Slicing/Lightning/XBracingPlanner.cs` |

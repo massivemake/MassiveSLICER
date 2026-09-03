@@ -1031,7 +1031,7 @@ public sealed class ConsoleCommandRegistry
                 {
                     ctx.Log("[mill] status | area <whole|face|box|lasso|brush|clear>");
                     ctx.Log("[mill] brush size <mm> | brush falloff <0..1>");
-                    ctx.Log("[mill] op <MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf>");
+                    ctx.Log("[mill] op <MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf|Morph>");
                     ctx.Log("[mill] axis <-z|+z|+x|-x|+y|-y|paint|camera|custom> | tilt <deg> | azimuth <deg>");
                     ctx.Log("[mill] speed <mm/s> | travel <mm/s> | offset <mm>");
                     return;
@@ -1114,7 +1114,7 @@ public sealed class ConsoleCommandRegistry
                         }
                         else
                         {
-                            ctx.LogError("[mill] op: MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf");
+                            ctx.LogError("[mill] op: MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf|Morph");
                         }
                         break;
                     }

@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-26** (first-layer print speed / RPM % increase)
+Last updated: **2026-09-03** (AdaOne mill ops baseline on Improved-Cell)
 
 ---
 
@@ -209,8 +209,8 @@ Start-Process -FilePath 'Z:\Research\LFAM\MassiveSLICER\src\MassiveSlicer.App\bi
 
 #### Mill right-panel structure (LFAM 3)
 - **1 BITS** — spindle tool library dropdown + dialog; default **Flat 3in AP90** (`MillBitTool.CreateLfam3DefaultFlat3In`); library JSON v3 under AppData.
-- **2 OPERATION** — strategy tiles (`MillOperationKind`: MultiAxisFinishing, Drilling, PlanarFacing, PlanarClearing, Cutout, Contouring, Swarf) + **SELECT AREA**.
-- **3 TOOLPATHING** — passes / travel / movement; SpindleRpm linked between BITS and TOOLPATHING.
+- **2 OPERATION** — AdaOne strategy tiles (`MillOperationKind`: MultiAxisFinishing, Drilling, PlanarFacing, PlanarClearing, Cutout, Contouring, Swarf, Morph) + **SELECT AREA**. No PlanarCut.
+- **3 TOOLPATHING** — AdaOne passes / travel / engagement / tool compensation / movement; per-op cards; SpindleRpm linked between BITS and TOOLPATHING.
 - **MORE** — catch-all.
 - Scan/Mill StepCards match Printing styling; BACK TO STEPS removed.
 - Key UI: `RightPanelView.axaml`, `SubtractiveSettingsViewModel.cs`, `MillBitLibraryDialog.axaml`, `MillBitLibraryViewModel.cs`, `MillBitTool.cs`, `MillBitLibraryLoader.cs`, `MillOperationKind.cs`.
@@ -516,6 +516,15 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-03 — AdaOne mill baseline (OPERATION + TOOLPATHING)
+
+- Ask: clear MILL 2 OPERATION and 3 TOOLPATHING; start fresh from AdaOne/Eidos on `feature/Improved-Cell`. Do not keep PlanarCut / T12 mill generate.
+- Was: SPSM tiles plus generic passes; generate routed to SurfaceFollowMillGenerator.
+- Fix: AdaOne catalog (Multi-axis finishing, Drilling, Planar facing, Planar clearing, Cutout, Contouring, Swarf, Morph). Per-op cards, engagement, tool compensation. Generate → `AdaMillPlanner`. PlanarCut tile and mill generate path removed.
+- Files: `MillOperationKind.cs`, `AdaMachiningSettings.cs`, `AdaMillPlanner.cs`, `MeshWaterline.cs`, `MillSidebarSettings.cs`, `SubtractiveSettingsViewModel.cs`, `RightPanelView.axaml`, `ViewportView.axaml.cs`, `ConsoleCommandRegistry.cs`.
+- Tests: `AdaMillPlannerTest` 9 passed.
+
 
 ### 2026-08-26 — First-layer print speed and RPM % increase
 

@@ -18,31 +18,34 @@ public enum MillAreaSelectTool
 }
 
 /// <summary>
-/// Subtractive strategy selected in the Mill sidebar (step 2 OPERATION).
-/// Each kind will grow its own parameter set and toolpath generator over time.
+/// AdaOne / Eidos subtractive strategy selected in MILL → 2 OPERATION.
+/// Fresh baseline — not the old PlanarCut / relief mill catalog.
 /// </summary>
 public enum MillOperationKind
 {
-    /// <summary>Surface-following finish; tool axis tracks the surface normal.</summary>
+    /// <summary>AdaOne SURFACE_FINISHING: tool axis tracks the surface normal.</summary>
     MultiAxisFinishing,
 
-    /// <summary>Hole / pocket drilling (plunge or peck cycles).</summary>
+    /// <summary>AdaOne drilling: plunge or peck through selected holes.</summary>
     Drilling,
 
-    /// <summary>Flat facing pass across a planar region.</summary>
+    /// <summary>AdaOne planar facing: raster a plane.</summary>
     PlanarFacing,
 
-    /// <summary>2.5D area clear / pocket roughing on a plane.</summary>
+    /// <summary>AdaOne HORIZONTAL_CLEARING: 2.5D area clear / pocket roughing.</summary>
     PlanarClearing,
 
-    /// <summary>Profile cutout along a closed boundary.</summary>
+    /// <summary>AdaOne cutout: closed outline, then step deeper each pass.</summary>
     Cutout,
 
-    /// <summary>Contour / waterline finish along Z levels or a surface silhouette.</summary>
+    /// <summary>AdaOne contouring: waterline loops at each Z.</summary>
     Contouring,
 
-    /// <summary>Swarf: side-of-tool contact along ruled / lofted walls.</summary>
+    /// <summary>AdaOne swarf: side-of-tool contact on a guide surface.</summary>
     Swarf,
+
+    /// <summary>AdaOne morph: blend a top rail into a bottom rail.</summary>
+    Morph,
 }
 
 /// <summary>UI catalog entry for a <see cref="MillOperationKind"/>.</summary>
@@ -60,49 +63,56 @@ public sealed class MillOperationInfo
             Kind = MillOperationKind.MultiAxisFinishing,
             DisplayName = "Multi-axis finishing",
             Icon = "mdi-axis-arrow",
-            Description = "Surface-following finish pass — tool axis tracks the surface normal (existing multi-axis path).",
+            Description = "AdaOne multi-axis finishing (SURFACE_FINISHING): tool axis tracks the surface normal. Stabilize head rotation smooths ABC between moves.",
         },
         new()
         {
             Kind = MillOperationKind.Drilling,
             DisplayName = "Drilling",
             Icon = "mdi-screw-flat-top",
-            Description = "Hole and pocket drilling with plunge / peck cycles. Parameters coming next.",
+            Description = "AdaOne drilling: plunge or peck cycle through selected holes, with clearance / feed / retract and breakthrough.",
         },
         new()
         {
             Kind = MillOperationKind.PlanarFacing,
             DisplayName = "Planar facing",
             Icon = "mdi-arrow-collapse-down",
-            Description = "Face a planar region flat. Set TOOL AXIS / tilt so the path and T12 are not locked to world -Z.",
+            Description = "AdaOne planar facing: raster a plane. Set the plane (TOOL AXIS) and surface; optional axial pass stack.",
         },
         new()
         {
             Kind = MillOperationKind.PlanarClearing,
             DisplayName = "Planar clearing",
             Icon = "mdi-arrow-expand-all",
-            Description = "2.5D area clear / pocket roughing on a plane. Shares TOOL AXIS with planar facing.",
+            Description = "AdaOne planar clearing (HORIZONTAL_CLEARING): 2.5D area clear with waterfall / all-around / flick-ends / infill.",
         },
         new()
         {
             Kind = MillOperationKind.Cutout,
             DisplayName = "Cutout",
             Icon = "mdi-content-cut",
-            Description = "Profile cutout along a closed boundary. Parameters coming next.",
+            Description = "AdaOne cutout: one closed outline, then step deeper each pass (cut depth / layer height). Toward-surface or from-surface.",
         },
         new()
         {
             Kind = MillOperationKind.Contouring,
             DisplayName = "Contouring",
             Icon = "mdi-vector-polyline",
-            Description = "Contour / waterline finish along Z levels or a surface silhouette. Parameters coming next.",
+            Description = "AdaOne contouring: waterline loops at each Z. Waterfall links levels; max-depth optional.",
         },
         new()
         {
             Kind = MillOperationKind.Swarf,
             DisplayName = "Swarf",
             Icon = "mdi-rotate-3d-variant",
-            Description = "Side-of-tool contact along ruled or lofted walls. Parameters coming next.",
+            Description = "AdaOne swarf: side-of-tool contact on a guide surface, with lead and lean.",
+        },
+        new()
+        {
+            Kind = MillOperationKind.Morph,
+            DisplayName = "Morph",
+            Icon = "mdi-set-merge",
+            Description = "AdaOne morph: blend a top rail into a bottom rail over N steps.",
         },
     ];
 

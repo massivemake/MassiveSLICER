@@ -6306,9 +6306,8 @@ public partial class ViewportView : UserControl
         try
         {
             var mill = BuildMillSettings(sub);
-            bool planar = sub.IsPlanarFacing || sub.IsPlanarClearing;
             NVec3? approach = null;
-            bool lockAxis = false;
+            bool planar = sub.ShowsPlanarToolAxis;
             if (planar)
             {
                 if (sub.PlanarToolAxis.Kind == MillPlanarAxisKind.PaintedFace)
@@ -6319,17 +6318,20 @@ public partial class ViewportView : UserControl
                 else if (sub.PlanarToolAxis.Kind == MillPlanarAxisKind.Camera)
                     ApplyCameraToolAxis(sub);
                 approach = sub.ResolvePlanarApproach();
-                lockAxis = true;
             }
+            var ada = sub.ToAdaMachining();
+            var millReq = new AdaMillRequest
+            {
+                Settings     = ada,
+                Positions    = positions,
+                Normals      = normals,
+                Indices      = indices,
+                ApproachAxis = approach,
+            };
             var toolpath = await Task.Run(() =>
             {
                 cancel.ThrowIfCancellationRequested();
-                return planar
-                    ? MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.Generate(
-                        positions, normals, indices, mill,
-                        approachAxis: approach, lockToolToApproach: lockAxis)
-                    : MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.GenerateMultiAxis(
-                        positions, normals, indices, mill);
+                return AdaMillPlanner.Generate(millReq);
             }, cancel);
 
             cancel.ThrowIfCancellationRequested();
