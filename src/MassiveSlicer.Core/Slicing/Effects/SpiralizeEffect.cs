@@ -109,6 +109,41 @@ public static class SpiralizeEffect
             }
             result.Layers.Add(newLayer);
         }
+        RejoinConnectors(result);
         return result;
+    }
+
+    /// <summary>
+    /// Re-anchors the connector moves that join one layer to the next.
+    /// <see cref="ToolpathLayerConnect"/> builds each stitch from the previous layer's
+    /// end as it stood at slice time — flat, at that layer's own Z. Ramping lifts that
+    /// end by a layer height, which leaves the stitch starting a full layer height below
+    /// where the nozzle actually is: the tool drops back down and re-climbs, and the wall
+    /// shows a gap at every layer change. Connectors exist purely to join, so each one is
+    /// pulled onto the point the previous move actually ended at. A stitch left with
+    /// nowhere to go is dropped rather than emitted as a zero-length bead.
+    /// </summary>
+    private static void RejoinConnectors(Toolpath toolpath)
+    {
+        Vector3? end = null;
+        foreach (var layer in toolpath.Layers)
+        {
+            for (int i = 0; i < layer.Moves.Count; i++)
+            {
+                var m = layer.Moves[i];
+                bool connector = m.IsLayerStitch || m.IsLayerChange || m.Kind == MoveKind.Travel;
+                if (connector && end is Vector3 from && Vector3.DistanceSquared(m.From, from) > 1e-8f)
+                {
+                    if (Vector3.DistanceSquared(from, m.To) <= 1e-6f)
+                    {
+                        layer.Moves.RemoveAt(i--);   // the ramp already delivered the nozzle here
+                        continue;
+                    }
+                    m = m with { From = from };
+                    layer.Moves[i] = m;
+                }
+                end = m.To;
+            }
+        }
     }
 }

@@ -1,5 +1,6 @@
 using System.Numerics;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Slicing;
 using MassiveSlicer.Core.Slicing.Effects;
 using Xunit;
 
@@ -147,6 +148,94 @@ public class SpiralPatternContinuityTest
             Assert.True(MathF.Abs(nextStart - rampEnd) < 0.01f,
                 $"pattern={withPattern} layer {li}: ramp ended at {rampEnd:F2} but the next " +
                 $"layer starts at {nextStart:F2} — {nextStart - rampEnd:+0.00;-0.00} mm out");
+        }
+    }
+
+    /// <summary>
+    /// The whole spiral has to be one unbroken path. The layer-change stitch is built from
+    /// the previous layer's end as it stood BEFORE the ramp, so after ramping it starts a
+    /// full layer height too low — the tool drops back down and re-climbs at every layer.
+    /// </summary>
+    [Fact]
+    public void LayerChangeConnectorStartsWhereThePreviousLayerActuallyEnded()
+    {
+        const float lh = 4f;
+        var tp = new Toolpath();
+        Vector3 Pt(float r, float ang, float z) =>
+            new(r * MathF.Cos(ang), r * MathF.Sin(ang), z);
+
+        var prevEnd = Pt(200f, 0f, 0f);
+        for (int li = 0; li < 12; li++)
+        {
+            float z = (li + 1) * lh;
+            var layer = new ToolpathLayer(li, z) { Height = lh };
+            for (int i = 0; i < 240; i++)
+                layer.Moves.Add(new ToolpathMove(
+                    Pt(200f, i / 240f * 2f * MathF.PI, z),
+                    Pt(200f, (i + 1) / 240f * 2f * MathF.PI, z), MoveKind.Extrude));
+            // Exactly what the slicer does: join from where the previous layer ended.
+            ToolpathLayerConnect.Insert(layer, prevEnd, 10f);
+            prevEnd = layer.Moves[^1].To;
+            tp.Layers.Add(layer);
+        }
+
+        var settings = Settings(PatternMappingMode.ArcLength, 20f);
+        var sp = SpiralizeEffect.Apply(PatternEffect.Apply(tp, settings), settings);
+
+        Vector3? end = null;
+        foreach (var layer in sp.Layers)
+            foreach (var m in layer.Moves)
+            {
+                if (end is Vector3 e)
+                    Assert.True(Vector3.Distance(e, m.From) < 0.01f,
+                        $"layer {layer.Index}: path jumps {Vector3.Distance(e, m.From):F2} mm " +
+                        $"(z {e.Z:F2} -> {m.From.Z:F2}) before this move");
+                end = m.To;
+            }
+    }
+
+    /// <summary>
+    /// Real contours carry the odd zero-length move. It has no tangent of its own, but it
+    /// still has to be displaced with its neighbours — left behind while the wall moves out
+    /// from under it, it opens a gap the width of the pattern, which splits the loop and
+    /// costs that layer its spiral entirely.
+    /// </summary>
+    [Fact]
+    public void DegenerateMoveTravelsWithTheWallAndKeepsTheLoopIntact()
+    {
+        const float lh = 4f;
+        var tp = new Toolpath();
+        for (int li = 0; li < 6; li++)
+        {
+            float z = (li + 1) * lh;
+            var layer = new ToolpathLayer(li, z) { Height = lh };
+            Vector3 Pt(int i) => new(200f * MathF.Cos(i / 240f * 2f * MathF.PI),
+                                     200f * MathF.Sin(i / 240f * 2f * MathF.PI), z);
+            for (int i = 0; i < 240; i++)
+            {
+                layer.Moves.Add(new ToolpathMove(Pt(i), Pt(i + 1), MoveKind.Extrude));
+                if (i == 120)   // a duplicated vertex, exactly as the slicer emits it
+                    layer.Moves.Add(new ToolpathMove(Pt(121), Pt(121), MoveKind.Extrude));
+            }
+            tp.Layers.Add(layer);
+        }
+
+        var settings = Settings(PatternMappingMode.Wavelength, 20f);
+        var patterned = PatternEffect.Apply(tp, settings);
+
+        foreach (var layer in patterned.Layers)
+            for (int k = 1; k < layer.Moves.Count; k++)
+                Assert.True(
+                    Vector3.Distance(layer.Moves[k].From, layer.Moves[k - 1].To) < 0.05f,
+                    $"layer {layer.Index}: the wall split by " +
+                    $"{Vector3.Distance(layer.Moves[k].From, layer.Moves[k - 1].To):F2} mm at move {k}");
+
+        foreach (var layer in SpiralizeEffect.Apply(patterned, settings).Layers)
+        {
+            float lo = float.MaxValue, hi = float.MinValue;
+            foreach (var m in layer.Moves) { lo = MathF.Min(lo, m.To.Z); hi = MathF.Max(hi, m.To.Z); }
+            Assert.True(hi - lo > lh * 0.9f,
+                $"layer {layer.Index} was left flat (rise {hi - lo:F2} mm)");
         }
     }
 

@@ -161,7 +161,6 @@ public static class PatternEffect
                 }
 
                 float len = Vector3.Distance(move.From, move.To);
-                if (len < 1e-4f) { newLayer.Moves.Add(move); continue; }
 
                 var chain = chainOf?[mi];
 
@@ -174,6 +173,10 @@ public static class PatternEffect
                 float spacing  = Math.Clamp(pathPerCycle / 12f, 1.0f, 6f);
                 int   segments = Math.Clamp((int)MathF.Ceiling(len / spacing), 1, 2000);
 
+                // A degenerate move has no tangent of its own, but BuildNormals already
+                // gave it its neighbours'. It still has to travel with them: left where it
+                // was while the wall moves out from under it, it opens a gap the width of
+                // the pattern and splits the loop, which costs the layer its spiral.
                 var pFrom = perpFrom[mi];
                 var pTo   = perpTo[mi];
                 if (pFrom.LengthSquared() < 1e-9f) { newLayer.Moves.Add(move); continue; }
