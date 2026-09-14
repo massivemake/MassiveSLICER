@@ -105,6 +105,51 @@ public class SpiralPatternContinuityTest
         }
     }
 
+    /// <summary>
+    /// Each loop has to rise by the gap to the layer ABOVE it. Layer.Height is the gap
+    /// BELOW (this Z minus the previous Z), so under adaptive or support-driven heights
+    /// the two differ and ramping by the wrong one opens a gap beneath every thinned
+    /// layer and drives the ramp through the one above.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void RampLandsExactlyWhereTheNextLayerStarts(bool withPattern)
+    {
+        // Mixed thicknesses, the way adaptive / support-driven slicing produces them.
+        var heights = new[] { 3f, 3f, 1.5f, 1.5f, 3f, 3f, 0.8f, 3f, 3f, 1.5f, 3f, 3f };
+        var tp = new Toolpath();
+        float prevZ = 0f;
+        for (int li = 0; li < heights.Length; li++)
+        {
+            float z = prevZ + heights[li];
+            var layer = new ToolpathLayer(li, z) { Height = z - prevZ };
+            for (int i = 0; i < 180; i++)
+            {
+                float a0 = i / 180f * 2f * MathF.PI, a1 = (i + 1) / 180f * 2f * MathF.PI;
+                layer.Moves.Add(new ToolpathMove(
+                    new Vector3(200f * MathF.Cos(a0), 200f * MathF.Sin(a0), z),
+                    new Vector3(200f * MathF.Cos(a1), 200f * MathF.Sin(a1), z), MoveKind.Extrude));
+            }
+            tp.Layers.Add(layer);
+            prevZ = z;
+        }
+
+        var settings = withPattern
+            ? Settings(PatternMappingMode.ArcLength, 20f)
+            : new SliceSettings { Spiralize = true };
+        var sp = SpiralizeEffect.Apply(withPattern ? PatternEffect.Apply(tp, settings) : tp, settings);
+
+        for (int li = 0; li < sp.Layers.Count - 1; li++)
+        {
+            float rampEnd   = sp.Layers[li].Moves[^1].To.Z;
+            float nextStart = sp.Layers[li + 1].Moves[0].From.Z;
+            Assert.True(MathF.Abs(nextStart - rampEnd) < 0.01f,
+                $"pattern={withPattern} layer {li}: ramp ended at {rampEnd:F2} but the next " +
+                $"layer starts at {nextStart:F2} — {nextStart - rampEnd:+0.00;-0.00} mm out");
+        }
+    }
+
     /// <summary>The pattern must not drop the layer metadata the rest of the pipeline reads.</summary>
     [Fact]
     public void PatternKeepsLayerHeight()

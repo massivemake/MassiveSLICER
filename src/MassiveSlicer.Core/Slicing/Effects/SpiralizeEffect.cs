@@ -28,11 +28,15 @@ public static class SpiralizeEffect
         for (int li = 0; li < toolpath.Layers.Count; li++)
         {
             var layer = toolpath.Layers[li];
-            float height = layer.Height > 0f
-                ? layer.Height
-                : (li + 1 < toolpath.Layers.Count
-                    ? MathF.Max(0f, toolpath.Layers[li + 1].Z - layer.Z)
-                    : 0f);
+            // Ramp to exactly where the next layer starts. Layer.Height is the gap
+            // BELOW a layer (its Z minus the previous layer's Z), so the rise to the
+            // layer above is the NEXT layer's height, not this one's. They only agree
+            // when every layer is the same thickness — under adaptive or support-driven
+            // heights, using this layer's leaves a gap beneath every thinned layer and
+            // drives the ramp through the one above it.
+            float height = li + 1 < toolpath.Layers.Count
+                ? MathF.Max(0f, toolpath.Layers[li + 1].Z - layer.Z)
+                : layer.Height;
 
             var newLayer = new ToolpathLayer(layer.Index, layer.Z)
             {
