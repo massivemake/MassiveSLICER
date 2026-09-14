@@ -36,9 +36,6 @@ public static class PatternEffect
 {
     private const float TwoPi = 2f * MathF.PI;
 
-    /// <summary>Diagnostic: the phase each layer's sine actually started on, in degrees.</summary>
-    internal static readonly List<float> SinePhaseLog = [];
-
     public static Toolpath Apply(Toolpath toolpath, SliceSettings settings)
     {
         bool effectorActive = settings.EffectorPoints.Count > 0
@@ -47,7 +44,6 @@ public static class PatternEffect
             (settings.PatternAmplitude <= 0f && !effectorActive))
             return toolpath;
         if (toolpath.Layers.Count == 0) return toolpath;
-        SinePhaseLog.Clear();
 
         // -- Model frame: XY centre, z range, mean radius --------------------
         float minX = float.MaxValue, maxX = float.MinValue;
@@ -103,8 +99,10 @@ public static class PatternEffect
         var scope = settings.PatternScope;
 
         var result = new Toolpath();
+        PhaseField? prevPhase = null;
         for (int layerOrdinal = 0; layerOrdinal < toolpath.Layers.Count; layerOrdinal++)
         {
+            PhaseField? thisPhase = null;
             var layer = toolpath.Layers[layerOrdinal];
 
             var newLayer = new ToolpathLayer(layer.Index, layer.Z)
@@ -126,14 +124,10 @@ public static class PatternEffect
             // cycle; only where the wave starts moves.
             if (sineCycles)
             {
-                // Same whole cycle count on every layer, and every other layer starts half a
-                // cycle over. Nothing else is needed and nothing else is wanted: an earlier
-                // version estimated the shift from the layer below instead, which carried a
-                // systematic bias and advanced the phase 148 degrees a layer rather than 180,
-                // so the peaks precessed a full turn every eleven layers instead of
-                // alternating. The count and the flip are the whole rule.
                 ctx.SinePhase = (layerOrdinal & 1) == 1 ? MathF.PI : 0f;
-                SinePhaseLog.Add(ctx.SinePhase * 180f / MathF.PI);
+                if (prevPhase is not null)
+                    ctx.SinePhase = prevPhase.OpposingPhase(layer, chainOf!, ctx, wavelengthMode);
+                thisPhase = PhaseField.Build(layer, chainOf!, ctx, wavelengthMode);
             }
 
             // VisibleSkin asks a whole-layer question — "could a horizontal ray reach this" —
@@ -233,6 +227,7 @@ public static class PatternEffect
                 }
             }
             result.Layers.Add(newLayer);
+            if (sineCycles && thisPhase is not null) prevPhase = thisPhase;
         }
         return result;
     }
@@ -319,6 +314,100 @@ public static class PatternEffect
             i0 = Math.Max(j, i0 + 1);
         }
         return (from, to);
+    }
+
+    /// <summary>
+    /// Where one layer laid its sine, as a coarse map of position to phase, so the layer
+    /// above can be shifted to oppose it. Samples are bucketed into a uniform grid, which
+    /// makes "what phase is directly below this point" an O(1) lookup instead of a scan of
+    /// every move on the layer beneath.
+    /// </summary>
+    private sealed class PhaseField
+    {
+        private const float CellMm = 25f;
+        private const int   Samples = 600;     // enough to pin a phase; far cheaper than every move
+
+        private readonly Dictionary<(int, int), List<(float X, float Y, float Phase)>> _grid = new();
+
+        /// <summary>Samples a layer's wave phase at points spread evenly along its path.</summary>
+        public static PhaseField? Build(ToolpathLayer layer, ChainInfo[] chainOf,
+                                        PatternContext ctx, bool wavelengthMode)
+        {
+            var field = new PhaseField();
+            int added = 0;
+            for (int mi = 0; mi < layer.Moves.Count; mi++)
+            {
+                var m = layer.Moves[mi];
+                if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
+                var chain = chainOf[mi];
+                if (chain is not { Total: > 1f }) continue;
+                if ((mi * Samples / Math.Max(1, layer.Moves.Count)) ==
+                    (((mi + 1) * Samples) / Math.Max(1, layer.Moves.Count))) continue;
+
+                float? theta = ChainTheta(chain, ctx, wavelengthMode,
+                                          Vector3.Distance(m.From, m.To), 0f);
+                if (theta is null) continue;
+                float phase = theta.Value * ctx.Frequency + ctx.SinePhase;
+                var key = ((int)MathF.Floor(m.From.X / CellMm), (int)MathF.Floor(m.From.Y / CellMm));
+                if (!field._grid.TryGetValue(key, out var bucket))
+                    field._grid[key] = bucket = [];
+                bucket.Add((m.From.X, m.From.Y, phase));
+                added++;
+            }
+            return added > 8 ? field : null;
+        }
+
+        /// <summary>
+        /// The phase shift that puts this layer's peaks over the layer below's valleys.
+        /// Each sample asks what the wall below is doing directly beneath it and how far
+        /// out of opposition this layer currently is; the answer is the circular mean of
+        /// those errors, which is the one rigid shift that best opposes the whole loop.
+        /// </summary>
+        public float OpposingPhase(ToolpathLayer layer, ChainInfo[] chainOf,
+                                   PatternContext ctx, bool wavelengthMode)
+        {
+            float sumSin = 0f, sumCos = 0f;
+            int n = 0;
+            int step = Math.Max(1, layer.Moves.Count / Samples);
+            for (int mi = 0; mi < layer.Moves.Count; mi += step)
+            {
+                var m = layer.Moves[mi];
+                if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
+                var chain = chainOf[mi];
+                if (chain is not { Total: > 1f }) continue;
+                if (Nearest(m.From.X, m.From.Y) is not float below) continue;
+
+                float? theta = ChainTheta(chain, ctx, wavelengthMode,
+                                          Vector3.Distance(m.From, m.To), 0f);
+                if (theta is null) continue;
+                // Own phase with no shift; the error is how far that sits from opposing.
+                float own = theta.Value * ctx.Frequency;
+                float err = below + MathF.PI - own;
+                sumSin += MathF.Sin(err);
+                sumCos += MathF.Cos(err);
+                n++;
+            }
+            if (n < 8 || (sumSin * sumSin + sumCos * sumCos) < 1e-6f) return ctx.SinePhase;
+            return MathF.Atan2(sumSin / n, sumCos / n);
+        }
+
+        /// <summary>Phase of the nearest sample below, searching this cell and its ring.</summary>
+        private float? Nearest(float x, float y)
+        {
+            int cx = (int)MathF.Floor(x / CellMm), cy = (int)MathF.Floor(y / CellMm);
+            float best = float.MaxValue; float? phase = null;
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    if (!_grid.TryGetValue((cx + dx, cy + dy), out var bucket)) continue;
+                    foreach (var (px, py, ph) in bucket)
+                    {
+                        float d = (px - x) * (px - x) + (py - y) * (py - y);
+                        if (d < best) { best = d; phase = ph; }
+                    }
+                }
+            return phase;
+        }
     }
 
     /// <summary>Per-move chain data for arc-length mapping.</summary>
