@@ -71,6 +71,7 @@ public sealed class PrintPresetSample
     public string? PatternType { get; init; }
     public string? PatternMapping { get; init; }
     public double? PatternWavelengthMm { get; init; }
+    public double? PatternSineCyclesPerLayer { get; init; }
     public double? PatternAmplitude { get; init; }
     public double? PatternFrequency { get; init; }
     public double? PatternTwist { get; init; }
@@ -854,6 +855,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
             EffectorRange = d.EffectorRange, EffectorStrength = d.EffectorStrength,
 
             PatternType = d.PatternType, PatternMapping = d.PatternMapping, PatternWavelengthMm = d.PatternWavelengthMm,
+            PatternSineCyclesPerLayer = d.PatternSineCyclesPerLayer,
             PatternAmplitude = d.PatternAmplitude, PatternFrequency = d.PatternFrequency, PatternTwist = d.PatternTwist,
             PatternOffset = d.PatternOffset, PatternFadeIn = d.PatternFadeIn, PatternFadeOut = d.PatternFadeOut,
 
@@ -1127,6 +1129,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         if (p.PatternType is { } patternType) _additive.PatternType = patternType;
         if (p.PatternMapping is { } patternMapping) _additive.PatternMapping = patternMapping;
         if (p.PatternWavelengthMm is { } patternWavelengthMm) _additive.PatternWavelengthMm = patternWavelengthMm;
+        if (p.PatternSineCyclesPerLayer is { } sineCycles) _additive.PatternSineCyclesPerLayer = sineCycles;
         if (p.PatternAmplitude is { } patternAmplitude) _additive.PatternAmplitude = patternAmplitude;
         if (p.PatternFrequency is { } patternFrequency) _additive.PatternFrequency = patternFrequency;
         if (p.PatternTwist is { } patternTwist) _additive.PatternTwist = patternTwist;
@@ -1384,6 +1387,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
             PatternType = pattern ? a.PatternType : null,
             PatternMapping = pattern ? a.PatternMapping : null,
             PatternWavelengthMm = pattern ? a.PatternWavelengthMm : null,
+            PatternSineCyclesPerLayer = pattern ? a.PatternSineCyclesPerLayer : null,
             PatternAmplitude = pattern ? a.PatternAmplitude : null,
             PatternFrequency = pattern ? a.PatternFrequency : null,
             PatternTwist = pattern ? a.PatternTwist : null,
@@ -1593,6 +1597,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         EffectorRange = p.EffectorRange, EffectorStrength = p.EffectorStrength,
 
         PatternType = p.PatternType, PatternMapping = p.PatternMapping, PatternWavelengthMm = p.PatternWavelengthMm,
+        PatternSineCyclesPerLayer = p.PatternSineCyclesPerLayer,
         PatternAmplitude = p.PatternAmplitude, PatternFrequency = p.PatternFrequency, PatternTwist = p.PatternTwist,
         PatternOffset = p.PatternOffset, PatternFadeIn = p.PatternFadeIn, PatternFadeOut = p.PatternFadeOut,
 
@@ -1672,6 +1677,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         EffectorRange = r.EffectorRange, EffectorStrength = r.EffectorStrength,
 
         PatternType = r.PatternType, PatternMapping = r.PatternMapping, PatternWavelengthMm = r.PatternWavelengthMm,
+        PatternSineCyclesPerLayer = r.PatternSineCyclesPerLayer,
         PatternAmplitude = r.PatternAmplitude, PatternFrequency = r.PatternFrequency, PatternTwist = r.PatternTwist,
         PatternOffset = r.PatternOffset, PatternFadeIn = r.PatternFadeIn, PatternFadeOut = r.PatternFadeOut,
 

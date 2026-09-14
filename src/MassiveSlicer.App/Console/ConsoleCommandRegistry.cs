@@ -1264,6 +1264,91 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "sinecheck",
+            Description = "Sine cycles-per-layer audit: whole cycles counted on each layer, "
+                + "and how squarely each layer's peaks sit over the valleys below it",
+            Usage = "sinecheck [layers]",
+            Execute = (ctx, args) =>
+            {
+                var tp = ctx.Main.Viewport.ActiveScrubToolpath;
+                if (tp is null) { ctx.LogError("[sinecheck] no active toolpath — slice first"); return; }
+                int want = int.TryParse(args.Trim(), out var n) && n > 0 ? n : 12;
+
+                // The pattern is a fast ripple riding on the part's own cross-section, and on
+                // anything but a cylinder the shape dwarfs it — a 2 mm wave against hundreds of
+                // mm of outline. So sample the wall, then subtract a smoothed copy of itself:
+                // what's left is the pattern alone. Window is just over one cycle, which kills
+                // the shape and keeps the ripple.
+                int cyclesHint = Math.Max(1, ctx.Main.RightPanel.Additive.PatternSineCyclesPerLayer > 0
+                    ? (int)ctx.Main.RightPanel.Additive.PatternSineCyclesPerLayer
+                    : 20);
+                int Buckets = Math.Clamp(cyclesHint * 8, 720, 8000);
+                int Window  = Math.Max(3, Buckets / cyclesHint);
+                float[] Profile(MassiveSlicer.Core.Models.ToolpathLayer layer)
+                {
+                    var pts = layer.Moves.Where(m => m.Kind == MoveKind.Extrude && !m.IsLayerStitch)
+                                         .Select(m => m.From).ToList();
+                    var dev = new float[Buckets];
+                    if (pts.Count < Buckets) return dev;
+                    float cx = pts.Average(q => q.X), cy = pts.Average(q => q.Y);
+                    float mean = pts.Average(q => MathF.Sqrt((q.X - cx) * (q.X - cx) + (q.Y - cy) * (q.Y - cy)));
+                    for (int b = 0; b < Buckets; b++)
+                    {
+                        var q = pts[(int)((long)b * pts.Count / Buckets)];
+                        dev[b] = MathF.Sqrt((q.X - cx) * (q.X - cx) + (q.Y - cy) * (q.Y - cy)) - mean;
+                    }
+                    // High-pass: drop the smooth shape, keep the ripple. Circular window.
+                    var hp = new float[Buckets];
+                    for (int b = 0; b < Buckets; b++)
+                    {
+                        float sum = 0f;
+                        for (int w = -Window / 2; w <= Window / 2; w++)
+                            sum += dev[((b + w) % Buckets + Buckets) % Buckets];
+                        hp[b] = dev[b] - sum / (Window / 2 * 2 + 1);
+                    }
+                    return hp;
+                }
+
+                int Cycles(float[] d)
+                {
+                    int c = 0;
+                    for (int b = 0; b < d.Length; b++)
+                        if (d[(b + d.Length - 1) % d.Length] < 0f && d[b] >= 0f) c++;
+                    return c;
+                }
+
+                ctx.Log($"[sinecheck] {tp.Layers.Count} layer(s), showing first {want}");
+                ctx.Log("  layer  cycles  alignment-vs-below");
+                float[]? below = null;
+                int shown = 0, opposed = 0, checkedPairs = 0;
+                float worst = 1f;
+                for (int li = 0; li < tp.Layers.Count; li++)
+                {
+                    var dev = Profile(tp.Layers[li]);
+                    string align = "—";
+                    if (below is not null)
+                    {
+                        float dot = 0f, mag = 0f;
+                        for (int b = 0; b < Buckets; b++) { dot += dev[b] * below[b]; mag += below[b] * below[b]; }
+                        float r = mag > 1e-6f ? dot / mag : 0f;
+                        checkedPairs++;
+                        if (r < -0.9f) opposed++;
+                        worst = MathF.Min(worst, -r);
+                        align = r < -0.9f ? $"opposed ({r:F2})"
+                              : r > 0.5f  ? $"STACKED  ({r:F2})  <-- peak on peak"
+                                          : $"partial  ({r:F2})";
+                    }
+                    if (shown++ < want) ctx.Log($"  {li,5}  {Cycles(dev),6}  {align}");
+                    below = dev;
+                }
+                if (checkedPairs > 0)
+                    ctx.Log($"[sinecheck] {opposed}/{checkedPairs} layer pairs cleanly opposed "
+                          + $"(-1.00 = every peak over a valley; weakest {-worst:F2})");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "tpcheck",
             Description = "Printability audit of the active toolpath: position jumps between "
                 + "consecutive moves, extrude runs, travels and seam start/stop events per layer",

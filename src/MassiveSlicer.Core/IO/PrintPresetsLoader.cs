@@ -68,6 +68,7 @@ public sealed class PrintPresetRecord
     public string? PatternType { get; set; }
     public string? PatternMapping { get; set; }
     public double? PatternWavelengthMm { get; set; }
+    public double? PatternSineCyclesPerLayer { get; set; }
     public double? PatternAmplitude { get; set; }
     public double? PatternFrequency { get; set; }
     public double? PatternTwist { get; set; }

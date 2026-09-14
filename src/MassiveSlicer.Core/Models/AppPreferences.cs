@@ -355,6 +355,9 @@ public sealed class AppPreferences
     public double PatternWavelengthMm { get; set; } = 60.0;
     public double PatternAmplitude { get; set; }
     public double PatternFrequency { get; set; } = 15.0;
+
+    /// <summary>Sine only: whole sine cycles per layer, alternating phase. 0 = off.</summary>
+    public double PatternSineCyclesPerLayer { get; set; }
     public double PatternTwist { get; set; }
     public double PatternOffset { get; set; }
     public double PatternFadeIn { get; set; }
