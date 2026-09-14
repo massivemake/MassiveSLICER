@@ -62,6 +62,28 @@ public class SineAlternatingPhaseTest
         return dev;
     }
 
+    /// <summary>
+    /// The rule is just this: same whole cycle count every layer, every other layer started
+    /// half a cycle over. An earlier version estimated the shift from the layer below, which
+    /// carried a systematic bias and advanced 148 degrees a layer instead of 180 — the peaks
+    /// precessed a full turn every eleven layers rather than alternating, which is invisible
+    /// in any single-layer check. Assert on the phase itself so that cannot come back.
+    /// </summary>
+    [Fact]
+    public void EveryOtherLayerStartsExactlyHalfACycleOver()
+    {
+        PatternEffect.Apply(Cone(12), Settings(Cycles));
+        var log = PatternEffect.SinePhaseLog;
+        Assert.Equal(12, log.Count);
+        for (int i = 0; i < log.Count; i++)
+        {
+            float want = (i & 1) == 1 ? 180f : 0f;
+            Assert.True(MathF.Abs(log[i] - want) < 0.01f,
+                $"layer {i} started on {log[i]:F1} deg, expected {want:F0} — " +
+                $"full sequence: {string.Join(", ", log.Select(v => v.ToString("F0")))}");
+        }
+    }
+
     [Fact]
     public void EveryPeakSitsOverAValleyOnTheLayerBelow()
     {
