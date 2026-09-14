@@ -16,6 +16,14 @@ public static class SpiralizeEffect
     {
         if (!settings.Spiralize || toolpath.Layers.Count == 0) return toolpath;
 
+        // A pattern moves a loop's two ends apart even though they are the same vertex,
+        // so "did this loop close" has to be asked at the pattern's own scale — a fixed
+        // 1 mm reads a patterned loop as open and leaves the whole layer flat.
+        float reach   = MathF.Max(0f, settings.PatternAmplitude)
+                      + MathF.Max(0f, settings.EffectorStrengthMm);
+        float closeTol = MathF.Max(1f, 2f * reach);
+        float closeTolSq = closeTol * closeTol;
+
         var result = new Toolpath();
         for (int li = 0; li < toolpath.Layers.Count; li++)
         {
@@ -68,7 +76,7 @@ public static class SpiralizeEffect
                 }
 
                 bool closed = total > 1f
-                    && Vector3.DistanceSquared(moves[start].From, moves[j - 1].To) <= 1.0f;
+                    && Vector3.DistanceSquared(moves[start].From, moves[j - 1].To) <= closeTolSq;
 
                 if (!closed || total <= 1f)
                 {

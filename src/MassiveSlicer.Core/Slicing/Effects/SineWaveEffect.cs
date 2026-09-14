@@ -75,7 +75,9 @@ public static class WaveEffect
 
             float spacing = Math.Clamp(wavelength / 16f, 1.0f, 5f);
 
-            var newLayer = new ToolpathLayer(layer.Index, layer.Z) { PlaneNormal = layer.PlaneNormal };
+            var newLayer = new ToolpathLayer(layer.Index, layer.Z)
+                { Height = layer.Height, PlaneNormal = layer.PlaneNormal, ThermalTempC = layer.ThermalTempC };
+            newLayer.Contours.AddRange(layer.Contours);
             float phaseOffset = layer.Z * stagger;
 
             inheritor?.BeginLayer();

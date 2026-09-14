@@ -93,13 +93,15 @@ public static class PatternEffect
         var result = new Toolpath();
         foreach (var layer in toolpath.Layers)
         {
-            var newLayer = new ToolpathLayer(layer.Index, layer.Z) { PlaneNormal = layer.PlaneNormal };
+            var newLayer = new ToolpathLayer(layer.Index, layer.Z)
+                { Height = layer.Height, PlaneNormal = layer.PlaneNormal, ThermalTempC = layer.ThermalTempC };
+            newLayer.Contours.AddRange(layer.Contours);
 
             // Arc-length mode: pre-walk the layer's contour chains so each sample knows
             // its distance along the loop. u = 2π·(distance − anchor)/total gives evenly
             // spaced cycles; the anchor (vertex nearest world +X from the part centre)
             // keeps the phase aligned layer over layer even as seams wander.
-            ChainInfo[]? chainOf = arcMode ? BuildChains(layer, ctx) : null;
+            ChainInfo[]? chainOf = arcMode ? BuildChains(layer, ctx, wavelengthMode, wavelength) : null;
 
             // VisibleSkin asks a whole-layer question — "could a horizontal ray reach this" —
             // so the answer is computed once here and indexed per move below. Penetration is
@@ -109,6 +111,14 @@ public static class PatternEffect
                 ? SkinRaycastVisibility.BuildInteriorMask(
                       layer.Moves, settings.BeadWidth, settings.BeadWidth)
                 : null;
+
+            // Displacement normals, shared at every vertex. A per-segment normal flips with
+            // the tangent, so wherever the path turns a corner the two sides of that corner
+            // push apart and the wall splits — 2.8 mm at a right angle under a 2 mm pattern.
+            // Averaging the two adjoining normals at each shared vertex makes the wall one
+            // continuous surface. (No miter scaling: a corner offsets by cos(half-angle)
+            // less than a flat run, which is the safe direction — a true miter runs away.)
+            var (perpFrom, perpTo) = BuildNormals(layer);
 
             // Skin-only: displace the wall, then carry the structure's ENDS along with it so
             // braces stay attached without being bowed. The wall is walked first to learn where
@@ -123,12 +133,10 @@ public static class PatternEffect
                     if (SkinOnlyBracing.IsStructure(m, scope, interior, mi)) continue;
                     if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
                     if (Vector3.Distance(m.From, m.To) < 1e-4f) continue;
-                    var tan = Vector3.Normalize(m.To - m.From);
-                    var pp  = Vector3.Cross(tan, Vector3.UnitZ);
+                    var pp = perpFrom[mi];
                     if (pp.LengthSquared() < 1e-9f) continue;
-                    pp = Vector3.Normalize(pp);
                     var chainW = chainOf?[mi];
-                    float? thetaW = ChainTheta(chainW, ctx, wavelengthMode, wavelength,
+                    float? thetaW = ChainTheta(chainW, ctx, wavelengthMode,
                                                Vector3.Distance(m.From, m.To), 0f);
                     wallField.Record(m.From, m.From + pp * ctx.Displacement(m.From, thetaW));
                 }
@@ -166,16 +174,17 @@ public static class PatternEffect
                 float spacing  = Math.Clamp(pathPerCycle / 12f, 1.0f, 6f);
                 int   segments = Math.Clamp((int)MathF.Ceiling(len / spacing), 1, 2000);
 
-                var tangent = Vector3.Normalize(move.To - move.From);
-                var perp    = Vector3.Cross(tangent, Vector3.UnitZ);
-                if (perp.LengthSquared() < 1e-9f) { newLayer.Moves.Add(move); continue; }
-                perp = Vector3.Normalize(perp);
+                var pFrom = perpFrom[mi];
+                var pTo   = perpTo[mi];
+                if (pFrom.LengthSquared() < 1e-9f) { newLayer.Moves.Add(move); continue; }
 
                 Vector3 Displaced(float t)
                 {
-                    var pt = Vector3.Lerp(move.From, move.To, t);
+                    var pt   = Vector3.Lerp(move.From, move.To, t);
+                    var perp = Vector3.Lerp(pFrom, pTo, t);
+                    perp = perp.LengthSquared() < 1e-9f ? pFrom : Vector3.Normalize(perp);
                     return pt + perp * ctx.Displacement(
-                        pt, ChainTheta(chain, ctx, wavelengthMode, wavelength, len, t));
+                        pt, ChainTheta(chain, ctx, wavelengthMode, len, t));
                 }
 
                 for (int seg = 0; seg < segments; seg++)
@@ -197,7 +206,7 @@ public static class PatternEffect
     /// Shared so the wall sampling pass and the emit pass evaluate identical phase.
     /// </summary>
     private static float? ChainTheta(ChainInfo? chain, PatternContext ctx,
-        bool wavelengthMode, float wavelength, float len, float t)
+        bool wavelengthMode, float len, float t)
     {
         if (chain is not { Total: > 1f }) return null;
 
@@ -206,12 +215,74 @@ public static class PatternEffect
             // Constant mm wavelength, phase 0 at the chain start (the seam): theta advances
             // 2π per Frequency·λ of path, so P(θ·f) completes one cycle every λ mm.
             float d = chain.CumStart + t * len;
-            return TwoPi * d / (ctx.Frequency * wavelength);
+            return TwoPi * d / (ctx.Frequency * chain.Lambda);
         }
 
         float dist = chain.CumStart + t * len - chain.Anchor;
         dist -= MathF.Floor(dist / chain.Total) * chain.Total;
         return TwoPi * dist / chain.Total;
+    }
+
+    /// <summary>
+    /// Horizontal displacement normal at each move's two ends. Inside a contiguous extrude
+    /// chain a shared vertex gets one normal — the mean of the two segments meeting there —
+    /// so neighbouring moves push that vertex to the same place and the wall stays closed.
+    /// A chain's own two ends are averaged together too when the chain is a loop.
+    /// </summary>
+    private static (Vector3[] From, Vector3[] To) BuildNormals(ToolpathLayer layer)
+    {
+        int n = layer.Moves.Count;
+        var seg = new Vector3[n];          // per-segment normal, zero where undefined
+        for (int i = 0; i < n; i++)
+        {
+            var m = layer.Moves[i];
+            if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
+            var d = m.To - m.From;
+            if (d.LengthSquared() < 1e-8f) continue;
+            var p = Vector3.Cross(Vector3.Normalize(d), Vector3.UnitZ);
+            if (p.LengthSquared() < 1e-9f) continue;
+            seg[i] = Vector3.Normalize(p);
+        }
+
+        var from = new Vector3[n];
+        var to   = new Vector3[n];
+        int i0 = 0;
+        while (i0 < n)
+        {
+            var m = layer.Moves[i0];
+            if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) { i0++; continue; }
+
+            int start = i0, j = i0;
+            var prevTo = m.From;
+            while (j < n)
+            {
+                var mv = layer.Moves[j];
+                if (mv.Kind != MoveKind.Extrude || mv.IsLayerStitch) break;
+                if (Vector3.DistanceSquared(mv.From, prevTo) > 1.0f) break;
+                prevTo = mv.To;
+                j++;
+            }
+            bool loop = j - start > 2
+                && Vector3.DistanceSquared(layer.Moves[start].From, layer.Moves[j - 1].To) <= 1.0f;
+
+            static Vector3 Mean(Vector3 a, Vector3 b)
+            {
+                if (a.LengthSquared() < 1e-9f) return b;
+                if (b.LengthSquared() < 1e-9f) return a;
+                var s = a + b;
+                return s.LengthSquared() < 1e-9f ? a : Vector3.Normalize(s);
+            }
+
+            for (int k = start; k < j; k++)
+            {
+                var prev = k > start ? seg[k - 1] : (loop ? seg[j - 1] : Vector3.Zero);
+                var next = k + 1 < j ? seg[k + 1] : (loop ? seg[start] : Vector3.Zero);
+                from[k] = Mean(seg[k], prev);
+                to[k]   = Mean(seg[k], next);
+            }
+            i0 = Math.Max(j, i0 + 1);
+        }
+        return (from, to);
     }
 
     /// <summary>Per-move chain data for arc-length mapping.</summary>
@@ -220,13 +291,16 @@ public static class PatternEffect
         public float CumStart;   // path distance at this move's From
         public float Total;      // full chain length
         public float Anchor;     // path distance of the vertex nearest world +X
+        public bool  Closed;     // the chain's last point returns to its first
+        public float Lambda;     // wavelength actually used (snapped on closed loops)
     }
 
     /// <summary>
     /// Segments a layer's moves into contiguous extrude chains and computes, per move,
     /// its cumulative start distance, the chain total, and the phase anchor.
     /// </summary>
-    private static ChainInfo[] BuildChains(ToolpathLayer layer, PatternContext ctx)
+    private static ChainInfo[] BuildChains(ToolpathLayer layer, PatternContext ctx,
+                                           bool wavelengthMode, float wavelength)
     {
         var infos = new ChainInfo[layer.Moves.Count];
         int i = 0;
@@ -262,8 +336,24 @@ public static class PatternEffect
                 j++;
             }
 
+            // A loop has to carry a whole number of cycles or the wave steps at the seam.
+            // Snap the wavelength to the nearest whole fit: the cycle size drifts by at
+            // most half a cycle spread over the loop, and the wall closes on itself.
+            bool closed = total > 1f
+                && Vector3.DistanceSquared(layer.Moves[start].From, layer.Moves[j - 1].To) <= 1.0f;
+            float lambda = wavelength;
+            if (wavelengthMode && closed)
+            {
+                float cycles = MathF.Max(1f, MathF.Round(total / wavelength));
+                lambda = total / cycles;
+            }
+
             for (int k = start; k < j; k++)
-                infos[k] = new ChainInfo { CumStart = cum[k - start], Total = total, Anchor = anchor };
+                infos[k] = new ChainInfo
+                {
+                    CumStart = cum[k - start], Total = total, Anchor = anchor,
+                    Closed = closed, Lambda = lambda,
+                };
             i = Math.Max(j, i + 1);
         }
         return infos;
