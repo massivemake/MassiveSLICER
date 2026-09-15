@@ -280,6 +280,15 @@ public sealed record BedCellConfig
     public float? Diameter { get; init; }
 
     /// <summary>
+    /// Optional print-area size of the lower heated bed (mm). Used for the rectangular overlay
+    /// when a heated KRL base is active. Null = fall back (see <see cref="BedBoundaryOverlay"/>).
+    /// </summary>
+    public float? HeatedWidth { get; init; }
+
+    /// <summary>See <see cref="HeatedWidth"/>.</summary>
+    public float? HeatedDepth { get; init; }
+
+    /// <summary>
     /// Sign applied to E1 when rotating scene geometry about <see cref="Origin"/>:
     /// +1 = CCW about world +Z, −1 = CW. Set by rotary-bed rotation calibration.
     /// Null defaults to −1 (the original hard-coded direction).
@@ -470,6 +479,12 @@ public sealed record KrlBaseEntry
 {
     public required string Name  { get; init; }
     public required int    Index { get; init; }
+
+    /// <summary>
+    /// Overlay shape for this base: <c>rectangular</c> (heated / lower bed) or
+    /// <c>polar</c> (rotary platter). Null = infer from name / LFAM 3 BASE 6.
+    /// </summary>
+    public string? Overlay { get; init; }
 }
 
 /// <summary>

@@ -377,6 +377,11 @@
     {
       "name": "Rotary Table",
       "index": 2
+    },
+    {
+      "name": "HEATED-BED",
+      "index": 6,
+      "overlay": "rectangular"
     }
   ],
   "scanToolName": "Scanner (Calibrated)",

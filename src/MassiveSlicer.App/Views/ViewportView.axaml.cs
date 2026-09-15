@@ -263,6 +263,8 @@ public partial class ViewportView : UserControl
     // Set on the UI thread by a manual bed edit; consumed on the GL thread (SetBedBoundary creates GL resources).
     private (float X, float Y, float Z, float Diameter, float Sign)? _pendingBedRebuild;
     private (float Width, float Depth)? _pendingBedGridResize;
+    // Set on the UI thread when KRL BASE changes; consumed on the GL thread (SetBedBoundary).
+    private bool _pendingBedOverlayRebuild;
     // Robot cell state
     private Vector3  _robrootWorldPos;
     private Vector3  _tcpOffsetLocal;
@@ -782,6 +784,11 @@ public partial class ViewportView : UserControl
                     nameof(RobotPanelViewModel.A5) or nameof(RobotPanelViewModel.A6) or
                     nameof(RobotPanelViewModel.E1))
                     GlCanvas.RequestNextFrameRendering();
+                else if (pe.PropertyName is nameof(RobotPanelViewModel.KrlBaseIndex))
+                {
+                    _pendingBedOverlayRebuild = true;
+                    GlCanvas.RequestNextFrameRendering();
+                }
             };
             robot.OnToolSelected              = OnToolSwapRequested;
             robot.OnSaveHomePositionRequested = (name, angles) => SaveHomePosition(vm, name, angles);
@@ -2219,6 +2226,12 @@ public partial class ViewportView : UserControl
                 RebuildBedGridSize(gridSize.Width, gridSize.Depth);
             }
 
+            if (_pendingBedOverlayRebuild)
+            {
+                _pendingBedOverlayRebuild = false;
+                ApplyActiveBedBoundary();
+            }
+
             if (vm.Robot is { } e1Robot && e1Robot.E1 != _lastSyncE1)
             {
                 _lastSyncE1 = e1Robot.E1;
@@ -2250,10 +2263,12 @@ public partial class ViewportView : UserControl
                             Matrix4.CreateRotationZ(e1Rad) *
                             Matrix4.CreateTranslation(c.X, c.Y, c.Z);
 
-                    _renderer.BedBoundaryModel =
-                        Matrix4.CreateTranslation(-c.X, -c.Y, -c.Z) *
-                        Matrix4.CreateRotationZ(e1Rad) *
-                        Matrix4.CreateTranslation(c.X, c.Y, c.Z);
+                    // Lower heated bed is world-fixed; only the rotary platter spins with E1.
+                    _renderer.BedBoundaryModel = ActiveBedOverlayIsHeated()
+                        ? Matrix4.Identity
+                        : Matrix4.CreateTranslation(-c.X, -c.Y, -c.Z) *
+                          Matrix4.CreateRotationZ(e1Rad) *
+                          Matrix4.CreateTranslation(c.X, c.Y, c.Z);
                 }
             }
         }
@@ -2562,7 +2577,7 @@ public partial class ViewportView : UserControl
         var corner = new Vector3(x - _bedWidth * 0.5f, y - _bedDepth * 0.5f, z);
         _bedGridCorner = corner;
         _bedGridDatum  = new Vector3(x, y, z);
-        _renderer.SetBedBoundary(_bedBaseMarker, corner, _bedWidth, _bedDepth, _bedGridDatum, diameter);
+        ApplyActiveBedBoundary();
 
         // Recentre the rotary-bed mesh in X/Y onto the calibrated axis, but PRESERVE its Z. The bed
         // calibration measures where the rotary AXIS is (X/Y centre) and its rotation — it does not
@@ -2586,8 +2601,57 @@ public partial class ViewportView : UserControl
     {
         _bedWidth = width;
         _bedDepth = depth;
-        _renderer.SetBedBoundary(
-            _bedBaseMarker, _bedGridCorner, _bedWidth, _bedDepth, _bedGridDatum, _bedDiameter);
+        ApplyActiveBedBoundary();
+    }
+
+    /// <summary>
+    /// Rebuilds the print-area overlay for the active KRL base. Heated / BASE #6 is a
+    /// rectangle with diameter 0; rotary bases keep the polar platter. GL thread only.
+    /// </summary>
+    private void ApplyActiveBedBoundary()
+    {
+        if (_vm?.ActiveCell is not { } cell)
+        {
+            _renderer.SetBedBoundary(
+                _bedBaseMarker, _bedGridCorner, _bedWidth, _bedDepth, _bedGridDatum, _bedDiameter);
+            return;
+        }
+
+        int baseIdx = _vm.Robot is { KrlBaseIndex: > 0 } r ? r.KrlBaseIndex : 0;
+        var spec = BedBoundaryOverlay.Resolve(
+            cell.Bed,
+            cell.Robot.WorldPosition,
+            baseIdx,
+            cell.KrlBases,
+            liveWidth: _bedWidth,
+            liveDepth: _bedDepth,
+            liveDiameter: _bedDiameter,
+            heatedMeshSize: TryHeatedBedMeshSize());
+
+        var corner = new Vector3(spec.GridCorner.X, spec.GridCorner.Y, spec.GridCorner.Z);
+        var datum  = new Vector3(spec.Datum.X, spec.Datum.Y, spec.Datum.Z);
+        _renderer.SetBedBoundary(_bedBaseMarker, corner, spec.Width, spec.Depth, datum, spec.Diameter);
+        if (spec.IsRectangular)
+            _renderer.BedBoundaryModel = Matrix4.Identity;
+        else
+            _lastSyncE1 = double.NaN; // re-apply platter spin about the rotary centre next frame
+    }
+
+    private bool ActiveBedOverlayIsHeated()
+        => _vm?.ActiveCell is { } cell
+           && BedBoundaryOverlay.IsHeatedPrintBase(
+               _vm.Robot is { KrlBaseIndex: > 0 } r ? r.KrlBaseIndex : 0,
+               cell.KrlBases,
+               cell.Bed);
+
+    /// <summary>XY AABB of the loaded flat/heated bed mesh, when the cell actually spawned one.</summary>
+    private (float Width, float Depth)? TryHeatedBedMeshSize()
+    {
+        if (_bedNode is null) return null;
+        var (min, max) = ImportHelper.ComputeSubtreeAabb(_bedNode);
+        float w = max.X - min.X;
+        float d = max.Y - min.Y;
+        return w > 1f && d > 1f ? (w, d) : null;
     }
 
     private void RebuildFrameMatrices()
@@ -3058,9 +3122,9 @@ public partial class ViewportView : UserControl
         _bedDepth        = b.Depth;
         _bedDiameter     = b.Diameter ?? 0f;
         _bedRotationSign = b.RotationSign ?? -1f;
-        // Blue origin marker stays at BASE 0,0,0; grid/border follow visual placement.
-        _renderer.SetBedBoundary(
-            _bedBaseMarker, _bedGridCorner, _bedWidth, _bedDepth, _bedGridDatum, _bedDiameter);
+        // Blue origin marker stays at BASE 0,0,0; grid/border follow visual placement
+        // and the active KRL base (heated = rectangle, rotary = polar).
+        ApplyActiveBedBoundary();
         Dispatcher.UIThread.Post(() => vm.SyncBedGridSize(b.Width, b.Depth));
 
         // Focus on the centre of the print area and set radius to the bed diagonal

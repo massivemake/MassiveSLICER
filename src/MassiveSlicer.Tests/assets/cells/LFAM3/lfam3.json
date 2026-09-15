@@ -279,6 +279,11 @@
     {
       "name": "Base 5",
       "index": 5
+    },
+    {
+      "name": "HEATED-BED",
+      "index": 6,
+      "overlay": "rectangular"
     }
   ],
   "scanToolName": "ZividScanner",

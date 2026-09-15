@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-03** (AdaOne mill ops baseline on Improved-Cell)
+Last updated: **2026-09-15** (LFAM 3 BASE #6 heated-bed rectangular overlay)
 
 ---
 
@@ -516,6 +516,14 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-15 — LFAM 3 BASE #6 heated-bed grid is rectangular
+
+- Symptom: with BASE #6 (HEATED-BED) selected on LFAM 3, the print-area overlay stayed a polar/circular rotary grid.
+- Cause: `BedBoundaryRenderer` draws a circle whenever `diameter > 0`. Cell swap always passed the rotary `bed.diameter` (1828.8). There was no rebuild when `KrlBaseIndex` changed. `ApplyBaseBedGhosting` does not exist on this branch — mesh ghosting was not the overlay path.
+- Fix: `BedBoundaryOverlay.Resolve` uses diameter 0 + `bed.width`×`bed.depth` (1800×1800; no dedicated heated size in JSON) for heated bases. Viewport rebuilds on cell swap, `KrlBaseIndex` change, `RebuildBed`, and `RebuildBedGridSize`. E1 no longer spins the overlay while the heated base is active. Rotary bases stay polar. Bed-grid visibility + Arctic skip unchanged.
+- Key files: `BedBoundaryOverlay.cs`, `ViewportView.axaml.cs`, `CellConfig.cs`, `assets/cells/LFAM3/lfam3.json`.
+- Tests: `BedBoundaryOverlayTest`.
 
 ### 2026-09-03 — AdaOne mill baseline (OPERATION + TOOLPATHING)
 
