@@ -79,7 +79,14 @@ public class HeatedBedConfigTest
             BasePos = [1065.37f, 1515.7982f, -873.757f],
             BaseAbc = [-0.087f, 0.11306581f, 0.093820065f],
         };
-        var bed = new BedCellConfig { Origin = Float3.Zero, Width = 1800, Depth = 1800, Diameter = 1828.8f };
+        var bed = new BedCellConfig
+        {
+            Origin = Float3.Zero,
+            BaseData = Float3.Zero,
+            Width = 1800,
+            Depth = 1800,
+            Diameter = 1828.8f,
+        };
         var bases = CellConfig.EnsureHeatedKrlBase(rotaryOnly, heated, bed);
         Assert.Equal(3, bases.Count);
         Assert.Contains(bases, b => b.Index == 6 && b.Name == "HEATED-BED" && b.Overlay == "rectangular");
