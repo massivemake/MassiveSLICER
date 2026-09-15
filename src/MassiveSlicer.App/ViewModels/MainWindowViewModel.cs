@@ -4535,6 +4535,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.PatternMapping         = copy.PatternMapping;
         live.PatternScope           = copy.PatternScope;
         live.PatternWavelengthMm    = copy.PatternWavelengthMm;
+        live.PatternSineCyclesPerLayer = copy.PatternSineCyclesPerLayer;
         live.PatternAmplitude       = copy.PatternAmplitude;
         live.PatternFrequency       = copy.PatternFrequency;
         live.PatternTwist           = copy.PatternTwist;
@@ -4824,6 +4825,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.PatternScope        = add.PatternScopeOptions.Contains(p.PatternScope)
             ? p.PatternScope : "Everything";
         add.PatternWavelengthMm = p.PatternWavelengthMm;
+        add.PatternSineCyclesPerLayer = p.PatternSineCyclesPerLayer;
         add.PatternAmplitude    = p.PatternAmplitude;
         add.PatternFrequency    = p.PatternFrequency;
         add.PatternTwist        = p.PatternTwist;
@@ -5153,6 +5155,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.PatternMapping       = add.PatternMapping;
         p.PatternScope         = add.PatternScope;
         p.PatternWavelengthMm  = add.PatternWavelengthMm;
+        p.PatternSineCyclesPerLayer = add.PatternSineCyclesPerLayer;
         p.PatternAmplitude     = add.PatternAmplitude;
         p.PatternFrequency     = add.PatternFrequency;
         p.PatternTwist         = add.PatternTwist;

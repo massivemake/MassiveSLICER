@@ -5055,6 +5055,7 @@ public partial class ViewportView : UserControl
                                        ? MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Wavelength
                                        : MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.ArcLength,
             PatternWavelengthMm  = (float)s.PatternWavelengthMm,
+            PatternSineCyclesPerLayer = (int)s.PatternSineCyclesPerLayer,
             PatternAmplitude     = (float)s.PatternAmplitude,
             PatternFrequency     = (float)s.PatternFrequency,
             PatternTwistDegPerMm = (float)s.PatternTwist,
@@ -6710,6 +6711,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.PatternWavelengthMm),
         nameof(AdditiveSettingsViewModel.PatternAmplitude),
         nameof(AdditiveSettingsViewModel.PatternFrequency),
+        nameof(AdditiveSettingsViewModel.PatternSineCyclesPerLayer),
         nameof(AdditiveSettingsViewModel.PatternTwist),
         nameof(AdditiveSettingsViewModel.PatternOffset),
         nameof(AdditiveSettingsViewModel.PatternFadeIn),

@@ -16,15 +16,27 @@ public static class SpiralizeEffect
     {
         if (!settings.Spiralize || toolpath.Layers.Count == 0) return toolpath;
 
+        // A pattern moves a loop's two ends apart even though they are the same vertex,
+        // so "did this loop close" has to be asked at the pattern's own scale — a fixed
+        // 1 mm reads a patterned loop as open and leaves the whole layer flat.
+        float reach   = MathF.Max(0f, settings.PatternAmplitude)
+                      + MathF.Max(0f, settings.EffectorStrengthMm);
+        float closeTol = MathF.Max(1f, 2f * reach);
+        float closeTolSq = closeTol * closeTol;
+
         var result = new Toolpath();
         for (int li = 0; li < toolpath.Layers.Count; li++)
         {
             var layer = toolpath.Layers[li];
-            float height = layer.Height > 0f
-                ? layer.Height
-                : (li + 1 < toolpath.Layers.Count
-                    ? MathF.Max(0f, toolpath.Layers[li + 1].Z - layer.Z)
-                    : 0f);
+            // Ramp to exactly where the next layer starts. Layer.Height is the gap
+            // BELOW a layer (its Z minus the previous layer's Z), so the rise to the
+            // layer above is the NEXT layer's height, not this one's. They only agree
+            // when every layer is the same thickness — under adaptive or support-driven
+            // heights, using this layer's leaves a gap beneath every thinned layer and
+            // drives the ramp through the one above it.
+            float height = li + 1 < toolpath.Layers.Count
+                ? MathF.Max(0f, toolpath.Layers[li + 1].Z - layer.Z)
+                : layer.Height;
 
             var newLayer = new ToolpathLayer(layer.Index, layer.Z)
             {
@@ -68,7 +80,7 @@ public static class SpiralizeEffect
                 }
 
                 bool closed = total > 1f
-                    && Vector3.DistanceSquared(moves[start].From, moves[j - 1].To) <= 1.0f;
+                    && Vector3.DistanceSquared(moves[start].From, moves[j - 1].To) <= closeTolSq;
 
                 if (!closed || total <= 1f)
                 {
@@ -97,6 +109,41 @@ public static class SpiralizeEffect
             }
             result.Layers.Add(newLayer);
         }
+        RejoinConnectors(result);
         return result;
+    }
+
+    /// <summary>
+    /// Re-anchors the connector moves that join one layer to the next.
+    /// <see cref="ToolpathLayerConnect"/> builds each stitch from the previous layer's
+    /// end as it stood at slice time — flat, at that layer's own Z. Ramping lifts that
+    /// end by a layer height, which leaves the stitch starting a full layer height below
+    /// where the nozzle actually is: the tool drops back down and re-climbs, and the wall
+    /// shows a gap at every layer change. Connectors exist purely to join, so each one is
+    /// pulled onto the point the previous move actually ended at. A stitch left with
+    /// nowhere to go is dropped rather than emitted as a zero-length bead.
+    /// </summary>
+    private static void RejoinConnectors(Toolpath toolpath)
+    {
+        Vector3? end = null;
+        foreach (var layer in toolpath.Layers)
+        {
+            for (int i = 0; i < layer.Moves.Count; i++)
+            {
+                var m = layer.Moves[i];
+                bool connector = m.IsLayerStitch || m.IsLayerChange || m.Kind == MoveKind.Travel;
+                if (connector && end is Vector3 from && Vector3.DistanceSquared(m.From, from) > 1e-8f)
+                {
+                    if (Vector3.DistanceSquared(from, m.To) <= 1e-6f)
+                    {
+                        layer.Moves.RemoveAt(i--);   // the ramp already delivered the nozzle here
+                        continue;
+                    }
+                    m = m with { From = from };
+                    layer.Moves[i] = m;
+                }
+                end = m.To;
+            }
+        }
     }
 }

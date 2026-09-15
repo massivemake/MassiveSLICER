@@ -780,7 +780,46 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public string PatternType
     {
         get => _patternType;
-        set => SetField(ref _patternType, value);
+        set
+        {
+            if (SetField(ref _patternType, value))
+            {
+                OnPropertyChanged(nameof(IsSinePattern));
+                OnPropertyChanged(nameof(ShowPatternWavelength));
+                OnPropertyChanged(nameof(ShowPatternDistribution));
+                OnPropertyChanged(nameof(ShowPatternFrequency));
+            }
+        }
+    }
+
+    /// <summary>Sine is the only pattern with per-layer cycle locking, for now.</summary>
+    public bool IsSinePattern => string.Equals(_patternType, "Sine", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Cycles-per-layer owns the mapping, so Distribution and Frequency step aside.</summary>
+    public bool UseSineCyclesPerLayer => IsSinePattern && _patternSineCyclesPerLayer > 0;
+    public bool ShowPatternDistribution => !UseSineCyclesPerLayer;
+    public bool ShowPatternFrequency    => !UseSineCyclesPerLayer;
+
+    private double _patternSineCyclesPerLayer;
+    /// <summary>
+    /// Sine only: whole sine cycles per layer, stretched or squeezed to fit that layer's own
+    /// perimeter so the last one finishes exactly at the seam. Same count from the same anchor
+    /// on every layer, flipped half a cycle each layer, parks every peak over the valley below.
+    /// 0 = off.
+    /// </summary>
+    public double PatternSineCyclesPerLayer
+    {
+        get => _patternSineCyclesPerLayer;
+        set
+        {
+            if (SetField(ref _patternSineCyclesPerLayer, Math.Clamp(Math.Round(value), 0.0, 400.0)))
+            {
+                OnPropertyChanged(nameof(UseSineCyclesPerLayer));
+                OnPropertyChanged(nameof(ShowPatternDistribution));
+                OnPropertyChanged(nameof(ShowPatternFrequency));
+                OnPropertyChanged(nameof(ShowPatternWavelength));
+            }
+        }
     }
 
     public string[] PatternScopeOptions { get; } =
@@ -812,7 +851,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         }
     }
 
-    public bool ShowPatternWavelength => _patternMapping.StartsWith("Wavelength", StringComparison.OrdinalIgnoreCase);
+    public bool ShowPatternWavelength => !UseSineCyclesPerLayer
+        && _patternMapping.StartsWith("Wavelength", StringComparison.OrdinalIgnoreCase);
 
     private double _patternWavelengthMm = 60.0;
     /// <summary>Cycle size in mm for wavelength mapping.</summary>

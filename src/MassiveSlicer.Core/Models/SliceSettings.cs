@@ -333,6 +333,16 @@ public sealed class SliceSettings
     /// <summary>Cycle size in mm for <see cref="MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Wavelength"/> mapping.</summary>
     public float PatternWavelengthMm { get; init; } = 60f;
 
+    /// <summary>
+    /// Sine only: whole sine cycles laid on every layer, stretched or squeezed to fit that
+    /// layer's own perimeter so the last cycle always finishes exactly at the seam. Because
+    /// every layer carries the same count from the same anchor, cycle <c>i</c> occupies the
+    /// same fraction of the path on every layer — and flipping the phase half a cycle each
+    /// layer then parks every peak directly over the valley below it. 0 = off (Sine falls
+    /// back to the Distribution setting).
+    /// </summary>
+    public int PatternSineCyclesPerLayer { get; init; } = 0;
+
     // -- Wave gradient ------------------------------------------------------------
 
     /// <summary>When true, amplitude and wavelength are linearly interpolated per layer between
