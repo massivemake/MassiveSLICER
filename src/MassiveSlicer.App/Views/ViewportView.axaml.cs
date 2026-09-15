@@ -6709,6 +6709,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.PatternWavelengthMm),
         nameof(AdditiveSettingsViewModel.PatternAmplitude),
         nameof(AdditiveSettingsViewModel.PatternFrequency),
+        nameof(AdditiveSettingsViewModel.PatternSineCyclesPerLayer),
         nameof(AdditiveSettingsViewModel.PatternTwist),
         nameof(AdditiveSettingsViewModel.PatternOffset),
         nameof(AdditiveSettingsViewModel.PatternFadeIn),

@@ -36,6 +36,63 @@ public static class PatternEffect
 {
     private const float TwoPi = 2f * MathF.PI;
 
+    /// <summary>
+    /// How much better the best outline fit has to be than a typical one before it is
+    /// believed. 1.0 means no better than average — the outlines fit equally well anywhere
+    /// and the shift is meaningless.
+    /// </summary>
+    private const float MinSharpness = 1.6f;
+
+    /// <summary>
+    /// How many places around the loop the shift is measured. Enough to follow the wall
+    /// stretching unevenly, few enough that each window still holds sufficient outline to
+    /// match on.
+    /// </summary>
+    /// <summary>
+    /// How far a layer's wave may sit from the one below before it stops reading as
+    /// alternating, as a fraction of a turn.
+    ///
+    /// Half a turn is the real limit: beyond 180 degrees there is no telling opposed from
+    /// stacked, so the pattern has lost the plot whatever it does. A quarter turn sounds
+    /// safer and is wrong — on this part the loop already moves 97 degrees' worth at 40% up,
+    /// in a stretch that looks right, so a quarter-turn ceiling starts easing off over half
+    /// the part for no reason.
+    /// </summary>
+    private const float MaxPhaseErrorTurns = 0.5f;
+
+    /// <summary>
+    /// The most a single change may coarsen the pattern, as a fraction of the count it is
+    /// leaving. A quarter still reads as the part narrowing; going several times over in one
+    /// layer reads as a different pattern starting, however well it lines up.
+    /// </summary>
+    private const float MaxStepFraction = 0.25f;
+
+    /// <summary>The cycle count each layer was given, for `sinecheck`.</summary>
+    public static readonly List<(int Layer, int Cycles)> CyclePlan = [];
+
+    /// <summary>
+    /// Layers where tracking the wall below did NOT land on the requested cycle count, as
+    /// (layer index, count that came out). Tracking should produce the right number by
+    /// itself; a mismatch means the reading went wrong, and that layer keeps evenly spaced
+    /// cycles instead of a correction built on a bad measurement. Read by `sinecheck`.
+    /// </summary>
+    public static readonly List<(int Layer, float Cycles)> CycleCountWarnings = [];
+
+    /// <summary>
+    /// Layers whose outline could not be matched against the one below with confidence,
+    /// as (layer index, how sharp the best fit was). These carry the previous phase forward
+    /// instead of trusting a match that means nothing. Read by `sinecheck`.
+    /// </summary>
+    public static readonly List<(int Layer, float Sharpness)> RegistrationWarnings = [];
+
+    /// <summary>
+    /// Per layer: the outline shift found, and how sharp that fit was. The shift should
+    /// change SMOOTHLY from layer to layer, because the wall does. Jitter here is the fit
+    /// being noisy — and the wave multiplies it by the cycle count, so a jitter of a
+    /// thousandth of a loop is most of a cycle of phase.
+    /// </summary>
+    public static readonly List<(int Layer, float Shift, float Sharpness)> ShiftLog = [];
+
     public static Toolpath Apply(Toolpath toolpath, SliceSettings settings)
     {
         bool effectorActive = settings.EffectorPoints.Count > 0
@@ -44,6 +101,9 @@ public static class PatternEffect
             (settings.PatternAmplitude <= 0f && !effectorActive))
             return toolpath;
         if (toolpath.Layers.Count == 0) return toolpath;
+        CycleCountWarnings.Clear();
+        RegistrationWarnings.Clear();
+        ShiftLog.Clear();
 
         // -- Model frame: XY centre, z range, mean radius --------------------
         float minX = float.MaxValue, maxX = float.MinValue;
@@ -88,6 +148,12 @@ public static class PatternEffect
         // beside it — anything else would let Distribution silently break the guarantee.
         bool sineCycles = settings.PatternType == PatternType.Sine
                        && settings.PatternSineCyclesPerLayer > 0;
+        // Cycle counts are planned for the whole part up front, not decided layer by layer:
+        // knowing what is above is the only way to start easing off early enough.
+        int[]? cyclePlan = sineCycles
+            ? PlanCycleCounts(toolpath, settings, settings.PatternSineCyclesPerLayer)
+            : null;
+        CyclePlan.Clear();
         if (sineCycles) ctx.Frequency = settings.PatternSineCyclesPerLayer;
 
         bool arcMode = sineCycles || settings.PatternMapping != PatternMappingMode.Radial;
@@ -99,10 +165,8 @@ public static class PatternEffect
         var scope = settings.PatternScope;
 
         var result = new Toolpath();
-        PhaseField? prevPhase = null;
         for (int layerOrdinal = 0; layerOrdinal < toolpath.Layers.Count; layerOrdinal++)
         {
-            PhaseField? thisPhase = null;
             var layer = toolpath.Layers[layerOrdinal];
 
             var newLayer = new ToolpathLayer(layer.Index, layer.Z)
@@ -115,19 +179,31 @@ public static class PatternEffect
             // keeps the phase aligned layer over layer even as seams wander.
             ChainInfo[]? chainOf = arcMode ? BuildChains(layer, ctx, wavelengthMode, wavelength) : null;
 
-            // Half-cycle flip, plus the correction that makes it mean something. Flipping
-            // alone only parks peaks over valleys while both layers measure the path the
-            // same way — true on a cone, false on a real part, where the outline changes
-            // and the same fraction of the path lands somewhere else. So each layer is
-            // asked directly where the wall below it put its wave, and its phase is shifted
-            // to oppose it. Cycle COUNT is untouched, so every layer still closes on a whole
-            // cycle; only where the wave starts moves.
+            // Where this layer's sine opens.
+            //
+            // Straight off the layer's own parity, against an origin pinned to world geometry:
+            // the exact point where the loop crosses the +X ray, interpolated rather than
+            // snapped to a vertex. Every layer measures that for itself.
+            //
+            // It used to be inherited instead — each layer registered its outline against the
+            // one below and took that phase plus half a cycle. The fits were excellent, but
+            // the answer was a chain, and the wall's parameterisation genuinely slides about
+            // 0.06% of the loop per layer (0.4% at the 90th percentile), which at 200 cycles
+            // is 46 degrees of phase typically and 282 at the tail. Each link carried a little
+            // error and 798 links compounded it into a random walk: mostly wrong, occasionally
+            // back near right by luck. Reading the origin from world geometry breaks the chain
+            // — a layer can only be as wrong as its own crossing, never as wrong as every
+            // layer below it put together.
             if (sineCycles)
             {
+                ctx.Frequency = cyclePlan![layerOrdinal];
+                CyclePlan.Add((layer.Index, cyclePlan[layerOrdinal]));
+
+                // Both layers put phase 0 at the anchor, so where the count changes the two
+                // waves stay opposed AT the anchor and drift apart away from it — the one
+                // stacked spot lands opposite it. That is a fixed line in space either way,
+                // so the changes stack up one line of the part instead of scattering.
                 ctx.SinePhase = (layerOrdinal & 1) == 1 ? MathF.PI : 0f;
-                if (prevPhase is not null)
-                    ctx.SinePhase = prevPhase.OpposingPhase(layer, chainOf!, ctx, wavelengthMode);
-                thisPhase = PhaseField.Build(layer, chainOf!, ctx, wavelengthMode);
             }
 
             // VisibleSkin asks a whole-layer question — "could a horizontal ray reach this" —
@@ -227,7 +303,7 @@ public static class PatternEffect
                 }
             }
             result.Layers.Add(newLayer);
-            if (sineCycles && thisPhase is not null) prevPhase = thisPhase;
+
         }
         return result;
     }
@@ -251,7 +327,20 @@ public static class PatternEffect
 
         float dist = chain.CumStart + t * len - chain.Anchor;
         dist -= MathF.Floor(dist / chain.Total) * chain.Total;
-        return TwoPi * dist / chain.Total;
+        float u = dist / chain.Total;
+
+        // Corrected: cycles are no longer evenly spaced. Each has been nudged so its start
+        // sits on the layer below, with the nudge blended between neighbours. Divided back
+        // out by Frequency because the caller multiplies by it and then adds the start phase.
+        if (chain.Warp is { Length: > 1 } warp)
+        {
+            float f = u * (warp.Length - 1);
+            int   i = Math.Clamp((int)f, 0, warp.Length - 2);
+            float phase = warp[i] + (warp[i + 1] - warp[i]) * (f - i);
+            return phase / MathF.Max(1e-3f, ctx.Frequency);
+        }
+
+        return TwoPi * u;
     }
 
     /// <summary>
@@ -317,123 +406,332 @@ public static class PatternEffect
     }
 
     /// <summary>
-    /// Where one layer laid its sine, as a coarse map of position to phase, so the layer
-    /// above can be shifted to oppose it. Samples are bucketed into a uniform grid, which
-    /// makes "what phase is directly below this point" an O(1) lookup instead of a scan of
-    /// every move on the layer beneath.
+    /// A layer's outline, resampled at evenly spaced fractions of its own loop starting from
+    /// its anchor, so two layers can be compared fraction against fraction regardless of how
+    /// long their paths are or where their seams fell.
     /// </summary>
-    private sealed class PhaseField
+    private sealed class ContourOutline
     {
-        private const float CellMm = 25f;
-        private const int   Samples = 600;     // enough to pin a phase; far cheaper than every move
+        private const int N = 1024;                 // samples around the loop
+        public Vector2[] P = [];
 
-        private readonly Dictionary<(int, int), List<(float X, float Y, float Phase, float Tx, float Ty)>> _grid = new();
-
-        /// <summary>Samples a layer's wave phase at points spread evenly along its path.</summary>
-        public static PhaseField? Build(ToolpathLayer layer, ChainInfo[] chainOf,
-                                        PatternContext ctx, bool wavelengthMode)
+        public static ContourOutline? Build(ToolpathLayer layer, ChainInfo[]? chainOf)
         {
-            var field = new PhaseField();
-            int added = 0;
-            for (int mi = 0; mi < layer.Moves.Count; mi++)
+            if (chainOf is null) return null;
+
+            // The longest closed loop is the wall the pattern is for.
+            int bestStart = -1, bestEnd = -1; float bestLen = 0f;
+            foreach (var (cs, ce) in Chains(layer))
+                if (chainOf[cs] is { Closed: true, Total: > 1f } ci && ci.Total > bestLen)
+                    { bestLen = ci.Total; bestStart = cs; bestEnd = ce; }
+            if (bestStart < 0) return null;
+
+            var chain = chainOf[bestStart];
+            var pts = new Vector2[N];
+            float walked = 0f;
+            int mi = bestStart;
+            float lastWant = -1f;
+            for (int i = 0; i < N; i++)
             {
-                var m = layer.Moves[mi];
-                if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
-                var chain = chainOf[mi];
-                if (chain is not { Total: > 1f }) continue;
-                if ((mi * Samples / Math.Max(1, layer.Moves.Count)) ==
-                    (((mi + 1) * Samples) / Math.Max(1, layer.Moves.Count))) continue;
-
-                float? theta = ChainTheta(chain, ctx, wavelengthMode,
-                                          Vector3.Distance(m.From, m.To), 0f);
-                if (theta is null) continue;
-                float phase = theta.Value * ctx.Frequency + ctx.SinePhase;
-                var d = m.To - m.From;
-                float dl = MathF.Sqrt(d.X * d.X + d.Y * d.Y);
-                if (dl < 1e-6f) continue;
-                var key = ((int)MathF.Floor(m.From.X / CellMm), (int)MathF.Floor(m.From.Y / CellMm));
-                if (!field._grid.TryGetValue(key, out var bucket))
-                    field._grid[key] = bucket = [];
-                bucket.Add((m.From.X, m.From.Y, phase, d.X / dl, d.Y / dl));
-                added++;
-            }
-            return added > 8 ? field : null;
-        }
-
-        /// <summary>
-        /// The phase this layer has to open on so that it opens opposed to the wall beneath
-        /// its own starting point.
-        ///
-        /// Measured only across the first few cycles, not around the whole loop. The seam is
-        /// not vertical: a layer does not begin directly above where the last one began, and
-        /// at this cycle count a seam sitting a few millimetres over is already most of a
-        /// cycle of phase. Averaging that start error together with the gradual stretch around
-        /// the rest of the loop — which is what the whole-loop version did — produces a
-        /// compromise that is wrong at the start and wrong everywhere else. Getting the start
-        /// right and letting the cycles march evenly from there is the better trade, because
-        /// the start error is the big, abrupt one and the stretch is small and gradual.
-        ///
-        /// The phase still advances exactly the requested number of cycles across the loop,
-        /// so arriving back at the start lands on the same point of the cycle it opened on:
-        /// the last sine still finishes whole.
-        /// </summary>
-        public float OpposingPhase(ToolpathLayer layer, ChainInfo[] chainOf,
-                                   PatternContext ctx, bool wavelengthMode)
-        {
-            float sumSin = 0f, sumCos = 0f;
-            int n = 0;
-            // Look across roughly three cycles either side of the layer's own start.
-            float window = 3f / MathF.Max(1f, ctx.Frequency);
-            for (int mi = 0; mi < layer.Moves.Count; mi++)
-            {
-                var m = layer.Moves[mi];
-                if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
-                var chain = chainOf[mi];
-                if (chain is not { Total: > 1f }) continue;
-
-                float u = (chain.CumStart - chain.Anchor) / chain.Total;
-                u -= MathF.Floor(u);
-                if (u > window && u < 1f - window) continue;      // not near the start
-
-                var d = m.To - m.From;
-                float dl = MathF.Sqrt(d.X * d.X + d.Y * d.Y);
-                if (dl < 1e-6f) continue;
-                if (Nearest(m.From.X, m.From.Y, d.X / dl, d.Y / dl) is not float below) continue;
-
-                float? theta = ChainTheta(chain, ctx, wavelengthMode,
-                                          Vector3.Distance(m.From, m.To), 0f);
-                if (theta is null) continue;
-                float own = theta.Value * ctx.Frequency;
-                float err = below + MathF.PI - own;
-                sumSin += MathF.Sin(err);
-                sumCos += MathF.Cos(err);
-                n++;
-            }
-            if (n < 8 || (sumSin * sumSin + sumCos * sumCos) < 1e-6f) return ctx.SinePhase;
-            return MathF.Atan2(sumSin / n, sumCos / n);
-        }
-
-        /// <summary>
-        /// Phase of the nearest sample below that is travelling the same way. On a sheet the
-        /// wall comes back down the other face a bead away, and that face is displaced the
-        /// opposite direction — matching it would read the pattern inside out.
-        /// </summary>
-        private float? Nearest(float x, float y, float tx, float ty)
-        {
-            int cx = (int)MathF.Floor(x / CellMm), cy = (int)MathF.Floor(y / CellMm);
-            float best = float.MaxValue; float? phase = null;
-            for (int dx = -1; dx <= 1; dx++)
-                for (int dy = -1; dy <= 1; dy++)
+                float want = chain.Anchor + chain.Total * i / N;
+                if (want > chain.Total) want -= chain.Total;
+                if (want < lastWant) { mi = bestStart; walked = 0f; }   // sampling wraps round
+                lastWant = want;
+                while (mi < bestEnd - 1 &&
+                       walked + Vector3.Distance(layer.Moves[mi].From, layer.Moves[mi].To) < want)
                 {
-                    if (!_grid.TryGetValue((cx + dx, cy + dy), out var bucket)) continue;
-                    foreach (var (px, py, ph, ptx, pty) in bucket)
-                    {
-                        if (tx * ptx + ty * pty < 0.5f) continue;
-                        float d = (px - x) * (px - x) + (py - y) * (py - y);
-                        if (d < best) { best = d; phase = ph; }
-                    }
+                    walked += Vector3.Distance(layer.Moves[mi].From, layer.Moves[mi].To);
+                    mi++;
                 }
-            return phase;
+                var q = layer.Moves[Math.Clamp(mi, bestStart, bestEnd - 1)].From;
+                pts[i] = new Vector2(q.X, q.Y);
+            }
+            return new ContourOutline { P = pts };
+        }
+
+        /// <summary>
+        /// The shift, measured separately in each of several windows around the loop, rather
+        /// than once for the whole thing.
+        ///
+        /// One shift can only turn this layer against the one below. It cannot answer a loop
+        /// whose path has stretched by different amounts in different places — and that is
+        /// what leaves a layer sitting a quarter of a cycle out instead of half, in some
+        /// regions and not others. Measuring locally lets the answer vary the way the wall
+        /// actually does.
+        ///
+        /// This is measured on SHAPE, not on the wave. The outline is distinctive at the scale
+        /// of a window, so matching it is unambiguous; reading the wave means reading something
+        /// that repeats every 20 mm, which at this density cannot tell one cycle from the next.
+        /// That is why this works where sampling the phase did not.
+        ///
+        /// Returns one shift per window, smoothed and made to join up at the seam so the loop
+        /// still carries the same whole number of cycles.
+        /// </summary>
+        public static float[]? FindLocalShifts(ContourOutline now, ContourOutline below,
+                                               float globalShift, int windows)
+        {
+            int n = N;
+            int half = Math.Max(8, n / windows);          // window reach either side
+            int span = Math.Max(2, n / 40);               // search +/- this many samples
+            int centre = (int)MathF.Round(globalShift * n);
+
+            var shifts = new float[windows + 1];
+            for (int w = 0; w < windows; w++)
+            {
+                int mid = (int)((long)w * n / windows);
+                float bestCost = float.MaxValue; int bestS = centre;
+                var costs = new float[2 * span + 1];
+                for (int d = -span; d <= span; d++)
+                {
+                    int sft = centre + d;
+                    float sum = 0f;
+                    for (int k = -half; k <= half; k += 2)
+                    {
+                        int i = ((mid + k) % n + n) % n;
+                        var a = now.P[i];
+                        var b = below.P[((i + sft) % n + n) % n];
+                        float dx = a.X - b.X, dy = a.Y - b.Y;
+                        sum += dx * dx + dy * dy;
+                    }
+                    costs[d + span] = sum;
+                    if (sum < bestCost) { bestCost = sum; bestS = sft; }
+                }
+
+                int bi = bestS - centre + span;
+                float refine = 0f;
+                if (bi > 0 && bi < 2 * span)
+                {
+                    float c0 = costs[bi - 1], c1 = costs[bi], c2 = costs[bi + 1];
+                    float den = c0 - 2f * c1 + c2;
+                    if (MathF.Abs(den) > 1e-9f) refine = Math.Clamp(0.5f * (c0 - c2) / den, -1f, 1f);
+                }
+                shifts[w] = (bestS + refine) / n;
+            }
+
+            // Smooth: neighbouring windows should agree closely, and a single bad one must
+            // not put a kink in the wave.
+            var sm = new float[windows + 1];
+            for (int w = 0; w < windows; w++)
+            {
+                float sum = 0f; int c = 0;
+                for (int k = -1; k <= 1; k++) { sum += shifts[((w + k) % windows + windows) % windows]; c++; }
+                sm[w] = sum / c;
+            }
+
+            // Join up at the seam. Taking the drift back out is what keeps the cycle count
+            // whole: the loop still advances exactly the requested number of cycles.
+            float drift = sm[0] - sm[windows - 1];
+            for (int w = 0; w < windows; w++) sm[w] -= drift * w / windows;
+            sm[windows] = sm[0];
+            return sm;
+        }
+
+        /// <summary>
+        /// The fraction of a loop this outline has to slide to sit on top of the one below.
+        ///
+        /// Every candidate shift is scored by how far apart the two outlines are all the way
+        /// round, so the answer is decided by the whole shape at once. A few millimetres of
+        /// error at any one place barely moves a sum over a thousand of them, which is what
+        /// makes this hold where asking point by point did not.
+        ///
+        /// <paramref name="sharpness"/> reports how much better the winner was than a typical
+        /// candidate. Near 1 the outline fits equally well anywhere — a circle, say, which has
+        /// no distinguishing feature to line up — and the winner means nothing.
+        /// </summary>
+        public static float FindShift(ContourOutline now, ContourOutline below, out float sharpness)
+        {
+            sharpness = 0f;
+            int n = N;
+            var cost = new float[n];
+            const int Step = 4;                     // every 4th sample is plenty for the scan
+            for (int sft = 0; sft < n; sft++)
+            {
+                float sum = 0f;
+                for (int i = 0; i < n; i += Step)
+                {
+                    var a = now.P[i];
+                    var b = below.P[(i + sft) & (N - 1)];
+                    float dx = a.X - b.X, dy = a.Y - b.Y;
+                    sum += dx * dx + dy * dy;
+                }
+                cost[sft] = sum;
+            }
+
+            int best = 0;
+            float bestCost = float.MaxValue, mean = 0f;
+            for (int i = 0; i < n; i++)
+            {
+                mean += cost[i];
+                if (cost[i] < bestCost) { bestCost = cost[i]; best = i; }
+            }
+            mean /= n;
+            if (bestCost <= 1e-6f) { sharpness = float.MaxValue; return best / (float)n; }
+            sharpness = mean / bestCost;            // how much better than a typical fit
+
+            // Interpolate between neighbours: the true minimum rarely lands on a whole sample,
+            // and at this cycle count a fraction of a sample is still a visible slice of phase.
+            float c0 = cost[(best - 1 + n) % n], c1 = cost[best], c2 = cost[(best + 1) % n];
+            float denom = c0 - 2f * c1 + c2;
+            float refine = MathF.Abs(denom) > 1e-9f ? 0.5f * (c0 - c2) / denom : 0f;
+            refine = Math.Clamp(refine, -1f, 1f);
+
+            float shift = (best + refine) / n;
+            return shift - MathF.Floor(shift);
+        }
+    }
+
+    /// <summary>
+    /// How many cycles each layer may carry, worked out for the whole part before slicing
+    /// any of it.
+    ///
+    /// The requested count holds wherever the loop is steady. It cannot hold where the loop
+    /// is changing fast: if the perimeter moves 0.6% between layers, then at 200 cycles more
+    /// than a whole cycle of path appears from one layer to the next, and there is simply no
+    /// correspondence left for the wave to line up with — no anchor or measurement recovers
+    /// it. Fewer cycles make that same movement a smaller share of a cycle, which is the only
+    /// thing that actually attacks it.
+    ///
+    /// Two ceilings then: one so the wave stays trackable, one so a cycle stays wider than a
+    /// couple of beads and can physically be drawn. The schedule is planned BACKWARDS from
+    /// the top, letting the count rise at most one per layer going down. That way it never
+    /// has to fall faster than one per layer — each change costs a single sweep of
+    /// misalignment rather than several — and it begins dropping exactly early enough to
+    /// arrive in time, and no earlier, so the requested count survives as far up as it can.
+    /// </summary>
+    private static int Gcd(int a, int b) { while (b != 0) (a, b) = (b, a % b); return a; }
+
+    private static int[] PlanCycleCounts(Toolpath toolpath, SliceSettings settings, int requested)
+    {
+        int n = toolpath.Layers.Count;
+        var plan = new int[n];
+        if (n == 0) return plan;
+
+        // Perimeter of each layer's main loop.
+        var perim = new float[n];
+        for (int i = 0; i < n; i++)
+        {
+            float best = 0f;
+            foreach (var (cs, ce) in Chains(toolpath.Layers[i]))
+            {
+                float len = 0f;
+                for (int k = cs; k < ce; k++)
+                    len += Vector3.Distance(toolpath.Layers[i].Moves[k].From, toolpath.Layers[i].Moves[k].To);
+                if (len > best) best = len;
+            }
+            perim[i] = best;
+        }
+
+        // Median-smoothed, so a single odd layer cannot start the whole part dropping.
+        var smooth = new float[n];
+        var window = new List<float>();
+        for (int i = 0; i < n; i++)
+        {
+            window.Clear();
+            for (int k = Math.Max(0, i - 7); k <= Math.Min(n - 1, i + 7); k++) window.Add(perim[k]);
+            window.Sort();
+            smooth[i] = window[window.Count / 2];
+        }
+
+        float bead = MathF.Max(1f, settings.BeadWidth);
+
+        // The widest layer. Below it the part is still growing, so a loop that is changing
+        // fast there is a part being built, not a part ending — nothing above needs to be
+        // paid for down here, and thinning the base only spoils good geometry.
+        int widest = 0;
+        for (int i = 1; i < n; i++) if (smooth[i] > smooth[widest]) widest = i;
+
+        // Above the widest point, the most cycles that stay trackable and printable.
+        var ceiling = new int[n];
+        for (int i = 0; i < n; i++)
+        {
+            if (i <= widest || smooth[i] <= 1f) { ceiling[i] = requested; continue; }
+            float change = MathF.Abs(smooth[i] - smooth[i - 1]) / smooth[i];
+            if (i + 1 < n) change = MathF.Max(change, MathF.Abs(smooth[i + 1] - smooth[i]) / smooth[i]);
+            int steady    = change > 1e-6f ? (int)(MaxPhaseErrorTurns / change) : requested;
+            int printable = (int)(smooth[i] / (1.25f * bead));
+            ceiling[i] = Math.Clamp(Math.Min(Math.Min(steady, printable), requested), 1, requested);
+        }
+
+        // One change, not a slow retreat. Easing off a cycle at a time puts a disturbance in
+        // EVERY layer above where it starts, so the pattern never settles again — worse than
+        // the problem. So: hold the requested count until it genuinely stops working, drop
+        // straight to a number that works for the rest of the part, and stay there. One
+        // visible event, and everything above it steady.
+        // Trigger only where the requested count stops working AND stays not working. A part
+        // can lurch for a layer or two in the middle of an otherwise steady stretch, and
+        // dropping on that would coarsen a large span of perfectly good wall for nothing.
+        const int Sustained = 25;
+        int start = -1;
+        for (int i = widest + 1; i < n; i++)
+        {
+            if (ceiling[i] >= requested) continue;
+            int run = 0;
+            for (int j = i; j < n && ceiling[j] < requested; j++) run++;
+            if (run >= Sustained || i + Sustained >= n) { start = i; break; }
+            i += run;                       // a passing wobble — skip past it
+        }
+
+        if (start < 0)
+        {
+            for (int i = 0; i < n; i++) plan[i] = requested;
+            return plan;
+        }
+
+        // Step down in a few gentle changes rather than one hard one.
+        //
+        // Going straight from the requested count to whatever the top needs is a change of
+        // several times over, and a pattern that suddenly gets five times coarser does not
+        // read as the same pattern tapering — it reads as a different object starting. Held
+        // to about a quarter at a time, each change is small enough to pass as the part
+        // narrowing, and each is made only where the wall actually stops supporting the count
+        // it is on, so they space themselves out along the taper instead of being dealt out
+        // on a schedule.
+        for (int i = 0; i < start; i++) plan[i] = requested;
+
+        int current = requested;
+        for (int i = start; i < n; i++)
+        {
+            if (ceiling[i] < current)
+            {
+                int floorCount = Math.Max(4, (int)(current * (1f - MaxStepFraction)));
+                int target     = Math.Max(floorCount, ceiling[i]);
+
+                // Within what this step allows, prefer the count sharing the most structure
+                // with the one being left: the two waves then beat evenly around the loop
+                // rather than in a few lumps.
+                int next = target, bestFactor = Gcd(current, target);
+                for (int r = target; r >= Math.Max(4, (int)(target * 0.85f)); r--)
+                {
+                    int f = Gcd(current, r);
+                    if (f > bestFactor) { bestFactor = f; next = r; }
+                }
+                current = Math.Max(4, Math.Min(next, current - 1));
+            }
+            plan[i] = current;
+        }
+        return plan;
+    }
+
+    /// <summary>The [start, end) move ranges of each contiguous extrude chain in a layer.</summary>
+    private static IEnumerable<(int Start, int End)> Chains(ToolpathLayer layer)
+    {
+        int i = 0;
+        while (i < layer.Moves.Count)
+        {
+            var m = layer.Moves[i];
+            if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) { i++; continue; }
+            int start = i, j = i;
+            var prevTo = m.From;
+            while (j < layer.Moves.Count)
+            {
+                var mv = layer.Moves[j];
+                if (mv.Kind != MoveKind.Extrude || mv.IsLayerStitch) break;
+                if (Vector3.DistanceSquared(mv.From, prevTo) > 1.0f) break;
+                prevTo = mv.To;
+                j++;
+            }
+            if (j > start) yield return (start, j);
+            i = Math.Max(j, i + 1);
         }
     }
 
@@ -445,6 +743,7 @@ public static class PatternEffect
         public float Anchor;     // path distance of the vertex nearest world +X
         public bool  Closed;     // the chain's last point returns to its first
         public float Lambda;     // wavelength actually used (snapped on closed loops)
+        public float[]? Warp;    // per-cycle correction: phase at evenly spaced path fractions
     }
 
     /// <summary>
@@ -467,10 +766,54 @@ public static class PatternEffect
             float total = 0f;
             float bestAngle = float.MaxValue, anchor = 0f;
 
+            // Where the loop crosses the world +X ray out of the part centre, to the exact
+            // point rather than the nearest vertex.
+            //
+            // This is the phase's origin, and at 200 cycles one cycle is only a couple of
+            // hundredths of a loop — so snapping the origin to whichever vertex happened to
+            // fall closest moves the whole wave by a large part of a cycle, differently on
+            // every layer. Interpolating the crossing makes the origin a smooth function of
+            // the wall, which is what lets each layer work out its own phase from world
+            // geometry instead of inheriting it from the layer beneath. Nothing accumulates
+            // that way: a layer can only be as wrong as its own crossing, never as wrong as
+            // every layer below it added up.
+            //
+            // The outermost crossing is taken, so a wall that doubles back past the ray —
+            // a sheet has two faces — always answers with the same one.
+            float bestRadius = -1f;
+            float prevAng = 0f, prevRad = 0f, prevDist = 0f;
+            bool havePrev = false;
+
             void ConsiderAnchor(Vector3 p, float distAlong)
             {
-                float ang = MathF.Abs(MathF.Atan2(p.Y - ctx.Cy, p.X - ctx.Cx));
-                if (ang < bestAngle) { bestAngle = ang; anchor = distAlong; }
+                float dx = p.X - ctx.Cx, dy = p.Y - ctx.Cy;
+                float ang = MathF.Atan2(dy, dx);
+                float rad = MathF.Sqrt(dx * dx + dy * dy);
+                if (havePrev && dx > 0f)
+                {
+                    // Sign change in Y on the +X side means the segment crossed the ray.
+                    bool crossed = (prevAng <= 0f && ang >= 0f) || (prevAng >= 0f && ang <= 0f);
+                    if (crossed && MathF.Abs(ang - prevAng) < MathF.PI)
+                    {
+                        float denom = ang - prevAng;
+                        float t = MathF.Abs(denom) > 1e-9f ? -prevAng / denom : 0f;
+                        t = Math.Clamp(t, 0f, 1f);
+                        float r = prevRad + (rad - prevRad) * t;
+                        if (r > bestRadius)
+                        {
+                            bestRadius = r;
+                            anchor = prevDist + (distAlong - prevDist) * t;
+                            bestAngle = 0f;
+                        }
+                    }
+                }
+                // Fallback for a loop that never crosses the ray: nearest vertex, as before.
+                if (bestRadius < 0f)
+                {
+                    float a = MathF.Abs(ang);
+                    if (a < bestAngle) { bestAngle = a; anchor = distAlong; }
+                }
+                prevAng = ang; prevRad = rad; prevDist = distAlong; havePrev = true;
             }
 
             ConsiderAnchor(m.From, 0f);

@@ -1344,6 +1344,92 @@ public sealed class ConsoleCommandRegistry
                 if (checkedPairs > 0)
                     ctx.Log($"[sinecheck] {opposed}/{checkedPairs} layer pairs cleanly opposed "
                           + $"(-1.00 = every peak over a valley; weakest {-worst:F2})");
+
+                // What cycle count each layer was actually given, and where it had to ease off.
+                var plan = MassiveSlicer.Core.Slicing.Effects.PatternEffect.CyclePlan;
+                if (plan.Count > 0)
+                {
+                    static int G(int a2, int b2) { while (b2 != 0) (a2, b2) = (b2, a2 % b2); return a2; }
+                    // The sequence of counts, and where each change happens.
+                    var steps = new List<(int Layer, int From, int To)>();
+                    for (int i = 1; i < plan.Count; i++)
+                        if (plan[i].Cycles != plan[i - 1].Cycles)
+                            steps.Add((plan[i].Layer, plan[i - 1].Cycles, plan[i].Cycles));
+                    if (steps.Count == 0)
+                        ctx.Log($"[sinecheck] cycle plan: {plan[0].Cycles} throughout, never reduced");
+                    else
+                    {
+                        ctx.Log($"[sinecheck] cycle plan: {plan[0].Cycles} held to layer {steps[0].Layer} "
+                              + $"({100.0 * steps[0].Layer / plan.Count:F0}% up), then {steps.Count} change(s):");
+                        foreach (var st in steps.Take(12))
+                            ctx.Log($"    layer {st.Layer,4} ({100.0 * st.Layer / plan.Count,3:F0}% up): "
+                                  + $"{st.From} -> {st.To}  ({100.0 * (st.From - st.To) / st.From:F0}% coarser, "
+                                  + $"beats {G(st.From, st.To)}x round the loop)");
+                        if (steps.Count > 12) ctx.Log($"    ... and {steps.Count - 12} more");
+                    }
+                }
+
+                // How steady the outline fit is. The wall changes smoothly, so the shift
+                // should too; jitter is the fit being noisy, and the wave multiplies it by
+                // the cycle count.
+                var shifts = MassiveSlicer.Core.Slicing.Effects.PatternEffect.ShiftLog;
+                if (shifts.Count > 2)
+                {
+                    var steps = new List<float>();
+                    for (int i = 1; i < shifts.Count; i++)
+                    {
+                        float d = shifts[i].Shift - shifts[i - 1].Shift;
+                        d -= MathF.Floor(d + 0.5f);           // shortest way round the loop
+                        steps.Add(MathF.Abs(d));
+                    }
+                    steps.Sort();
+                    float med = steps[steps.Count / 2];
+                    float p90 = steps[(int)(steps.Count * 0.9f)];
+                    float cyc = ctx.Main.RightPanel.Additive.PatternSineCyclesPerLayer > 0
+                        ? (float)ctx.Main.RightPanel.Additive.PatternSineCyclesPerLayer : 1f;
+                    ctx.Log($"[sinecheck] outline shift moves {med * 100f:F3}% of the loop per layer "
+                          + $"(median), {p90 * 100f:F3}% at the 90th percentile");
+                    ctx.Log($"[sinecheck]   = {med * cyc * 360f:F0} deg of phase typical, "
+                          + $"{p90 * cyc * 360f:F0} deg at the 90th — anything near 180 is a coin toss");
+                    var sharp = shifts.Select(t2 => t2.Sharpness).OrderBy(v => v).ToList();
+                    ctx.Log($"[sinecheck]   fit quality: worst {sharp[0]:F2}x, "
+                          + $"median {sharp[sharp.Count / 2]:F2}x better than average");
+                }
+
+                // Layers whose outline could not be matched against the one below. Those
+                // carry the previous phase forward rather than trust a meaningless fit.
+                var reg = MassiveSlicer.Core.Slicing.Effects.PatternEffect.RegistrationWarnings;
+                if (reg.Count == 0)
+                    ctx.Log("[sinecheck] every layer matched its outline to the one below");
+                else
+                {
+                    ctx.LogError($"[sinecheck] {reg.Count} layer(s) could not match their outline "
+                               + "and carried the previous phase forward:");
+                    var runs = new List<(int From, int To, float Worst)>();
+                    foreach (var t in reg)
+                    {
+                        if (runs.Count > 0 && t.Layer <= runs[^1].To + 2)
+                            runs[^1] = (runs[^1].From, t.Layer, MathF.Min(runs[^1].Worst, t.Sharpness));
+                        else runs.Add((t.Layer, t.Layer, t.Sharpness));
+                    }
+                    foreach (var r in runs.OrderByDescending(r => r.To - r.From).Take(10))
+                        ctx.LogError($"    layers {r.From}-{r.To} ({r.To - r.From + 1} in a row), "
+                                   + $"weakest fit {r.Worst:F2}x better than average");
+                }
+
+                // Tracking the wall below should land on the requested count by itself.
+                // Any layer where it did not is a layer whose measurement went wrong.
+                var warn = MassiveSlicer.Core.Slicing.Effects.PatternEffect.CycleCountWarnings;
+                if (warn.Count == 0)
+                    ctx.Log("[sinecheck] every layer tracked to the requested cycle count");
+                else
+                {
+                    ctx.LogError($"[sinecheck] {warn.Count} layer(s) did NOT track to the requested "
+                               + "count and fell back to evenly spaced cycles:");
+                    foreach (var (lyr, got) in warn.Take(12))
+                        ctx.LogError($"    layer {lyr}: tracked {got:F2} cycles");
+                    if (warn.Count > 12) ctx.LogError($"    ... and {warn.Count - 12} more");
+                }
             },
         });
 
