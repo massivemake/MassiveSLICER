@@ -219,7 +219,8 @@ public partial class ViewportView : UserControl
     private TkMatrix4    _validationTransform;
     private bool         _validationDone;
 
-    // Pre-computed playback data -- populated by ValidateToolpathAsync on the background thread.
+    // Pre-computed playback data -- published by ValidateToolpathAsync on the UI
+    // thread after a completed pass wins the current-run check.
     private readonly ConcurrentDictionary<SceneNode, float[][]>  _ikSolutionsByNode  = new();
     private readonly ConcurrentDictionary<SceneNode, float[]>    _moveTimesMsByNode   = new(); // ms per move
     private readonly ConcurrentDictionary<SceneNode, bool[]>     _singularityByNode   = new();
@@ -5746,7 +5747,10 @@ public partial class ViewportView : UserControl
 
     private void SetSliceStatus(ViewportViewModel vm, string message, bool isError = false)
     {
-        Dispatcher.UIThread.Post(() =>
+        // Apply immediately when already on the UI thread. Nested Post() from
+        // ValidateToolpathAsync used to land a superseded dirty banner after a
+        // later clean pass had already updated StatsReachability.
+        void Apply()
         {
             vm.SliceStatusIsError = isError;
             vm.SliceStatusMessage = message;
@@ -5755,7 +5759,12 @@ public partial class ViewportView : UserControl
             // validation especially — sat there until the next slice overwrote it.
             if (isError && !string.IsNullOrWhiteSpace(message))
                 ScheduleClearSliceStatus(vm, ErrorBannerMs, clearWhileSlicing: true);
-        });
+        }
+
+        if (Dispatcher.UIThread.CheckAccess())
+            Apply();
+        else
+            Dispatcher.UIThread.Post(Apply);
     }
 
     /// <param name="clearWhileSlicing">Error banners clear even mid-slice; progress
@@ -14650,6 +14659,9 @@ public partial class ViewportView : UserControl
 
             var evaluated = ToolpathFeasibilityEvaluator.Evaluate(evalInput, cts.Token);
             if (evaluated is null) return;   // empty toolpath or cancelled
+            // Evaluate can finish just after Cancel(); do not publish a superseded
+            // dirty verdict over a later clean pass (SB101 stale-banner case).
+            if (cts.IsCancellationRequested) return;
 
             var   result       = evaluated.Reachable;
             var   solutions    = evaluated.Solutions;
@@ -14662,13 +14674,6 @@ public partial class ViewportView : UserControl
             int   collCount    = 0;
             if (collision is not null)
                 foreach (var c in collision) if (c) collCount++;
-
-            _ikSolutionsByNode[node]  = solutions;
-            _moveTimesMsByNode[node]  = moveTimes;
-            _singularityByNode[node]  = singularity;
-            _e1MmByNode[node]         = e1PerMove;
-            if (collision is not null) _collisionByNode[node] = collision;
-            else _collisionByNode.TryRemove(node, out _);
 
             int failCount = 0;
             foreach (var r in result) if (!r) failCount++;
@@ -14691,44 +14696,50 @@ public partial class ViewportView : UserControl
                         fi++;
                     }
             }
-            _validationIssuesByNode[node] = (failCount, singCount, zLo, zHi);
 
-            _pendingReachability.Enqueue((node, result));
-            _pendingSingularityPoints.Enqueue((node, singularity));
-            string reachLabel = failCount == 0
-                ? $"All {result.Length} reachable"
-                : $"{failCount} / {result.Length} unreachable";
-            if (collCount > 0)
-                reachLabel += collStride > 1
-                    ? $" · {collCount:N0} collision (sampled 1/{collStride})"
-                    : $" · {collCount:N0} collision";
+            var counts = new RobotValidationPresentation.Counts(
+                failCount, singCount, collCount, result.Length, collStride, zLo, zHi);
+            string reachLabel = RobotValidationPresentation.ReachabilityLabel(counts);
+
             Dispatcher.UIThread.Post(() =>
             {
+                if (!RobotValidationPresentation.ShouldPublishCompletedPass(
+                        cts.IsCancellationRequested, ReferenceEquals(_validationCts, cts)))
+                    return;
+
+                _ikSolutionsByNode[node]  = solutions;
+                _moveTimesMsByNode[node]  = moveTimes;
+                _singularityByNode[node]  = singularity;
+                _e1MmByNode[node]         = e1PerMove;
+                if (collision is not null) _collisionByNode[node] = collision;
+                else _collisionByNode.TryRemove(node, out _);
+                _validationIssuesByNode[node] = (failCount, singCount, zLo, zHi);
+                _pendingReachability.Enqueue((node, result));
+                _pendingSingularityPoints.Enqueue((node, singularity));
+
                 _validationDone = true;
                 if (vm is not null)
                 {
                     vm.StatsReachability = reachLabel;
                     vm.IsValidating = false;
                     vm.SetScrubMarkers(result, singularity, collision);
-                    int firstBad = -1;
-                    for (int i = 0; i < total; i++)
-                        if (!result[i] || singularity[i] || (collision is not null && collision[i]))
-                        { firstBad = i; break; }
-                    vm.FirstValidationIssueIndex = firstBad;
-                    // Loud warning: a fault mid-print wastes material and hours.
-                    if (failCount + singCount + collCount > 0)
+                    vm.FirstValidationIssueIndex = RobotValidationPresentation.FirstIssueIndex(
+                        result, singularity, collision);
+                    if (RobotValidationPresentation.HasIssues(counts))
                     {
-                        string collPart = collCount > 0
-                            ? $" and {collCount:N0} predicted collision moves" +
-                              (firstCollHit is { } fh
-                                  ? $" (first: {RobotCollisionModel.LinkNames[fh.Link]} ↔ {fh.Other})"
-                                  : "")
+                        string collDetail = firstCollHit is { } fh
+                            ? $" (first: {RobotCollisionModel.LinkNames[fh.Link]} ↔ {fh.Other})"
                             : "";
                         SetSliceStatus(vm,
-                            $"⚠ Robot validation: {singCount:N0} singularity-risk, {failCount:N0} unreachable{collPart}" +
-                            (zLo <= zHi ? $" between Z {zLo:0} and {zHi:0} mm" : "") +
-                            " — the robot may fault or crash mid-print.",
+                            RobotValidationPresentation.ErrorSliceStatus(counts, collDetail),
                             isError: true);
+                    }
+                    else
+                    {
+                        // Latest completed pass is clean — replace any prior red
+                        // banner / status-bar warning (ShowSliceStatus is error-only).
+                        SetSliceStatus(vm, RobotValidationPresentation.CleanSliceStatus(counts));
+                        ScheduleClearSliceStatus(vm);
                     }
                 }
                 GlCanvas.RequestNextFrameRendering();
@@ -17658,7 +17669,8 @@ public partial class ViewportView : UserControl
     /// </summary>
     private async Task<bool> ConfirmExportDespiteValidationAsync(SceneNode node)
     {
-        if (!_validationIssuesByNode.TryGetValue(node, out var vi) || vi.Unreachable + vi.Singular == 0)
+        if (!_validationIssuesByNode.TryGetValue(node, out var vi)
+            || !RobotValidationPresentation.BlocksExport(vi.Unreachable, vi.Singular))
             return true;
 
         if (Avalonia.Controls.TopLevel.GetTopLevel(this) is not Window owner) return true;

@@ -56,6 +56,7 @@ Sections are marked with `// -- Name ---`. Grep the label rather than scrolling.
 | Scrub IK | 11260 |
 | Gizmo drag | 13485 |
 | KRL export | 13881 |
+| Robot validation (`ValidateToolpathAsync`, export confirm) | 14416; presentation rules in `App/Views/RobotValidationPresentation.cs` |
 
 ## Inside `App/ViewModels/ViewportViewModel.cs` (7,530 lines)
 
