@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-15** (LFAM 3 heatedBed from shop Release pose)
+Last updated: **2026-09-15** (shop lfam3_HeatedBed.glb committed)
 
 ---
 
@@ -516,6 +516,12 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-15 — Commit shop `lfam3_HeatedBed.glb`
+
+- Symptom: `ff318dd` loaded `cell.heatedBed` correctly on SB101, but clean clones missed the ~40KB mesh.
+- Fix: checked in shop `lfam3_HeatedBed.glb` at `assets/cells/LFAM3/` and `src/assets/cells/LFAM3/`. No `basePos`/`baseAbc` change.
+- Key files: `assets/cells/LFAM3/lfam3_HeatedBed.glb`, `src/assets/cells/LFAM3/lfam3_HeatedBed.glb`.
 
 ### 2026-09-15 — Shop heatedBed restore (do not load LFAM3Bed.glb)
 
