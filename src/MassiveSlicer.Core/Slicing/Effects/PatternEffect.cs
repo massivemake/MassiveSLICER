@@ -327,7 +327,7 @@ public static class PatternEffect
         private const float CellMm = 25f;
         private const int   Samples = 600;     // enough to pin a phase; far cheaper than every move
 
-        private readonly Dictionary<(int, int), List<(float X, float Y, float Phase)>> _grid = new();
+        private readonly Dictionary<(int, int), List<(float X, float Y, float Phase, float Tx, float Ty)>> _grid = new();
 
         /// <summary>Samples a layer's wave phase at points spread evenly along its path.</summary>
         public static PhaseField? Build(ToolpathLayer layer, ChainInfo[] chainOf,
@@ -348,39 +348,61 @@ public static class PatternEffect
                                           Vector3.Distance(m.From, m.To), 0f);
                 if (theta is null) continue;
                 float phase = theta.Value * ctx.Frequency + ctx.SinePhase;
+                var d = m.To - m.From;
+                float dl = MathF.Sqrt(d.X * d.X + d.Y * d.Y);
+                if (dl < 1e-6f) continue;
                 var key = ((int)MathF.Floor(m.From.X / CellMm), (int)MathF.Floor(m.From.Y / CellMm));
                 if (!field._grid.TryGetValue(key, out var bucket))
                     field._grid[key] = bucket = [];
-                bucket.Add((m.From.X, m.From.Y, phase));
+                bucket.Add((m.From.X, m.From.Y, phase, d.X / dl, d.Y / dl));
                 added++;
             }
             return added > 8 ? field : null;
         }
 
         /// <summary>
-        /// The phase shift that puts this layer's peaks over the layer below's valleys.
-        /// Each sample asks what the wall below is doing directly beneath it and how far
-        /// out of opposition this layer currently is; the answer is the circular mean of
-        /// those errors, which is the one rigid shift that best opposes the whole loop.
+        /// The phase this layer has to open on so that it opens opposed to the wall beneath
+        /// its own starting point.
+        ///
+        /// Measured only across the first few cycles, not around the whole loop. The seam is
+        /// not vertical: a layer does not begin directly above where the last one began, and
+        /// at this cycle count a seam sitting a few millimetres over is already most of a
+        /// cycle of phase. Averaging that start error together with the gradual stretch around
+        /// the rest of the loop — which is what the whole-loop version did — produces a
+        /// compromise that is wrong at the start and wrong everywhere else. Getting the start
+        /// right and letting the cycles march evenly from there is the better trade, because
+        /// the start error is the big, abrupt one and the stretch is small and gradual.
+        ///
+        /// The phase still advances exactly the requested number of cycles across the loop,
+        /// so arriving back at the start lands on the same point of the cycle it opened on:
+        /// the last sine still finishes whole.
         /// </summary>
         public float OpposingPhase(ToolpathLayer layer, ChainInfo[] chainOf,
                                    PatternContext ctx, bool wavelengthMode)
         {
             float sumSin = 0f, sumCos = 0f;
             int n = 0;
-            int step = Math.Max(1, layer.Moves.Count / Samples);
-            for (int mi = 0; mi < layer.Moves.Count; mi += step)
+            // Look across roughly three cycles either side of the layer's own start.
+            float window = 3f / MathF.Max(1f, ctx.Frequency);
+            for (int mi = 0; mi < layer.Moves.Count; mi++)
             {
                 var m = layer.Moves[mi];
                 if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
                 var chain = chainOf[mi];
                 if (chain is not { Total: > 1f }) continue;
-                if (Nearest(m.From.X, m.From.Y) is not float below) continue;
+
+                float u = (chain.CumStart - chain.Anchor) / chain.Total;
+                u -= MathF.Floor(u);
+                if (u > window && u < 1f - window) continue;      // not near the start
+
+                var d = m.To - m.From;
+                float dl = MathF.Sqrt(d.X * d.X + d.Y * d.Y);
+                if (dl < 1e-6f) continue;
+                if (Nearest(m.From.X, m.From.Y, d.X / dl, d.Y / dl) is not float below) continue;
 
                 float? theta = ChainTheta(chain, ctx, wavelengthMode,
                                           Vector3.Distance(m.From, m.To), 0f);
                 if (theta is null) continue;
-                // Own phase with no shift; the error is how far that sits from opposing.
                 float own = theta.Value * ctx.Frequency;
                 float err = below + MathF.PI - own;
                 sumSin += MathF.Sin(err);
@@ -391,8 +413,12 @@ public static class PatternEffect
             return MathF.Atan2(sumSin / n, sumCos / n);
         }
 
-        /// <summary>Phase of the nearest sample below, searching this cell and its ring.</summary>
-        private float? Nearest(float x, float y)
+        /// <summary>
+        /// Phase of the nearest sample below that is travelling the same way. On a sheet the
+        /// wall comes back down the other face a bead away, and that face is displaced the
+        /// opposite direction — matching it would read the pattern inside out.
+        /// </summary>
+        private float? Nearest(float x, float y, float tx, float ty)
         {
             int cx = (int)MathF.Floor(x / CellMm), cy = (int)MathF.Floor(y / CellMm);
             float best = float.MaxValue; float? phase = null;
@@ -400,8 +426,9 @@ public static class PatternEffect
                 for (int dy = -1; dy <= 1; dy++)
                 {
                     if (!_grid.TryGetValue((cx + dx, cy + dy), out var bucket)) continue;
-                    foreach (var (px, py, ph) in bucket)
+                    foreach (var (px, py, ph, ptx, pty) in bucket)
                     {
+                        if (tx * ptx + ty * pty < 0.5f) continue;
                         float d = (px - x) * (px - x) + (py - y) * (py - y);
                         if (d < best) { best = d; phase = ph; }
                     }
