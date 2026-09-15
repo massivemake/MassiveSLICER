@@ -216,3 +216,32 @@ If a feature branch has work on it and the developer changes subject, stop and s
   lives on one laptop; this repo already grew a `save.sh` because code got lost.
 - When a branch is merged, say so and offer to delete it — stale branches are read by everyone
   as work in progress.
+
+## Cursor Cloud specific instructions
+
+The Cloud Agent environment is Linux x86_64 (Ubuntu 24.04) with a headless software-GL
+setup so the Avalonia GUI runs without a GPU.
+
+- **.NET 8 SDK** is preinstalled and on `PATH` (`dotnet` → `/usr/local/bin/dotnet`; no
+  `DOTNET_ROOT` needed). Build the app with
+  `dotnet build src/MassiveSlicer.App/MassiveSlicer.App.csproj -c Debug`. The `.slnx` still
+  needs SDK 9, so on SDK 8 build the App project directly (not the solution).
+- **Tests:** `dotnet test src/MassiveSlicer.Tests/MassiveSlicer.Tests.csproj`. On Linux the
+  documented path/CWD + WIP failures from `docs/KNOWN-TEST-FAILURES.md` apply, **plus** the
+  Windows-only headless-UI tests (`TransformNumberBoxClickTest`, `SidebarExpandScrollTest`,
+  `TcpAxisLabelLayoutTest`) which need an STA/COM apartment and throw
+  `PlatformNotSupportedException: COM Interop is not supported` off Windows. These are
+  platform limitations, not regressions.
+- **Running the GUI headless:** a virtual X display `:99` (Xvfb) is started on boot.
+  Avalonia **blacklists the `llvmpipe` software renderer**, so use Mesa `softpipe`
+  (GL 3.3 / GLSL 3.30 — meets the viewport minimum). Login shells get the env vars from
+  `/etc/profile.d/massiveslicer.sh`; if yours doesn't load them, export them:
+  `export DISPLAY=:99 GALLIUM_DRIVER=softpipe LIBGL_ALWAYS_SOFTWARE=1`. Launch the built
+  DLL (a Debug build produces no apphost, and `dotnet run` tries to exec the missing
+  apphost): `dotnet src/MassiveSlicer.App/bin/Debug/net8.0/MassiveSlicer.App.dll`.
+- **Driving the app without a mouse:** the app exposes a localhost control bridge on
+  `http://127.0.0.1:8723` (`LocalControlBridge`) — ideal for headless end-to-end checks:
+  `POST /command {"command":"import <path>"}`, then `select <name>`, then `slice`;
+  `GET /console?n=N` reads output; `GET /screenshot?format=png` returns a PNG. Turn off the
+  "Realtime" auto-slice before importing to avoid a premature "mesh has no geometry" toast:
+  `viewset RealtimeSlicingPaused true`. Switch the viewport with `viewset ViewMode Toolpath`.
