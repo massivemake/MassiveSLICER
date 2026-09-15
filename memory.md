@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-15** (LFAM 3 BASE #6 must stay in published cell JSON)
+Last updated: **2026-09-15** (stale robot-validation banner after clean pass)
 
 ---
 
@@ -517,6 +517,27 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 ## Session changelog (reverse chronological)
 
+### 2026-09-15 — Stale robot-validation banner after a later clean pass
+
+- Symptom: SB101 / Curtain — after toolhead tweaks, `StatsReachability = All
+  1640090 reachable` and live scrub `|A5|` was 33–52°, but the red slice-status
+  / Export warning from an earlier `1,007 singularity-risk` pass could still
+  appear. Operators treated a clean path as unsafe.
+- Cause: `ValidateToolpathAsync` posted an error `SetSliceStatus` when counts
+  > 0 and never replaced that banner on a later clean pass. `SetSliceStatus`
+  also nested another UI-thread `Post`, so a superseded dirty pass could paint
+  the banner after the clean pass had already updated reachability. Cancelled
+  evaluates could still write `_validationIssuesByNode`.
+- Fix: publish validation UI / export-gate state only for the current
+  uncancelled pass; a zero unreachable / singularity / collision result now
+  writes a non-error "Robot validation: All N reachable" status (clears the
+  red banner and status-bar warning). Dirty passes still warn and still gate
+  Export. Detection threshold unchanged (`|A5| < 5°` after repair). Rebased
+  onto `main` after PRs #7/#8 (heated-bed / dual-bed map) without changing
+  those cell/overlay paths.
+- Key files: `ViewportView.axaml.cs`, `RobotValidationPresentation.cs`,
+  `RobotValidationPresentationTest.cs`.
+
 ### 2026-09-15 — Apps install dropped BASE #6 from the dropdown
 
 - Symptom: live Apps exe BASE # listed only Rotary 1 and 2. Install `lfam3.json` had two `krlBases` and no `heatedBed` (Improved-Cell / stale copy). Shop Release JSON has `heatedBed` + HEATED-BED index 6.
@@ -581,7 +602,6 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 - Fix: AdaOne catalog (Multi-axis finishing, Drilling, Planar facing, Planar clearing, Cutout, Contouring, Swarf, Morph). Per-op cards, engagement, tool compensation. Generate → `AdaMillPlanner`. PlanarCut tile and mill generate path removed.
 - Files: `MillOperationKind.cs`, `AdaMachiningSettings.cs`, `AdaMillPlanner.cs`, `MeshWaterline.cs`, `MillSidebarSettings.cs`, `SubtractiveSettingsViewModel.cs`, `RightPanelView.axaml`, `ViewportView.axaml.cs`, `ConsoleCommandRegistry.cs`.
 - Tests: `AdaMillPlannerTest` 9 passed.
-
 
 ### 2026-08-26 — First-layer print speed and RPM % increase
 
