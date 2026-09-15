@@ -38,6 +38,9 @@ the Electron/JS prototype (`MassiveSlice`).
 - **Connect to the cell live**: C3Bridge to the KRC4 (sync, program run),
   extruder/milling bridges (Live I/O), Zivid 3D scanning, rotary-bed
   calibration workflows.
+- **Send to MassiveDRIVE**: large jobs write `massivedrive.job/v2` on the
+  Drive jobs share (`segments.bin` + manifest/preview/summary) and POST a
+  tiny pointer; small jobs still use v1 JSON. See `docs/massivedrive-job-v2.md`.
 - **Manage work**: `.mass` workspace files (models + toolpaths + settings),
   material and print presets, ERP hooks.
 

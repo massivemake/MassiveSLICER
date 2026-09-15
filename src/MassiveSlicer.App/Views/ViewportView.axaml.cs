@@ -17860,7 +17860,8 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Export toolpath as massivedrive.job/v1 and start MassiveDRIVE path executor.
+    /// Send the active toolpath to MassiveDRIVE. Large jobs write massivedrive.job/v2
+    /// on the shared jobs disk and POST a tiny pointer; small jobs keep the v1 JSON POST.
     /// Does not upload KRL to the robot.
     /// </summary>
     private async Task SendToMassiveDriveAsync(ViewportViewModel vm)
@@ -17900,15 +17901,19 @@ public partial class ViewportView : UserControl
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
         var mvm = topLevel?.DataContext as MainWindowViewModel;
+        var prefs = mvm?.AppPreferences;
+        var rpm = millJob ? null : RpmInputs(settings);
 
         var exportSettings = new MassiveDriveExportSettings
         {
             Name = string.IsNullOrWhiteSpace(node.Name) ? (millJob ? "mill-job" : "print-job") : node.Name,
             CellId = target.CellId ?? cell.MassiveDriveCellId ?? "lfam3",
+            JobId = Guid.NewGuid().ToString("N")[..12],
             Tool = toolNo,
             Base = baseNo,
             PrintSpeedMmS = millJob && mill is not null ? (float)mill.CuttingFeedMmS : (float)settings.PrintSpeed,
             TravelSpeedMmS = millJob && mill is not null ? (float)mill.TravelSpeedMmS : (float)settings.TravelSpeed,
+            WipeSpeedMmS = millJob ? 0f : (float)settings.WipeSpeed,
             ReverseMs = millJob ? 0f : 200f,
             ReversePercent = millJob ? 0f : 40f,
             TravelReverse = !millJob,
@@ -17916,6 +17921,13 @@ public partial class ViewportView : UserControl
             AbsolutePath = true,
             ApproachClearanceMm = millJob && mill is not null ? (float)mill.ApproachClearanceMm : 80f,
             SpindleRpm = millJob && mill is not null ? (float)mill.SpindleRpm : 0f,
+            ExtrusionRpmPercent = rpm?.ExtrusionRpmPercent ?? 0f,
+            FirstLayerRpmPercent = rpm?.FirstLayerRpmPercent ?? 0f,
+            FirstLayerSpeedMmS = rpm is { FirstLayerSpeedMps: > 1e-6f } r
+                ? r.FirstLayerSpeedMps * 1000f : 0f,
+            BeadWidthMm = rpm?.BeadWidthMm ?? 0f,
+            LayerHeightMm = rpm?.LayerHeightMm ?? 0f,
+            FlowRate = rpm?.FlowRate ?? 0f,
             ToolheadOffsetA = millJob && mill is not null ? (float)mill.ToolheadA : (float)settings.ToolheadA,
             ToolheadOffsetB = millJob && mill is not null ? (float)mill.ToolheadB : (float)settings.ToolheadB,
             ToolheadOffsetC = millJob && mill is not null ? (float)mill.ToolheadC : (float)settings.ToolheadC,
@@ -17928,14 +17940,15 @@ public partial class ViewportView : UserControl
             SliceBedWorldZ = _renderer.BedZ,
             BedOrigin = new System.Numerics.Vector3(
                 cell.Bed.Origin.X, cell.Bed.Origin.Y, cell.Bed.Origin.Z),
-            WorkspacePath = mvm?.AppPreferences.LastWorkspacePath,
+            WorkspacePath = prefs?.LastWorkspacePath,
             SourceNote = $"cell={cell.Name} T{toolNo} B{baseNo} BASE",
         };
 
-        Dictionary<string, object?> package;
+        SetSliceStatus(vm, "Sending to Drive: building segments…");
+        MassiveDriveJobBuild build;
         try
         {
-            package = MassiveDriveJobExporter.ExportDict(toolpath, exportSettings);
+            build = await Task.Run(() => MassiveDriveJobExporter.Export(toolpath, exportSettings));
         }
         catch (Exception ex)
         {
@@ -17944,14 +17957,16 @@ public partial class ViewportView : UserControl
             return;
         }
 
-        var segCount = (package["segments"] as System.Collections.ICollection)?.Count ?? 0;
+        int segCount = build.Segments.Count;
+        bool forceLegacy = prefs?.MassiveDriveForceLegacyJson ?? false;
+        bool useLegacy = MassiveDriveSendPolicy.UseLegacyJson(segCount, forceLegacy);
         mvm?.Console.Log(
-            $"[drive] Sending \"{exportSettings.Name}\" ({segCount} segs) T{exportSettings.Tool} B{exportSettings.Base} BASE → {target.Url} …");
+            $"[drive] Sending \"{exportSettings.Name}\" ({segCount} segs) T{exportSettings.Tool} B{exportSettings.Base} BASE "
+            + $"{(useLegacy ? "v1 JSON" : "v2 pointer")} → {target.Url} …");
 
         try
         {
             using var client = new MassiveDriveClient(target.Url!);
-            // Health check first for clearer errors
             try
             {
                 using var health = await client.HealthAsync();
@@ -17972,14 +17987,83 @@ public partial class ViewportView : UserControl
                 return;
             }
 
+            string packageId;
+            if (useLegacy)
+            {
+                var package = build.ToV1Dict();
+                if (millJob)
+                {
+                    using var up = await client.UploadPackageAsync(package);
+                    packageId = MassiveDriveClient.ReadPackageId(up)
+                        ?? throw new MassiveDriveClientException(0, "upload did not return package_id: " + up.RootElement.GetRawText());
+                }
+                else
+                {
+                    var result = await client.SendAndStartAsync(package);
+                    packageId = result.PackageId;
+                }
+            }
+            else
+            {
+                string? jobsRoot = FirstNonEmpty(prefs?.MassiveDriveJobsRoot, cell.MassiveDriveJobsRoot);
+                string? staging = FirstNonEmpty(prefs?.MassiveDriveJobsStaging, cell.MassiveDriveJobsStaging);
+                if (string.IsNullOrWhiteSpace(jobsRoot))
+                {
+                    mvm?.Console.LogError(
+                        "[drive] Large job needs a Drive jobs share. Set massiveDriveJobsRoot on the cell JSON "
+                        + $"(LFAM 3: \\\\192.168.0.201\\MassiveDRIVE\\var\\jobs) or MassiveDriveJobsRoot in prefs. "
+                        + MassiveDriveJobShare.ShareCredentialHint);
+                    SetSliceStatus(vm,
+                        "⚠ Large job: set massiveDriveJobsRoot (cell JSON / prefs) to the Drive jobs share. "
+                        + "Samba user is 'massive'.",
+                        isError: true);
+                    return;
+                }
+
+                var progress = new Progress<MassiveDriveWriteProgress>(p =>
+                    SetSliceStatus(vm, $"Sending to Drive: {p}"));
+                MassiveDriveJobV2WriteResult written;
+                try
+                {
+                    written = await Task.Run(() =>
+                        MassiveDriveJobV2Writer.WriteToShare(build, jobsRoot, staging, progress));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    mvm?.Console.LogError($"[drive] Job folder write failed: {ex.Message}");
+                    SetSliceStatus(vm, $"⚠ Drive jobs share write failed: {ex.Message}", isError: true);
+                    return;
+                }
+
+                if (written.UsedStaging)
+                {
+                    mvm?.Console.LogError($"[drive] {written.ShareWarning}");
+                    SetSliceStatus(vm,
+                        "⚠ Drive jobs share write denied — files are only on this PC. "
+                        + MassiveDriveJobShare.ShareCredentialHint,
+                        isError: true);
+                    return;
+                }
+
+                mvm?.Console.Log(
+                    $"[drive] Wrote v2 job {written.JobId} ({written.SegmentCount:N0} segs, "
+                    + $"{written.SegmentsBytes:N0} bytes) at {written.JobDirectory}");
+                var pointer = written.Pointer(build.Name);
+                if (millJob)
+                {
+                    using var up = await client.UploadPackagePointerAsync(pointer);
+                    packageId = MassiveDriveClient.ReadPackageId(up, pointer.JobId)
+                        ?? throw new MassiveDriveClientException(0, "pointer upload did not return package_id: " + up.RootElement.GetRawText());
+                }
+                else
+                {
+                    var result = await client.SendPointerAndStartAsync(pointer);
+                    packageId = result.PackageId;
+                }
+            }
+
             if (millJob)
             {
-                using var up = await client.UploadPackageAsync(package);
-                var packageId = up.RootElement.TryGetProperty("package_id", out var pid)
-                    ? pid.GetString()
-                    : null;
-                if (string.IsNullOrEmpty(packageId))
-                    throw new MassiveDriveClientException(0, "upload did not return package_id: " + up.RootElement.GetRawText());
                 mvm?.Console.Log(
                     $"[drive] Uploaded mill package {packageId} ({segCount} segs, T{exportSettings.Tool} B{exportSettings.Base}, {exportSettings.SpindleRpm:0} rpm). Not started — Run from Drive Live run.");
                 if (mvm is not null)
@@ -17993,16 +18077,15 @@ public partial class ViewportView : UserControl
                 return;
             }
 
-            var result = await client.SendAndStartAsync(package);
             mvm?.Console.Log(
-                $"[drive] Sent package {result.PackageId} to {cell.Name} — path executor started.");
+                $"[drive] Sent package {packageId} to {cell.Name} — path executor started.");
             if (mvm is not null)
             {
                 mvm.StatusBar.OperationFeedback =
-                    $"✓ Sent to MassiveDRIVE ({cell.Name}): {result.PackageId} — {segCount} segments";
+                    $"✓ Sent to MassiveDRIVE ({cell.Name}): {packageId} — {segCount} segments";
             }
             SetSliceStatus(vm,
-                $"✓ Sent to MassiveDRIVE — {result.PackageId} ({segCount} segs). Robot needs RSI runtime armed.",
+                $"✓ Sent to MassiveDRIVE — {packageId} ({segCount} segs). Robot needs RSI runtime armed.",
                 isError: false);
         }
         catch (MassiveDriveClientException ex)
@@ -18016,6 +18099,11 @@ public partial class ViewportView : UserControl
             SetSliceStatus(vm, $"⚠ MassiveDRIVE send failed: {ex.Message}", isError: true);
         }
     }
+
+    static string? FirstNonEmpty(string? a, string? b)
+        => !string.IsNullOrWhiteSpace(a) ? a.Trim()
+            : !string.IsNullOrWhiteSpace(b) ? b.Trim()
+            : null;
 
     /// <summary>
     /// Home PTP E1: first planned move E1 when motion is on, else live rail pose.

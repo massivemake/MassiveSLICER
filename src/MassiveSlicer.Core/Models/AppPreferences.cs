@@ -600,6 +600,24 @@ public sealed class AppPreferences
     /// save into "&lt;root&gt;/&lt;number&gt; - …/06-Production Documents" automatically.</summary>
     public string UnasProjectsRoot { get; set; } = "/Volumes/MassiveFILES/Projects";
 
+    /// <summary>
+    /// Override cell <c>massiveDriveJobsRoot</c> for this machine (mapped drive letter,
+    /// macOS mount, etc.). Empty = use the cell JSON.
+    /// </summary>
+    public string? MassiveDriveJobsRoot { get; set; }
+
+    /// <summary>
+    /// Local fallback when the Drive jobs share is not writable.
+    /// Empty = <c>%LOCALAPPDATA%\MassiveSlicer\drive-jobs</c>.
+    /// </summary>
+    public string? MassiveDriveJobsStaging { get; set; }
+
+    /// <summary>
+    /// Force the legacy massivedrive.job/v1 JSON POST even for large jobs.
+    /// Curtain-scale prints will be slow — debug / small-job escape hatch only.
+    /// </summary>
+    public bool MassiveDriveForceLegacyJson { get; set; }
+
     // ── UI layout state ───────────────────────────────────────────────────
 
     /// <summary>

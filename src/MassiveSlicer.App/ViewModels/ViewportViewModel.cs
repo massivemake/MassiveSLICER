@@ -767,7 +767,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// <summary>Tooltip for the green Send button.</summary>
     public string SendActionTip =>
         SelectedSendTarget?.Kind == SendTargetKind.MassiveDrive
-            ? "Upload toolpath package to MassiveDRIVE and start path executor (RSI + extruder). No print KRL on the robot."
+            ? "Write a Drive job folder (v2) and POST a pointer, or send small jobs as v1 JSON. Starts the path executor (RSI + extruder). No print KRL on the robot."
             : "Send the KRL program to the selected cell's robot (D drive over SMB) and report it to the ERP";
 
     /// <summary>Rebuild Robot / MassiveDRIVE send destinations from the active cell.</summary>

@@ -26,7 +26,7 @@ public sealed class MassiveDriveClient : IDisposable
         {
             // Motion APIs (axes/bulk) can block up to ~120s; default timeout covers that.
             _http = new HttpClient { Timeout = timeout ?? TimeSpan.FromMinutes(3) };
-            _http.DefaultRequestHeaders.UserAgent.ParseAdd("MassiveSLICER-MassiveDriveClient/0.2");
+            _http.DefaultRequestHeaders.UserAgent.ParseAdd("MassiveSLICER-MassiveDriveClient/0.3");
             _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             _owns = true;
         }
@@ -46,14 +46,24 @@ public sealed class MassiveDriveClient : IDisposable
         Dictionary<string, object?> package,
         CancellationToken ct = default)
     {
-        var json = JsonSerializer.Serialize(package);
-        using var content = new StringContent(json, Encoding.UTF8, "application/json");
-        using var resp = await _http.PostAsync(new Uri(new Uri(BaseUrl), "api/jobs/package"), content, ct);
-        var body = await resp.Content.ReadAsStringAsync(ct);
-        if (!resp.IsSuccessStatusCode)
-            throw new MassiveDriveClientException((int)resp.StatusCode, body);
-        return JsonDocument.Parse(body);
+        return await PostJsonDocumentAsync("api/jobs/package", package, ct);
     }
+
+    /// <summary>
+    /// Register a massivedrive.job/v2 directory already on the Drive jobs share.
+    /// Body is a tiny pointer (job_id, name, relative root, sha256) — not the segment array.
+    /// </summary>
+    public async Task<JsonDocument> UploadPackagePointerAsync(
+        Dictionary<string, object?> pointer,
+        CancellationToken ct = default)
+    {
+        return await PostJsonDocumentAsync(MassiveDriveJobV2.PointerApiPath, pointer, ct);
+    }
+
+    public Task<JsonDocument> UploadPackagePointerAsync(
+        MassiveDrivePointerPayload pointer,
+        CancellationToken ct = default)
+        => UploadPackagePointerAsync(pointer.ToDict(), ct);
 
     public async Task<JsonDocument> StartPackageAsync(
         string packageId,
@@ -317,15 +327,56 @@ public sealed class MassiveDriveClient : IDisposable
         CancellationToken ct = default)
     {
         using var up = await UploadPackageAsync(package, ct);
-        var packageId = up.RootElement.TryGetProperty("package_id", out var pid)
-            ? pid.GetString()
-            : null;
+        var packageId = ReadPackageId(up);
         if (string.IsNullOrEmpty(packageId))
             throw new MassiveDriveClientException(0, "upload did not return package_id: " + up.RootElement.GetRawText());
 
         var name = package.TryGetValue("name", out var n) ? n?.ToString() : packageId;
         using var start = await StartPackageAsync(packageId!, name, dryRun, ct);
         return new MassiveDriveSendResult(packageId!, up.RootElement.GetRawText(), start.RootElement.GetRawText());
+    }
+
+    /// <summary>POST v2 pointer then start the path executor (or dry-run).</summary>
+    public async Task<MassiveDriveSendResult> SendPointerAndStartAsync(
+        MassiveDrivePointerPayload pointer,
+        bool dryRun = false,
+        CancellationToken ct = default)
+    {
+        using var up = await UploadPackagePointerAsync(pointer, ct);
+        var packageId = ReadPackageId(up, pointer.JobId);
+        if (string.IsNullOrEmpty(packageId))
+            throw new MassiveDriveClientException(0, "pointer upload did not return package_id: " + up.RootElement.GetRawText());
+
+        using var start = await StartPackageAsync(packageId, pointer.Name, dryRun, ct);
+        return new MassiveDriveSendResult(packageId, up.RootElement.GetRawText(), start.RootElement.GetRawText());
+    }
+
+    public static string? ReadPackageId(JsonDocument doc, string? fallback = null)
+    {
+        var root = doc.RootElement;
+        if (root.TryGetProperty("package_id", out var pid))
+        {
+            var s = pid.GetString();
+            if (!string.IsNullOrEmpty(s)) return s;
+        }
+        if (root.TryGetProperty("job_id", out var jid))
+        {
+            var s = jid.GetString();
+            if (!string.IsNullOrEmpty(s)) return s;
+        }
+        return fallback;
+    }
+
+    async Task<JsonDocument> PostJsonDocumentAsync(
+        string path, Dictionary<string, object?> payload, CancellationToken ct)
+    {
+        var json = JsonSerializer.Serialize(payload);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        using var resp = await _http.PostAsync(new Uri(new Uri(BaseUrl), path), content, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        if (!resp.IsSuccessStatusCode)
+            throw new MassiveDriveClientException((int)resp.StatusCode, body);
+        return JsonDocument.Parse(body);
     }
 
     public void Dispose()

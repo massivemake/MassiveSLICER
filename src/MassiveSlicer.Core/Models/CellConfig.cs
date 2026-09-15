@@ -104,6 +104,19 @@ public sealed record CellConfig
     /// <summary>Cell id for MassiveDRIVE configs (<c>lfam3</c>, <c>lfam2</c>, …).</summary>
     public string? MassiveDriveCellId { get; init; }
 
+    /// <summary>
+    /// Shared-disk jobs root the Drive host can see (massivedrive.job/v2).
+    /// LFAM 3 shop: <c>\\192.168.0.201\MassiveDRIVE\var\jobs</c> (UNC) or a mapped/local path.
+    /// Large Send writes the job folder here and POSTs only a pointer.
+    /// </summary>
+    public string? MassiveDriveJobsRoot { get; init; }
+
+    /// <summary>
+    /// Local fallback when the UNC/share write fails. Drive cannot see this unless
+    /// it is the same machine. Empty = <c>%LOCALAPPDATA%\MassiveSlicer\drive-jobs</c>.
+    /// </summary>
+    public string? MassiveDriveJobsStaging { get; init; }
+
     /// <summary>Extruder RevPi lfam-monitor bridge host (LFAM 3: 192.168.0.196).</summary>
     public string? ExtIp { get; init; }
 
