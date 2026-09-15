@@ -1,5 +1,8 @@
+using MassiveSlicer.App;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.ViewModels;
+using MassiveSlicer.Viewport.Scene;
 
 namespace MassiveSlicer.Tests;
 
@@ -169,16 +172,114 @@ public class BedBoundaryOverlayTest
         Assert.True(cell.Bed.Diameter is > 0f);
 
         var heated = BedBoundaryOverlay.Resolve(
-            cell.Bed, cell.Robot.WorldPosition, 6, cell.KrlBases);
+            cell.Bed, cell.Robot.WorldPosition, 6, cell.KrlBases, heatedBed: cell.HeatedBed);
         Assert.True(heated.IsRectangular);
         Assert.Equal(0f, heated.Diameter);
-        Assert.Equal(1800f, heated.Width, 1);
-        Assert.Equal(1800f, heated.Depth, 1);
+        Assert.NotNull(cell.HeatedBed);
+        var pose = cell.HeatedBed!.WorldOrigin(cell.Robot.WorldPosition);
+        Assert.Equal(pose.X, heated.Datum.X, 2);
+        Assert.Equal(pose.Y, heated.Datum.Y, 2);
+        Assert.Equal(pose.Z, heated.Datum.Z, 2);
+        Assert.NotEqual(cell.Bed.VisualGridCorner(cell.Robot.WorldPosition).X, heated.GridCorner.X, 0);
+        Assert.NotEqual(cell.Bed.Origin.X, heated.Datum.X, 0);
 
         var rotary = BedBoundaryOverlay.Resolve(
-            cell.Bed, cell.Robot.WorldPosition, 2, cell.KrlBases);
+            cell.Bed, cell.Robot.WorldPosition, 2, cell.KrlBases, heatedBed: cell.HeatedBed);
         Assert.False(rotary.IsRectangular);
         Assert.Equal(cell.Bed.Diameter!.Value, rotary.Diameter, 2);
+        Assert.Equal(cell.Bed.VisualGridCorner(cell.Robot.WorldPosition).X, rotary.GridCorner.X, 2);
+    }
+
+    [Fact]
+    public void HeatedBed_pose_does_not_use_rotary_visual_grid()
+    {
+        var heatedBed = new HeatedBedCellConfig
+        {
+            ModelPath = "assets/cells/LFAM3/lfam3_HeatedBed.glb",
+            KrlBaseIndex = 6,
+            BasePos = [1065.37f, 1515.7982f, -873.757f],
+            BaseAbc = [-0.087f, 0.11306581f, 0.093820065f],
+        };
+        var spec = BedBoundaryOverlay.Resolve(
+            Lfam3Bed(), Robroot, 6, Lfam3Bases(),
+            liveWidth: 1800f, liveDepth: 1800f,
+            heatedBed: heatedBed);
+
+        Assert.True(spec.IsRectangular);
+        Assert.Equal(1065.37f, spec.Datum.X, 2);
+        Assert.Equal(1515.7982f, spec.Datum.Y, 2);
+        Assert.Equal(126.243f, spec.Datum.Z, 2);
+        Assert.Equal(1065.37f - 900f, spec.GridCorner.X, 1);
+        Assert.Equal(1515.7982f - 900f, spec.GridCorner.Y, 1);
+        Assert.NotEqual(Lfam3Bed().GridOrigin!.Value.X, spec.GridCorner.X, 0);
+    }
+
+    [Fact]
+    public void Heated_mesh_aabb_places_rectangle_on_the_plate()
+    {
+        var heatedBed = new HeatedBedCellConfig
+        {
+            ModelPath = "assets/cells/LFAM3/lfam3_HeatedBed.glb",
+            BasePos = [1065.37f, 1515.7982f, -873.757f],
+            BaseAbc = [-0.087f, 0.11306581f, 0.093820065f],
+        };
+        var min = new Float3(655f, 1134f, 20f);
+        var max = new Float3(2486f, 2363f, 126f);
+        var spec = BedBoundaryOverlay.Resolve(
+            Lfam3Bed(), Robroot, 6, Lfam3Bases(),
+            liveWidth: 1800f, liveDepth: 1800f,
+            heatedBed: heatedBed,
+            heatedMeshAabb: (min, max));
+
+        Assert.True(spec.IsRectangular);
+        Assert.Equal(max.X - min.X, spec.Width, 1);
+        Assert.Equal(max.Y - min.Y, spec.Depth, 1);
+        Assert.Equal(min.X, spec.GridCorner.X, 1);
+        Assert.Equal(min.Y, spec.GridCorner.Y, 1);
+        Assert.Equal(max.Z, spec.GridCorner.Z, 1);
+        Assert.Equal((min.X + max.X) * 0.5f, spec.Datum.X, 1);
+        Assert.Equal((min.Y + max.Y) * 0.5f, spec.Datum.Y, 1);
+        Assert.Equal(max.Z, spec.Datum.Z, 1);
+    }
+
+    [Fact]
+    public void Lfam3_loaded_heated_mesh_overlay_matches_plate_aabb_not_rotary()
+    {
+        var path = Path.Combine("assets", "cells", "LFAM3", "lfam3.json");
+        if (!File.Exists(path))
+        {
+            var root = FindRepoRoot();
+            if (root is not null)
+                path = Path.Combine(root, "assets", "cells", "LFAM3", "lfam3.json");
+        }
+        Assert.True(File.Exists(path), $"Missing {path}");
+
+        var cell = CellLoader.Load(path);
+        Assert.NotNull(cell.HeatedBed);
+        Assert.True(
+            AssetPaths.Exists(cell.HeatedBed!.ModelPath)
+            || File.Exists(Path.Combine(FindRepoRoot() ?? "", "assets", "cells", "LFAM3", "lfam3_HeatedBed.glb")),
+            "shop lfam3_HeatedBed.glb must be present for this test");
+
+        var payload = CellSceneLoader.Load(path, RightPanelTab.Additive, default);
+        var heated = Assert.Single(payload.EnvironmentNodes, n => n.Name == "HeatedBed");
+        Assert.True(SceneBounds.TryComputeSubtreeWorldAabb(heated, out var min, out var max));
+
+        var aabb = (new Float3(min.X, min.Y, min.Z), new Float3(max.X, max.Y, max.Z));
+        var spec = BedBoundaryOverlay.Resolve(
+            cell.Bed, cell.Robot.WorldPosition, 6, cell.KrlBases,
+            liveWidth: cell.Bed.Width, liveDepth: cell.Bed.Depth,
+            heatedBed: cell.HeatedBed,
+            heatedMeshAabb: aabb);
+
+        Assert.True(spec.IsRectangular);
+        Assert.Equal(min.X, spec.GridCorner.X, 1);
+        Assert.Equal(min.Y, spec.GridCorner.Y, 1);
+        Assert.Equal(max.Z, spec.GridCorner.Z, 1);
+        var rotaryCorner = cell.Bed.VisualGridCorner(cell.Robot.WorldPosition);
+        Assert.True(MathF.Abs(spec.GridCorner.X - rotaryCorner.X) > 200f);
+        Assert.True(MathF.Abs(spec.GridCorner.Y - rotaryCorner.Y) > 200f);
+        Assert.True(MathF.Abs(spec.GridCorner.Z - rotaryCorner.Z) > 200f);
     }
 
     static string? FindRepoRoot()

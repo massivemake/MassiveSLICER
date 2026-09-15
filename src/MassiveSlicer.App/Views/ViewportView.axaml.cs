@@ -2623,7 +2623,9 @@ public partial class ViewportView : UserControl
             liveWidth: _bedWidth,
             liveDepth: _bedDepth,
             liveDiameter: _bedDiameter,
-            heatedMeshSize: TryHeatedBedMeshSize());
+            heatedMeshSize: TryHeatedBedMeshSize(),
+            heatedBed: cell.HeatedBed,
+            heatedMeshAabb: TryHeatedBedMeshAabb());
 
         var corner = new Vector3(spec.GridCorner.X, spec.GridCorner.Y, spec.GridCorner.Z);
         var datum  = new Vector3(spec.Datum.X, spec.Datum.Y, spec.Datum.Z);
@@ -2657,14 +2659,26 @@ public partial class ViewportView : UserControl
                cell.KrlBases,
                cell.Bed);
 
-    /// <summary>XY AABB of the loaded flat/heated bed mesh, when the cell actually spawned one.</summary>
+    /// <summary>XY AABB of the loaded heated plate, when the cell actually spawned one.</summary>
     private (float Width, float Depth)? TryHeatedBedMeshSize()
     {
+        if (TryHeatedBedMeshAabb() is not { } aabb) return null;
+        return (aabb.Max.X - aabb.Min.X, aabb.Max.Y - aabb.Min.Y);
+    }
+
+    /// <summary>World AABB of <see cref="_heatedBedRoot"/> (pending CPU mesh or uploaded picking data).</summary>
+    private (Float3 Min, Float3 Max)? TryHeatedBedMeshAabb()
+    {
         if (_heatedBedRoot is null) return null;
-        var (min, max) = ImportHelper.ComputeSubtreeAabb(_heatedBedRoot);
-        float w = max.X - min.X;
-        float d = max.Y - min.Y;
-        return w > 1f && d > 1f ? (w, d) : null;
+        if (!SceneBounds.TryComputeSubtreeWorldAabb(_heatedBedRoot, out var min, out var max))
+        {
+            var cpu = ImportHelper.ComputeSubtreeAabb(_heatedBedRoot);
+            if (cpu.Min.X > cpu.Max.X) return null;
+            min = cpu.Min;
+            max = cpu.Max;
+        }
+        if (max.X - min.X <= 1f || max.Y - min.Y <= 1f) return null;
+        return (new Float3(min.X, min.Y, min.Z), new Float3(max.X, max.Y, max.Z));
     }
 
     private void RebuildFrameMatrices()
@@ -3245,7 +3259,8 @@ public partial class ViewportView : UserControl
         }
 
         RegisterLfamInfrastructure(rotaryPivot, _rotaryBedRoot);
-        ApplyBaseBedGhosting();
+        // Overlay first runs before env attach; rebuild now so BASE #6 can use the heated AABB.
+        ApplyActiveBedBoundary();
 
         Dispatcher.UIThread.Post(() =>
         {

@@ -494,6 +494,12 @@ public sealed record HeatedBedCellConfig
     public int KrlBaseIndex { get; init; } = 6;
     public float[] BasePos { get; init; } = [0f, 0f, 0f];
     public float[] BaseAbc { get; init; } = [0f, 0f, 0f];
+
+    /// <summary>World-space wrapper origin: ROBROOT + <see cref="BasePos"/> (mm). Overlay/mesh pose — not <see cref="BedCellConfig.Origin"/>.</summary>
+    public Float3 WorldOrigin(Float3 robrootWorld) => new(
+        robrootWorld.X + (BasePos.Length > 0 ? BasePos[0] : 0f),
+        robrootWorld.Y + (BasePos.Length > 1 ? BasePos[1] : 0f),
+        robrootWorld.Z + (BasePos.Length > 2 ? BasePos[2] : 0f));
 }
 
 /// <summary>A named KUKA BASE_DATA entry exposed for dropdowns and KRL export.</summary>

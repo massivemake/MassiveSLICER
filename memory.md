@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-15** (shop lfam3_HeatedBed.glb committed)
+Last updated: **2026-09-15** (BASE #6 grid on heated plate, not rotary)
 
 ---
 
@@ -516,6 +516,13 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-15 — BASE #6 cyan grid was still on the rotary
+
+- Symptom: SB101 PR #7, BASE #6 Preview, square cyan overlay sat on the rotary platter, not on the heated rectangle.
+- Cause: `BedBoundaryOverlay.HeatedGridCorner` used `bed.VisualGridCorner` / `bed.Origin` whenever size matched live 1800×1800 (rotary print-area). `cell.heatedBed` pose was ignored for the overlay.
+- Fix: heated resolve places the rectangle on the heated mesh world AABB, or ROBROOT+`basePos` if the mesh is not loaded yet. Rotary bases still use polar on `bed` visual grid. Shop `basePos`/`baseAbc` unchanged.
+- Key files: `BedBoundaryOverlay.cs`, `ViewportView.axaml.cs`.
 
 ### 2026-09-15 — Commit shop `lfam3_HeatedBed.glb`
 

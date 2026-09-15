@@ -57,9 +57,11 @@ public static class BedBoundaryOverlay
     /// <summary>
     /// Resolves overlay geometry for the active base.
     /// Heated size fallback (first match wins):
-    /// <c>bed.heatedWidth/heatedDepth</c> → live width/depth → heated-mesh AABB →
+    /// <c>bed.heatedWidth/heatedDepth</c> → heated-mesh AABB →
     /// <c>bed.width/depth</c> → square of <c>bed.diameter</c>.
-    /// LFAM 3 ships 1800×1800 in <c>bed.width/depth</c> and no dedicated heated size fields.
+    /// When <paramref name="heatedBed"/> is set, the rectangle is placed on that
+    /// plate (mesh AABB if given, otherwise ROBROOT + basePos) — never on
+    /// <see cref="BedCellConfig.Origin"/> / <see cref="BedCellConfig.VisualGridCorner"/>.
     /// </summary>
     public static BedBoundaryOverlaySpec Resolve(
         BedCellConfig bed,
@@ -69,7 +71,9 @@ public static class BedBoundaryOverlay
         float? liveWidth = null,
         float? liveDepth = null,
         float? liveDiameter = null,
-        (float Width, float Depth)? heatedMeshSize = null)
+        (float Width, float Depth)? heatedMeshSize = null,
+        HeatedBedCellConfig? heatedBed = null,
+        (Float3 Min, Float3 Max)? heatedMeshAabb = null)
     {
         var gridCorner = bed.VisualGridCorner(robrootWorld);
         var gridDatum = bed.HasVisualShift && bed.GridOrigin is null
@@ -77,17 +81,65 @@ public static class BedBoundaryOverlay
             : new Float3(bed.Origin.X, bed.Origin.Y, gridCorner.Z);
 
         if (IsHeatedPrintBase(krlBaseIndex, bases, bed))
-        {
-            var (width, depth, _) = ResolveHeatedSize(bed, liveWidth, liveDepth, heatedMeshSize);
-            var corner = HeatedGridCorner(bed, robrootWorld, width, depth);
-            var datum = new Float3(bed.Origin.X, bed.Origin.Y, corner.Z);
-            return new BedBoundaryOverlaySpec(width, depth, Diameter: 0f, corner, datum);
-        }
+            return ResolveHeatedOverlay(
+                bed, robrootWorld, liveWidth, liveDepth, heatedMeshSize, heatedBed, heatedMeshAabb);
 
         float widthR = liveWidth ?? bed.Width;
         float depthR = liveDepth ?? bed.Depth;
         float diameter = liveDiameter ?? bed.Diameter ?? 0f;
         return new BedBoundaryOverlaySpec(widthR, depthR, diameter, gridCorner, gridDatum);
+    }
+
+    static BedBoundaryOverlaySpec ResolveHeatedOverlay(
+        BedCellConfig bed,
+        Float3 robrootWorld,
+        float? liveWidth,
+        float? liveDepth,
+        (float Width, float Depth)? heatedMeshSize,
+        HeatedBedCellConfig? heatedBed,
+        (Float3 Min, Float3 Max)? heatedMeshAabb)
+    {
+        if (TryAabb(heatedMeshAabb, out var aabbMin, out var aabbMax))
+            return FromWorldAabb(aabbMin, aabbMax);
+
+        // Live width/depth is the rotary print-area (1800×1800). Using it as the
+        // heated size then calling HeatedGridCorner would snap back to VisualGridCorner.
+        var (width, depth, _) = ResolveHeatedSize(
+            bed,
+            liveWidth: heatedBed is null ? liveWidth : null,
+            liveDepth: heatedBed is null ? liveDepth : null,
+            heatedMeshSize);
+
+        if (heatedBed is not null)
+        {
+            var origin = heatedBed.WorldOrigin(robrootWorld);
+            var corner = new Float3(origin.X - width * 0.5f, origin.Y - depth * 0.5f, origin.Z);
+            return new BedBoundaryOverlaySpec(width, depth, Diameter: 0f, corner, origin);
+        }
+
+        var fallbackCorner = HeatedGridCorner(bed, robrootWorld, width, depth);
+        var fallbackDatum = new Float3(bed.Origin.X, bed.Origin.Y, fallbackCorner.Z);
+        return new BedBoundaryOverlaySpec(width, depth, Diameter: 0f, fallbackCorner, fallbackDatum);
+    }
+
+    static BedBoundaryOverlaySpec FromWorldAabb(Float3 min, Float3 max)
+    {
+        float width = max.X - min.X;
+        float depth = max.Y - min.Y;
+        var corner = new Float3(min.X, min.Y, max.Z);
+        var datum = new Float3((min.X + max.X) * 0.5f, (min.Y + max.Y) * 0.5f, max.Z);
+        return new BedBoundaryOverlaySpec(width, depth, Diameter: 0f, corner, datum);
+    }
+
+    static bool TryAabb((Float3 Min, Float3 Max)? aabb, out Float3 min, out Float3 max)
+    {
+        min = default;
+        max = default;
+        if (aabb is not { } box) return false;
+        if (box.Max.X - box.Min.X <= 1f || box.Max.Y - box.Min.Y <= 1f) return false;
+        min = box.Min;
+        max = box.Max;
+        return true;
     }
 
     /// <summary>Returns the heated print rectangle and a short label of which source supplied it.</summary>
