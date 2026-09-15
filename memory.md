@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-15** (BASE #6 overlay: WorldOrigin only, no AABB XY)
+Last updated: **2026-09-15** (LFAM 3 BASE #6 must stay in published cell JSON)
 
 ---
 
@@ -516,6 +516,13 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-15 — Apps install dropped BASE #6 from the dropdown
+
+- Symptom: live Apps exe BASE # listed only Rotary 1 and 2. Install `lfam3.json` had two `krlBases` and no `heatedBed` (Improved-Cell / stale copy). Shop Release JSON has `heatedBed` + HEATED-BED index 6.
+- Cause: publish copies `assets/cells/**`, but a CWD walk could load a different checkout's rotary-only JSON; Improved-Cell still has only two bases. No build check required HEATED-BED.
+- Fix: keep shop `heatedBed` + krlBases 1/2/6 in every checked-in `lfam3.json`. Commit `lfam3_HeatedBed.glb` under App Assets too. `CellLoader` injects HEATED-BED index 6 when missing. `FindCellsDirectory` prefers exe-adjacent `assets/cells`. MSBuild fails the build if repo JSON lacks `heatedBed` / HEATED-BED or the GLB is missing. Shop `basePos`/`baseAbc` unchanged.
+- Key files: `assets/cells/LFAM3/lfam3.json` (+ mirrors), `lfam3_HeatedBed.glb`, `CellLoader.cs`, `AssetPaths.cs`, `CellConfig.cs`, `MassiveSlicer.App.csproj`.
 
 ### 2026-09-15 — 5dc4cad live fail: AABB gate still accepted plate box
 

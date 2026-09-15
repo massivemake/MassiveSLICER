@@ -48,6 +48,35 @@ public sealed record CellConfig
     public IReadOnlyList<KrlBaseEntry> KrlBases { get; init; } = [];
 
     /// <summary>
+    /// LFAM 3 BASE #6 must appear in the ROBOT CELL dropdown even when a stale
+    /// publish copy only lists rotary 1/2. Does not invent WORLD/Calibration
+    /// entries or change shop <c>basePos</c>/<c>baseAbc</c>.
+    /// </summary>
+    public static IReadOnlyList<KrlBaseEntry> EnsureHeatedKrlBase(
+        IReadOnlyList<KrlBaseEntry>? bases,
+        HeatedBedCellConfig? heatedBed,
+        BedCellConfig? bed = null)
+    {
+        var list = bases is { Count: > 0 } ? bases : [];
+        int want = heatedBed is { KrlBaseIndex: > 0 } hb
+            ? hb.KrlBaseIndex
+            : BedBoundaryOverlay.Lfam3HeatedBaseIndex;
+        foreach (var b in list)
+            if (b.Index == want) return list;
+
+        bool infer = heatedBed is not null
+                     || (bed?.Diameter is > 0f && list.Count > 0);
+        if (!infer) return list;
+
+        return [..list, new KrlBaseEntry
+        {
+            Name = heatedBed?.Name is { Length: > 0 } n ? n : "HEATED-BED",
+            Index = want,
+            Overlay = BedBoundaryOverlay.RectangularOverlay,
+        }];
+    }
+
+    /// <summary>
     /// Returns <see cref="Tools"/> when non-empty, otherwise falls back to the legacy
     /// single <see cref="Tool"/> entry, so old cell files work without changes.
     /// </summary>

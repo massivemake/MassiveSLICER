@@ -47,11 +47,79 @@ public class HeatedBedConfigTest
     }
 
     [Fact]
+    public void Every_checked_in_lfam3_json_has_heatedBed_and_base_6()
+    {
+        var files = EnumerateLfam3JsonCopies().ToList();
+        Assert.True(files.Count >= 3, "expected repo + App Assets + tests copies");
+        foreach (var path in files)
+        {
+            var cell = CellLoader.Load(path);
+            Assert.True(cell.HeatedBed is not null, $"{path} missing heatedBed");
+            Assert.Contains(cell.KrlBases, b => b.Index == 6 && b.Name == "HEATED-BED");
+            Assert.Contains(cell.KrlBases, b => b.Index == 1);
+            Assert.Contains(cell.KrlBases, b => b.Index == 2);
+            Assert.Equal(1065.37f, cell.HeatedBed!.BasePos[0], 3);
+            Assert.Equal(1515.7982f, cell.HeatedBed.BasePos[1], 3);
+            Assert.Equal(-873.757f, cell.HeatedBed.BasePos[2], 3);
+        }
+    }
+
+    [Fact]
+    public void Stripped_two_base_json_still_exposes_heated_base_6()
+    {
+        var rotaryOnly = new[]
+        {
+            new KrlBaseEntry { Name = "Rotary Table (Wood)", Index = 1 },
+            new KrlBaseEntry { Name = "Rotary Table", Index = 2 },
+        };
+        var heated = new HeatedBedCellConfig
+        {
+            ModelPath = "assets/cells/LFAM3/lfam3_HeatedBed.glb",
+            KrlBaseIndex = 6,
+            BasePos = [1065.37f, 1515.7982f, -873.757f],
+            BaseAbc = [-0.087f, 0.11306581f, 0.093820065f],
+        };
+        var bed = new BedCellConfig { Origin = Float3.Zero, Width = 1800, Depth = 1800, Diameter = 1828.8f };
+        var bases = CellConfig.EnsureHeatedKrlBase(rotaryOnly, heated, bed);
+        Assert.Equal(3, bases.Count);
+        Assert.Contains(bases, b => b.Index == 6 && b.Name == "HEATED-BED" && b.Overlay == "rectangular");
+        Assert.Equal("Rotary Table (Wood)", bases[0].Name);
+        Assert.Equal("Rotary Table", bases[1].Name);
+    }
+
+    [Fact]
     public void Asset_list_includes_heated_glb_not_as_bed_modelPath()
     {
         var cell = CellLoader.Load(ResolveLfam3());
         var paths = CellAssetPaths.AllModelPaths(cell).ToList();
         Assert.Contains(paths, p => p.Contains("lfam3_HeatedBed.glb", StringComparison.OrdinalIgnoreCase));
+    }
+
+    static IEnumerable<string> EnumerateLfam3JsonCopies()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var root in new[]
+                 {
+                     Directory.GetCurrentDirectory(),
+                     AppContext.BaseDirectory,
+                 })
+        {
+            var dir = root;
+            for (int i = 0; i < 8 && !string.IsNullOrEmpty(dir); i++)
+            {
+                string[] rels =
+                [
+                    Path.Combine(dir, "assets", "cells", "LFAM3", "lfam3.json"),
+                    Path.Combine(dir, "src", "assets", "cells", "LFAM3", "lfam3.json"),
+                    Path.Combine(dir, "src", "MassiveSlicer.App", "Assets", "cells", "LFAM3", "lfam3.json"),
+                    Path.Combine(dir, "src", "MassiveSlicer.Tests", "assets", "cells", "LFAM3", "lfam3.json"),
+                ];
+                foreach (var p in rels)
+                    if (File.Exists(p) && seen.Add(Path.GetFullPath(p)))
+                        yield return Path.GetFullPath(p);
+                dir = Directory.GetParent(dir)?.FullName ?? "";
+            }
+        }
     }
 
     private static string ResolveLfam3()

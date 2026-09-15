@@ -74,6 +74,7 @@ public class CellSceneLoadTest(ITestOutputHelper output)
         Assert.True(cell.Bed.Hidden);
         Assert.Null(payload.BedNode);
         Assert.NotNull(cell.HeatedBed);
+        Assert.Contains(cell.KrlBases, b => b.Index == 6 && b.Name == "HEATED-BED");
         Assert.Equal(6, cell.HeatedBed!.KrlBaseIndex);
         Assert.Equal("assets/cells/LFAM3/lfam3_HeatedBed.glb", cell.HeatedBed.ModelPath);
         Assert.Equal(1065.37f, cell.HeatedBed.BasePos[0], 2);
