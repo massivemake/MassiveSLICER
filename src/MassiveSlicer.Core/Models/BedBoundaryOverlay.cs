@@ -102,7 +102,7 @@ public static class BedBoundaryOverlay
         if (bed.Width > 0f && bed.Depth > 0f)
             return (bed.Width, bed.Depth, "bed.width/depth");
 
-        if (bed.Diameter is > 0f d)
+        if (bed.Diameter is float d && d > 0f)
             return (d, d, "bed.diameter square fallback");
 
         return (1800f, 1800f, "default 1800 mm square");
