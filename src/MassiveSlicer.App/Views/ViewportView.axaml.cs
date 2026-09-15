@@ -2623,9 +2623,7 @@ public partial class ViewportView : UserControl
             liveWidth: _bedWidth,
             liveDepth: _bedDepth,
             liveDiameter: _bedDiameter,
-            heatedMeshSize: TryHeatedBedMeshSize(),
             heatedBed: cell.HeatedBed,
-            heatedMeshAabb: TryHeatedBedMeshAabb(),
             liveHeatedOrigin: TryLiveHeatedOrigin());
 
         var corner = new Vector3(spec.GridCorner.X, spec.GridCorner.Y, spec.GridCorner.Z);
@@ -2661,28 +2659,6 @@ public partial class ViewportView : UserControl
                _vm.Robot is { KrlBaseIndex: > 0 } r ? r.KrlBaseIndex : 0,
                cell.KrlBases,
                cell.Bed);
-
-    /// <summary>XY AABB of the loaded heated plate, when the cell actually spawned one.</summary>
-    private (float Width, float Depth)? TryHeatedBedMeshSize()
-    {
-        if (TryHeatedBedMeshAabb() is not { } aabb) return null;
-        return (aabb.Max.X - aabb.Min.X, aabb.Max.Y - aabb.Min.Y);
-    }
-
-    /// <summary>World AABB of <see cref="_heatedBedRoot"/> (pending CPU mesh or uploaded picking data).</summary>
-    private (Float3 Min, Float3 Max)? TryHeatedBedMeshAabb()
-    {
-        if (_heatedBedRoot is null) return null;
-        if (!SceneBounds.TryComputeSubtreeWorldAabb(_heatedBedRoot, out var min, out var max))
-        {
-            var cpu = ImportHelper.ComputeSubtreeAabb(_heatedBedRoot);
-            if (cpu.Min.X > cpu.Max.X) return null;
-            min = cpu.Min;
-            max = cpu.Max;
-        }
-        if (max.X - min.X <= 1f || max.Y - min.Y <= 1f) return null;
-        return (new Float3(min.X, min.Y, min.Z), new Float3(max.X, max.Y, max.Z));
-    }
 
     /// <summary>HeatedBed wrapper translation. Null when the node is missing or still identity.</summary>
     private Float3? TryLiveHeatedOrigin()

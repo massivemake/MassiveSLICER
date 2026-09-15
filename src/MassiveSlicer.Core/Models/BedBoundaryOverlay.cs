@@ -57,13 +57,13 @@ public static class BedBoundaryOverlay
 
     /// <summary>
     /// Resolves overlay geometry for the active base.
-    /// Heated size fallback (first match wins):
-    /// <c>bed.heatedWidth/heatedDepth</c> → heated-mesh AABB →
-    /// <c>bed.width/depth</c> → square of <c>bed.diameter</c>.
-    /// When <paramref name="heatedBed"/> is set, the rectangle is placed on that
-    /// plate (mesh AABB only if it sits on the pose; otherwise ROBROOT + basePos)
-    /// — never on <see cref="BedCellConfig.Origin"/> /
-    /// <see cref="BedCellConfig.VisualGridCorner"/> while a heated pose exists.
+    /// Heated size: <c>bed.heatedWidth/heatedDepth</c> → <c>bed.width/depth</c> →
+    /// diameter square. Mesh AABB is never used for XY/Z — SB101 <c>5dc4cad</c>
+    /// showed a 1913×1377 box centred 556 mm off the shop pose, still inside a
+    /// proximity gate, with the cyan square on the rotary.
+    /// When <paramref name="heatedBed"/> is set, the rectangle is centred on
+    /// ROBROOT + <c>basePos</c> — never on <see cref="BedCellConfig.Origin"/> /
+    /// <see cref="BedCellConfig.VisualGridCorner"/>.
     /// </summary>
     public static BedBoundaryOverlaySpec Resolve(
         BedCellConfig bed,
@@ -84,9 +84,12 @@ public static class BedBoundaryOverlay
             : new Float3(bed.Origin.X, bed.Origin.Y, gridCorner.Z);
 
         if (IsHeatedPrintBase(krlBaseIndex, bases, bed))
+        {
+            _ = heatedMeshAabb; // ignored — AABB must not set XY/Z (SB101 5dc4cad)
             return ResolveHeatedOverlay(
                 bed, robrootWorld, liveWidth, liveDepth, heatedMeshSize,
-                heatedBed, heatedMeshAabb, liveHeatedOrigin);
+                heatedBed, liveHeatedOrigin);
+        }
 
         float widthR = liveWidth ?? bed.Width;
         float depthR = liveDepth ?? bed.Depth;
@@ -101,25 +104,18 @@ public static class BedBoundaryOverlay
         float? liveDepth,
         (float Width, float Depth)? heatedMeshSize,
         HeatedBedCellConfig? heatedBed,
-        (Float3 Min, Float3 Max)? heatedMeshAabb,
         Float3? liveHeatedOrigin)
     {
-        // JSON pose first: a live node Row3 can still be identity before world
-        // matrices land. liveHeatedOrigin is only the no-JSON fallback.
+        // JSON pose first. liveHeatedOrigin is only the no-JSON fallback.
+        // AABB is not consulted for placement — the shop plate's mesh box is
+        // offset ~500 mm from the wrapper origin and is not the print datum.
         var pose = heatedBed?.WorldOrigin(robrootWorld) ?? liveHeatedOrigin;
-
-        // AABB-first (fefe94e) placed the square on the rotary when the box was
-        // local-only or the print-area mesh. Accept AABB only when it sits on
-        // the heated pose — otherwise it must not override WorldOrigin.
-        if (TryAabb(heatedMeshAabb, out var aabbMin, out var aabbMax)
-            && AabbBelongsToHeatedPose(aabbMin, aabbMax, pose, bed))
-            return FromWorldAabb(aabbMin, aabbMax, "aabb");
 
         var (width, depth, _) = ResolveHeatedSize(
             bed,
             liveWidth: pose is null ? liveWidth : null,
             liveDepth: pose is null ? liveDepth : null,
-            heatedMeshSize);
+            heatedMeshSize: pose is null ? heatedMeshSize : null);
 
         if (pose is { } origin)
         {
@@ -132,46 +128,6 @@ public static class BedBoundaryOverlay
         var fallbackDatum = new Float3(bed.Origin.X, bed.Origin.Y, fallbackCorner.Z);
         return new BedBoundaryOverlaySpec(
             width, depth, Diameter: 0f, fallbackCorner, fallbackDatum, "fallback");
-    }
-
-    static BedBoundaryOverlaySpec FromWorldAabb(Float3 min, Float3 max, string source)
-    {
-        float width = max.X - min.X;
-        float depth = max.Y - min.Y;
-        var corner = new Float3(min.X, min.Y, max.Z);
-        var datum = new Float3((min.X + max.X) * 0.5f, (min.Y + max.Y) * 0.5f, max.Z);
-        return new BedBoundaryOverlaySpec(width, depth, Diameter: 0f, corner, datum, source);
-    }
-
-    /// <summary>
-    /// True when the AABB centre sits on the heated pose, not the rotary print-area.
-    /// </summary>
-    internal static bool AabbBelongsToHeatedPose(
-        Float3 min, Float3 max, Float3? heatedPose, BedCellConfig bed)
-    {
-        var center = new Float3((min.X + max.X) * 0.5f, (min.Y + max.Y) * 0.5f, (min.Z + max.Z) * 0.5f);
-        if (heatedPose is { } pose)
-            return DistXy(center, pose) <= 1200f && MathF.Abs(center.Z - pose.Z) <= 400f;
-
-        // No pose to check against — refuse an AABB that is clearly the rotary rectangle.
-        return DistXy(center, bed.Origin) > 800f && MathF.Abs(center.Z - bed.Origin.Z) > 200f;
-    }
-
-    static float DistXy(Float3 a, Float3 b)
-    {
-        float dx = a.X - b.X, dy = a.Y - b.Y;
-        return MathF.Sqrt(dx * dx + dy * dy);
-    }
-
-    static bool TryAabb((Float3 Min, Float3 Max)? aabb, out Float3 min, out Float3 max)
-    {
-        min = default;
-        max = default;
-        if (aabb is not { } box) return false;
-        if (box.Max.X - box.Min.X <= 1f || box.Max.Y - box.Min.Y <= 1f) return false;
-        min = box.Min;
-        max = box.Max;
-        return true;
     }
 
     /// <summary>Returns the heated print rectangle and a short label of which source supplied it.</summary>

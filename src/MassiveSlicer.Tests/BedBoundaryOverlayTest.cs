@@ -287,7 +287,7 @@ public class BedBoundaryOverlayTest
     }
 
     [Fact]
-    public void Heated_mesh_aabb_places_rectangle_on_the_plate()
+    public void Sb101_live_aabb_does_not_move_datum_off_world_origin()
     {
         var heatedBed = new HeatedBedCellConfig
         {
@@ -295,28 +295,33 @@ public class BedBoundaryOverlayTest
             BasePos = [1065.37f, 1515.7982f, -873.757f],
             BaseAbc = [-0.087f, 0.11306581f, 0.093820065f],
         };
-        var min = new Float3(655f, 1134f, 20f);
-        var max = new Float3(2486f, 2363f, 126f);
+        // Live 5dc4cad console: source=aabb corner=(614.8, 1058.9, 128.6)
+        // datum=(1571.0, 1747.6, 128.6) size=1913x1377 — 556 mm off shop pose.
+        var min = new Float3(614.8f, 1058.9f, 20f);
+        var max = new Float3(614.8f + 1913f, 1058.9f + 1377f, 128.6f);
         var spec = BedBoundaryOverlay.Resolve(
             Lfam3Bed(), Robroot, 6, Lfam3Bases(),
             liveWidth: 1800f, liveDepth: 1800f,
             heatedBed: heatedBed,
-            heatedMeshAabb: (min, max));
+            heatedMeshAabb: (min, max),
+            heatedMeshSize: (1913f, 1377f));
 
         Assert.True(spec.IsRectangular);
-        Assert.Equal(max.X - min.X, spec.Width, 1);
-        Assert.Equal(max.Y - min.Y, spec.Depth, 1);
-        Assert.Equal(min.X, spec.GridCorner.X, 1);
-        Assert.Equal(min.Y, spec.GridCorner.Y, 1);
-        Assert.Equal(max.Z, spec.GridCorner.Z, 1);
-        Assert.Equal((min.X + max.X) * 0.5f, spec.Datum.X, 1);
-        Assert.Equal((min.Y + max.Y) * 0.5f, spec.Datum.Y, 1);
-        Assert.Equal(max.Z, spec.Datum.Z, 1);
-        Assert.Equal("aabb", spec.Source);
+        Assert.Equal("heatedBed.WorldOrigin", spec.Source);
+        Assert.Equal(1065.37f, spec.Datum.X, 2);
+        Assert.Equal(1515.7982f, spec.Datum.Y, 2);
+        Assert.Equal(126.243f, spec.Datum.Z, 2);
+        Assert.Equal(1800f, spec.Width, 1);
+        Assert.Equal(1800f, spec.Depth, 1);
+        Assert.Equal(1065.37f - 900f, spec.GridCorner.X, 1);
+        Assert.Equal(1515.7982f - 900f, spec.GridCorner.Y, 1);
+        Assert.Equal(126.243f, spec.GridCorner.Z, 1);
+        Assert.True(MathF.Abs(spec.Datum.X - 1571f) > 400f);
+        Assert.True(MathF.Abs(spec.Datum.Y - 1747.6f) > 200f);
     }
 
     [Fact]
-    public void Lfam3_loaded_heated_mesh_overlay_matches_plate_aabb_not_rotary()
+    public void Lfam3_loaded_heated_overlay_uses_world_origin_not_mesh_aabb()
     {
         var path = Path.Combine("assets", "cells", "LFAM3", "lfam3.json");
         if (!File.Exists(path))
@@ -343,17 +348,23 @@ public class BedBoundaryOverlayTest
             cell.Bed, cell.Robot.WorldPosition, 6, cell.KrlBases,
             liveWidth: cell.Bed.Width, liveDepth: cell.Bed.Depth,
             heatedBed: cell.HeatedBed,
-            heatedMeshAabb: aabb);
+            heatedMeshAabb: aabb,
+            heatedMeshSize: (max.X - min.X, max.Y - min.Y));
 
+        var pose = cell.HeatedBed!.WorldOrigin(cell.Robot.WorldPosition);
         Assert.True(spec.IsRectangular);
-        Assert.Equal(min.X, spec.GridCorner.X, 1);
-        Assert.Equal(min.Y, spec.GridCorner.Y, 1);
-        Assert.Equal(max.Z, spec.GridCorner.Z, 1);
+        Assert.Equal("heatedBed.WorldOrigin", spec.Source);
+        Assert.Equal(pose.X, spec.Datum.X, 2);
+        Assert.Equal(pose.Y, spec.Datum.Y, 2);
+        Assert.Equal(pose.Z, spec.Datum.Z, 2);
+        Assert.Equal(cell.Bed.Width, spec.Width, 1);
+        Assert.Equal(cell.Bed.Depth, spec.Depth, 1);
         var rotaryCorner = cell.Bed.VisualGridCorner(cell.Robot.WorldPosition);
         Assert.True(MathF.Abs(spec.GridCorner.X - rotaryCorner.X) > 200f);
         Assert.True(MathF.Abs(spec.GridCorner.Y - rotaryCorner.Y) > 200f);
         Assert.True(MathF.Abs(spec.GridCorner.Z - rotaryCorner.Z) > 200f);
-        Assert.Equal("aabb", spec.Source);
+        Assert.True(MathF.Abs(spec.Datum.X - (min.X + max.X) * 0.5f) > 200f
+                    || MathF.Abs(spec.Datum.Y - (min.Y + max.Y) * 0.5f) > 200f);
     }
 
     static string? FindRepoRoot()

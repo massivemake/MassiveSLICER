@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-15** (BASE #6 overlay: pose wins over bad AABB)
+Last updated: **2026-09-15** (BASE #6 overlay: WorldOrigin only, no AABB XY)
 
 ---
 
@@ -516,6 +516,13 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-15 — 5dc4cad live fail: AABB gate still accepted plate box
+
+- Symptom: SB101 after `5dc4cad` — screenshot SHA identical to `fefe94e`. Console: `source=aabb corner=(614.8, 1058.9, 128.6) datum=(1571.0, 1747.6, 128.6) size=1913x1377`. Shop WorldOrigin ≈ `(1065.4, 1515.8, 126.2)`.
+- Cause: heated-mesh AABB centre is ~556 mm off the wrapper origin (plate offset in the GLB). The 1200 mm proximity gate accepted it, so AABB still set XY/Z.
+- Fix: never place the BASE #6 rectangle from AABB. Centre on `heatedBed.WorldOrigin` (ROBROOT + shop `basePos`); size from `bed.width/depth` (1800). Viewport no longer passes AABB into Resolve. Shop `basePos`/`baseAbc` unchanged.
+- Key files: `BedBoundaryOverlay.cs`, `ViewportView.axaml.cs`, `BedBoundaryOverlayTest.cs`.
 
 ### 2026-09-15 — fefe94e live fail: AABB overrode heated pose
 
