@@ -31,8 +31,10 @@ Hard bans: do not use live `sync` / `move-*` for overlay proofs.
 
 ## Gotchas
 
-- **Arctic suppresses bed grid and ground grid.** `SceneRenderer` only draws them when `!arcticPresentation` (`ActiveShaderMode == Arctic`). Checkbox can be ON while overlay is hidden — live 2026-09-15: Preview/Body with Arctic + `ShowBedGrid=true` showed no bed grid; Toolpath (`MatteBlack`) + `ShowBedGrid=true` draws it.
+- **Arctic (PR #7 / heated-bed branch):** print-area **bed grid** still draws when `ShowBedGrid` is on (`BedBoundaryOverlay.ShouldDrawOverlay` = `showBedGrid && !slicePlaneViewerActive`; SceneRenderer draws bed overlay in Arctic). **Ground** grid (`ShowGrid`) remains suppressed in Arctic (`!arcticPresentation`). Older live note (2026-09-15 pre-PR) that Arctic hid bed grid is stale for builds with that fix.
 - Toolpath / Speed / RPM / Thermal / Edit default profiles set `ShowBedGrid=false` (and often dark + MatteBlack). Turning Bed grid on saves into that view's profile.
 - Also hidden when `SlicePlaneViewerActive` or `_bedBoundary` is null.
 - `ShowGrid` ≠ `ShowBedGrid` (ground plane vs print-bed boundary).
 - `viewset` only parses double/float/int/bool; enums need a product `Enum.TryParse` (harness gap until fixed).
+
+LFAM 3 heated vs rotary meshes and BASE ghosting: see [lfam3-dual-bed.md](./lfam3-dual-bed.md) (shop Release lfam3.json + Hermes memory).

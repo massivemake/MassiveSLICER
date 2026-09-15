@@ -76,7 +76,7 @@ powershell -NoProfile -File $ctrl command new
 powershell -NoProfile -File $ctrl screenshot -Path .cursor/skills/verify-massiveslicer/artifacts/screenshot-bridge/window.png
 ```
 
-Feature map: `features/README.md` (includes `ik-fk-scrub` for sim IK/FK).
+Feature map: `features/README.md` (includes `ik-fk-scrub` for sim IK/FK and `lfam3-dual-bed` for shop heated vs rotary beds).
 
 Safe starter proof for kinematics: see `features/ik-fk-scrub.md` — never `sync` / `move-*` in default verify.
 

@@ -32,3 +32,4 @@ Maintained recipes for driving MassiveSLICER through `control-massiveslicer.ps1`
 - [Viewport overlays and display settings](./viewport-overlays.md)
 - [Screenshot bridge](./screenshot-bridge.md)
 - [Robot IK/FK simulation (scrub and reachability)](./ik-fk-scrub.md)
+- [LFAM 3 dual beds (heated vs rotary)](./lfam3-dual-bed.md)
