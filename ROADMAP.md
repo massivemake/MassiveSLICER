@@ -155,6 +155,8 @@ Key facts:
 - Cell integration: multi-cell configs, C3Bridge sync + program run,
   Live I/O phases 1–3 (robot / extruder / milling), Zivid scanning +
   rotary-bed calibration, local HTTP control bridge + MCP tools
+- Mill (LFAM 3, AdaOne baseline): cutout, planar facing/clearing, contouring,
+  swarf, drilling, multi-axis finishing, morph — bit library stays in BITS
 - Rendering: PBR metallic-roughness + material inspector, themes, floating
   panel UI, auto build numbering, macOS port (app bundle + Dock icon)
 - Diagnostics: SliceLogger, `tools/wave_analysis.py` phase-coherence measurement

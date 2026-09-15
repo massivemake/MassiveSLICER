@@ -59,10 +59,23 @@
     <None Include="..\..\assets\krl\*.src" Link="assets\krl\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- Cell definitions + GLB/STL geometry (LFAM2/LFAM3 robots, tools, stands, rotary bed). -->
+  <!-- Cell definitions + GLB/STL geometry (LFAM2/LFAM3 robots, tools, stands, rotary bed).
+       Source of truth for publish / Apps sync is repo assets/cells — not a stripped
+       rotary-only lfam3.json. -->
   <ItemGroup>
     <None Include="..\..\assets\cells\**\*.*" Link="assets\cells\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Target Name="ValidateLfam3PublishedCell" BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <_Lfam3Json>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\assets\cells\LFAM3\lfam3.json'))</_Lfam3Json>
+      <_Lfam3Glb>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\assets\cells\LFAM3\lfam3_HeatedBed.glb'))</_Lfam3Glb>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_Lfam3Json)')" Text="Missing assets/cells/LFAM3/lfam3.json — publish would ship no LFAM 3 cell." />
+    <Error Condition="!Exists('$(_Lfam3Glb)')" Text="Missing assets/cells/LFAM3/lfam3_HeatedBed.glb — publish would omit the heated plate mesh." />
+    <Error Condition="!$([System.IO.File]::ReadAllText('$(_Lfam3Json)').Contains('&quot;heatedBed&quot;'))" Text="assets/cells/LFAM3/lfam3.json is missing heatedBed — BASE #6 plate would not load." />
+    <Error Condition="!$([System.IO.File]::ReadAllText('$(_Lfam3Json)').Contains('HEATED-BED'))" Text="assets/cells/LFAM3/lfam3.json is missing HEATED-BED — BASE # dropdown would list only rotary 1/2." />
+  </Target>
 
   <!-- Shared preset libraries (git-tracked under repo assets/). -->
   <ItemGroup>

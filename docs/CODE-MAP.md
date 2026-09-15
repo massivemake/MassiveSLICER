@@ -16,6 +16,7 @@ subsystem to read in full.
 | I need to change… | Go to |
 |---|---|
 | Slicing (planar layers, contours, seams, shells) | `Core/Slicing/PlanarSlicer.cs` |
+| AdaOne mill ops (cutout / facing / clearing / contour / swarf / drill / morph) | `Core/Slicing/AdaMillPlanner.cs`, `Core/Models/AdaMachiningSettings.cs`, `Core/Models/MillOperationKind.cs` |
 | Angled / Multi-Planar slicing | `Core/Slicing/AngledPlanarSlicer.cs` |
 | Formbound / Lightning / tree support | `Core/Slicing/Lightning/LightningPlanner.cs`, `Core/Slicing/TreeSupport/` |
 | X-bracing | `Core/Slicing/Lightning/XBracingPlanner.cs` |
@@ -24,7 +25,8 @@ subsystem to read in full.
 | Wave / pattern effects | `Core/Slicing/Effects/` |
 | KRL output, ANOUT/URM, temps, RPM | `Core/IO/KrlExporter.cs`, `Core/IO/KrlAnout.cs` |
 | A setting's plumbing | `Core/Models/SliceSettings.cs` → `Core/Models/AppPreferences.cs` → `App/ViewModels/AdditiveSettingsViewModel.cs` → `App/Views/RightPanelView.axaml` (+ the reslice watchlist in `ViewportView.axaml.cs`) |
-| Cell/robot definitions (LFAM 1/2/3, bed, tools) | `assets/cells/<CELL>/*.json`, `Core/Models/CellConfig.cs` |
+| Cell/robot definitions (LFAM 1/2/3, bed, tools) | `assets/cells/<CELL>/*.json` (publish/Apps copy this tree via `MassiveSlicer.App.csproj`), `Core/Models/CellConfig.cs`. LFAM 3 must keep `heatedBed` + `krlBases` index 6 HEATED-BED — `CellLoader` injects #6 if a stale file omits it. |
+| Print-bed grid overlay (polar vs rectangle) | `Core/Models/BedBoundaryOverlay.cs` → `ViewportView.ApplyActiveBedBoundary` (cell swap, KRL BASE change, `RebuildBed` / `RebuildBedGridSize`, GPU-upload complete). Drawn in Arctic/Preview/Body; only the 2D slice viewer skips it. Dual-bed ghosting: `BaseBedGhosting` + `ViewportView.ApplyBaseBedGhosting`. LFAM 3 solid plate is `cell.heatedBed` (`lfam3_HeatedBed.glb`, `basePos`/`baseAbc` via `CellEnvironmentBuilder`) — never `bed.modelPath` (`LFAM3Bed.glb`, hidden print-area). BASE #6 rectangle is centred on `heatedBed.WorldOrigin` (ROBROOT+`basePos`); mesh AABB is not used for XY/Z. Never `bed.Origin` / rotary `VisualGridCorner` when a heated pose exists. Logs `[bed] heated overlay source=heatedBed.WorldOrigin\|fallback`. |
 | Right-panel UI | `App/Views/RightPanelView.axaml` (3,357 lines — grep the section label) |
 | Viewport overlay / HUD / pills | `App/Views/ViewportOverlayView.axaml` |
 | Bead / toolpath rendering | `Viewport/Rendering/ToolpathRenderer.cs` |

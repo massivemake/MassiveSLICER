@@ -51,13 +51,24 @@ internal static class CellEnvironmentBuilder
 
         foreach (var env in payload.EnvironmentNodes)
         {
-            if (env.Name != "RotaryBed" || cell.RotaryBed is not { } rb) continue;
-            ApplyRotaryRootTransform(env, rb, rp);
-            var w = env.LocalTransform.Row3.Xyz;
-            System.Console.WriteLine(
-                $"[cell] rotary placement: world=({w.X:F1}, {w.Y:F1}, {w.Z:F1})  " +
-                $"basePos=[{rb.BasePos[0]:F1}, {rb.BasePos[1]:F1}, {rb.BasePos[2]:F1}]  " +
-                $"baseAbc=[{rb.BaseAbc[0]:F2}, {rb.BaseAbc[1]:F2}, {rb.BaseAbc[2]:F2}]");
+            if (env.Name == "RotaryBed" && cell.RotaryBed is { } rb)
+            {
+                ApplyRotaryRootTransform(env, rb, rp);
+                var w = env.LocalTransform.Row3.Xyz;
+                System.Console.WriteLine(
+                    $"[cell] rotary placement: world=({w.X:F1}, {w.Y:F1}, {w.Z:F1})  " +
+                    $"basePos=[{rb.BasePos[0]:F1}, {rb.BasePos[1]:F1}, {rb.BasePos[2]:F1}]  " +
+                    $"baseAbc=[{rb.BaseAbc[0]:F2}, {rb.BaseAbc[1]:F2}, {rb.BaseAbc[2]:F2}]");
+            }
+            else if (env.Name == "HeatedBed" && cell.HeatedBed is { } hb)
+            {
+                ApplyHeatedBedTransform(env, hb, rp);
+                var w = env.LocalTransform.Row3.Xyz;
+                System.Console.WriteLine(
+                    $"[cell] heated placement: world=({w.X:F1}, {w.Y:F1}, {w.Z:F1})  " +
+                    $"basePos=[{hb.BasePos[0]:F1}, {hb.BasePos[1]:F1}, {hb.BasePos[2]:F1}]  " +
+                    $"baseAbc=[{hb.BaseAbc[0]:F3}, {hb.BaseAbc[1]:F3}, {hb.BaseAbc[2]:F3}]");
+            }
         }
 
         if (payload.MultiTools is { } mt)
@@ -71,15 +82,26 @@ internal static class CellEnvironmentBuilder
         }
     }
 
+    /// <summary>
+    /// Shop Release pose: <c>KukaAbc(baseAbc) * Translate(ROBROOT + basePos)</c>.
+    /// Used by rotary and heated env meshes — do not substitute bed.origin.
+    /// </summary>
+    internal static Matrix4 KukaBaseWorldMatrix(float[] basePos, float[] baseAbc, Float3 robroot)
+    {
+        float px = basePos.Length > 0 ? basePos[0] : 0f;
+        float py = basePos.Length > 1 ? basePos[1] : 0f;
+        float pz = basePos.Length > 2 ? basePos[2] : 0f;
+        var world = new Vector3(robroot.X + px, robroot.Y + py, robroot.Z + pz);
+        return KukaAbcMatrix(baseAbc.Length > 0 ? baseAbc[0] : 0f,
+                             baseAbc.Length > 1 ? baseAbc[1] : 0f,
+                             baseAbc.Length > 2 ? baseAbc[2] : 0f)
+               * Matrix4.CreateTranslation(world);
+    }
+
     private static void ApplyRotaryRootTransform(SceneNode root, RotaryBedCellConfig rb, Float3 robroot)
     {
-        var bp = rb.BasePos;
-        var ba = rb.BaseAbc;
-        var world = new Vector3(robroot.X + bp[0], robroot.Y + bp[1], robroot.Z + bp[2]);
-        root.LocalTransform = KukaAbcMatrix(ba.Length > 0 ? ba[0] : 0f,
-                                            ba.Length > 1 ? ba[1] : 0f,
-                                            ba.Length > 2 ? ba[2] : 0f)
-                          * Matrix4.CreateTranslation(world);
+        root.LocalTransform = KukaBaseWorldMatrix(rb.BasePos, rb.BaseAbc, robroot);
+        var world = root.LocalTransform.Row3.Xyz;
 
         // Constant orientation offset: spin the whole assembly about its WORLD-vertical axis through
         // the centre by OrientationOffsetDeg. Post-multiplying by the world-space about-centre rotation
@@ -113,6 +135,9 @@ internal static class CellEnvironmentBuilder
 
         if (cell.RotaryBed is { } rb)
             pivot = TryAddRotaryBed(envNodes, rb, cell.Robot.WorldPosition);
+
+        if (cell.HeatedBed is { } hb)
+            TryAddHeatedBed(envNodes, hb, cell.Robot.WorldPosition);
 
         if (!Lfam3MinimalProbeActive)
         {
@@ -482,6 +507,39 @@ internal static class CellEnvironmentBuilder
         {
             System.Console.Error.WriteLine($"[cell] rotary bed load failed: {ex.Message}");
             return null;
+        }
+    }
+
+    private static void ApplyHeatedBedTransform(SceneNode root, HeatedBedCellConfig hb, Float3 robroot)
+        => root.LocalTransform = KukaBaseWorldMatrix(hb.BasePos, hb.BaseAbc, robroot);
+
+    private static void TryAddHeatedBed(List<SceneNode> envNodes, HeatedBedCellConfig hb, Float3 robroot)
+    {
+        if (!AssetPaths.Exists(hb.ModelPath))
+        {
+            System.Console.Error.WriteLine($"[cell] missing heated bed: {hb.ModelPath}");
+            return;
+        }
+
+        try
+        {
+            var resolved = AssetPaths.Resolve(hb.ModelPath);
+            var mesh     = LoadRotaryBedPart(resolved, "heated bed");
+            TintStandMeshes(mesh);
+
+            var root = new SceneNode { Name = "HeatedBed", Selectable = false };
+            root.AddChild(mesh);
+            root.MarkEnvironmentSubtree();
+            ApplyHeatedBedTransform(root, hb, robroot);
+            var world = root.LocalTransform.Row3.Xyz;
+            envNodes.Add(root);
+            System.Console.WriteLine(
+                $"[cell] heated bed '{hb.Name}' at ({world.X:F0}, {world.Y:F0}, {world.Z:F0})  " +
+                $"basePos=[{hb.BasePos[0]:F1}, {hb.BasePos[1]:F1}, {hb.BasePos[2]:F1}]");
+        }
+        catch (Exception ex)
+        {
+            System.Console.Error.WriteLine($"[cell] heated bed load failed: {ex.Message}");
         }
     }
 

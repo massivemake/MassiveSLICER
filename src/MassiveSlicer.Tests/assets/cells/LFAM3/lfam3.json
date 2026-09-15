@@ -175,6 +175,21 @@
     ],
     "e1Sign": 1
   },
+  "heatedBed": {
+    "name": "HEATED-BED",
+    "modelPath": "assets/cells/LFAM3/lfam3_HeatedBed.glb",
+    "krlBaseIndex": 6,
+    "basePos": [
+      1065.37,
+      1515.7982,
+      -873.757
+    ],
+    "baseAbc": [
+      -0.087,
+      0.11306581,
+      0.093820065
+    ]
+  },
   "tools": [
     {
       "name": "HV Extruder",
@@ -261,24 +276,17 @@
   ],
   "krlBases": [
     {
-      "name": "ROBROOT",
+      "name": "Rotary Table (Wood)",
       "index": 1
     },
     {
-      "name": "Base Rotary",
+      "name": "Rotary Table",
       "index": 2
     },
     {
-      "name": "KP1-MB2000 HW-2",
-      "index": 3
-    },
-    {
-      "name": "Base 4",
-      "index": 4
-    },
-    {
-      "name": "Base 5",
-      "index": 5
+      "name": "HEATED-BED",
+      "index": 6,
+      "overlay": "rectangular"
     }
   ],
   "scanToolName": "ZividScanner",

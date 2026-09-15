@@ -1356,17 +1356,16 @@ public sealed class SceneRenderer : IDisposable
         GL.PolygonOffset(1f, 1f);
         foreach (var child in SceneRoot.ChildrenForRender())
         {
-            if (child.Overlay) continue; // drawn in overlay pass instead
+            if (child.Overlay || child.TranslucentPass) continue; // ghost beds: translucent pass
             if (!child.CullFaces) GL.Disable(EnableCap.CullFace);
             child.Draw(mvp, Camera.Eye, ComputeLightDir(), LightIntensity);
             if (!child.CullFaces) GL.Enable(EnableCap.CullFace);
         }
         GL.Disable(EnableCap.PolygonOffsetFill);
 
-        // LFAM 3 rotary top mesh sits on the same Z as the polar overlay. Draw
-        // the bed grid after meshes, without depth, so Bed Grid still shows the
-        // circle + origin on top of the platter.
-        if (ShowBedGrid && !arcticPresentation && !SlicePlaneViewerActive && _bedBoundary is not null)
+        // Print-area overlay after meshes so the platter cannot bury it. Drawn in
+        // Arctic too (Preview/Body) — only the world ground grid stays Arctic-hidden.
+        if (BedBoundaryOverlay.ShouldDrawOverlay(ShowBedGrid, SlicePlaneViewerActive) && _bedBoundary is not null)
         {
             GL.Disable(EnableCap.DepthTest);
             GL.DepthMask(false);
@@ -2390,6 +2389,7 @@ public sealed class SceneRenderer : IDisposable
             // Skip expensive env IBL on cell geometry; keep it for user-imported meshes.
             mesh.HasEnvMap        = hasEnv && n.Selectable && !arctic;
             mesh.ArcticMode       = arctic;
+            mesh.GhostOpacity     = BaseBedGhosting.IsGhosted(n) ? BaseBedGhosting.GhostOpacity : 1f;
             mesh.FloorZ           = BedZ;
             // Cell geometry stays on the cheap path for Standard + inspect modes
             // (debug channels / wireframe are meant to inspect imported meshes, not the robot).

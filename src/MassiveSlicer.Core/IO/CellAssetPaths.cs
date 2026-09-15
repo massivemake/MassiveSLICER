@@ -25,6 +25,9 @@ public static class CellAssetPaths
             yield return rotary.TopPath;
         }
 
+        if (cell.HeatedBed is { ModelPath.Length: > 0 } heated)
+            yield return heated.ModelPath;
+
         foreach (var stand in cell.Stands)
             yield return stand.ModelPath;
 

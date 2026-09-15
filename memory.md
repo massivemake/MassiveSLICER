@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-26** (first-layer print speed / RPM % increase)
+Last updated: **2026-09-15** (LFAM 3 BASE #6 must stay in published cell JSON)
 
 ---
 
@@ -209,8 +209,8 @@ Start-Process -FilePath 'Z:\Research\LFAM\MassiveSLICER\src\MassiveSlicer.App\bi
 
 #### Mill right-panel structure (LFAM 3)
 - **1 BITS** — spindle tool library dropdown + dialog; default **Flat 3in AP90** (`MillBitTool.CreateLfam3DefaultFlat3In`); library JSON v3 under AppData.
-- **2 OPERATION** — strategy tiles (`MillOperationKind`: MultiAxisFinishing, Drilling, PlanarFacing, PlanarClearing, Cutout, Contouring, Swarf) + **SELECT AREA**.
-- **3 TOOLPATHING** — passes / travel / movement; SpindleRpm linked between BITS and TOOLPATHING.
+- **2 OPERATION** — AdaOne strategy tiles (`MillOperationKind`: MultiAxisFinishing, Drilling, PlanarFacing, PlanarClearing, Cutout, Contouring, Swarf, Morph) + **SELECT AREA**. No PlanarCut.
+- **3 TOOLPATHING** — AdaOne passes / travel / engagement / tool compensation / movement; per-op cards; SpindleRpm linked between BITS and TOOLPATHING.
 - **MORE** — catch-all.
 - Scan/Mill StepCards match Printing styling; BACK TO STEPS removed.
 - Key UI: `RightPanelView.axaml`, `SubtractiveSettingsViewModel.cs`, `MillBitLibraryDialog.axaml`, `MillBitLibraryViewModel.cs`, `MillBitTool.cs`, `MillBitLibraryLoader.cs`, `MillOperationKind.cs`.
@@ -516,6 +516,72 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-15 — Apps install dropped BASE #6 from the dropdown
+
+- Symptom: live Apps exe BASE # listed only Rotary 1 and 2. Install `lfam3.json` had two `krlBases` and no `heatedBed` (Improved-Cell / stale copy). Shop Release JSON has `heatedBed` + HEATED-BED index 6.
+- Cause: publish copies `assets/cells/**`, but a CWD walk could load a different checkout's rotary-only JSON; Improved-Cell still has only two bases. No build check required HEATED-BED.
+- Fix: keep shop `heatedBed` + krlBases 1/2/6 in every checked-in `lfam3.json`. Commit `lfam3_HeatedBed.glb` under App Assets too. `CellLoader` injects HEATED-BED index 6 when missing. `FindCellsDirectory` prefers exe-adjacent `assets/cells`. MSBuild fails the build if repo JSON lacks `heatedBed` / HEATED-BED or the GLB is missing. Shop `basePos`/`baseAbc` unchanged.
+- Key files: `assets/cells/LFAM3/lfam3.json` (+ mirrors), `lfam3_HeatedBed.glb`, `CellLoader.cs`, `AssetPaths.cs`, `CellConfig.cs`, `MassiveSlicer.App.csproj`.
+
+### 2026-09-15 — 5dc4cad live fail: AABB gate still accepted plate box
+
+- Symptom: SB101 after `5dc4cad` — screenshot SHA identical to `fefe94e`. Console: `source=aabb corner=(614.8, 1058.9, 128.6) datum=(1571.0, 1747.6, 128.6) size=1913x1377`. Shop WorldOrigin ≈ `(1065.4, 1515.8, 126.2)`.
+- Cause: heated-mesh AABB centre is ~556 mm off the wrapper origin (plate offset in the GLB). The 1200 mm proximity gate accepted it, so AABB still set XY/Z.
+- Fix: never place the BASE #6 rectangle from AABB. Centre on `heatedBed.WorldOrigin` (ROBROOT + shop `basePos`); size from `bed.width/depth` (1800). Viewport no longer passes AABB into Resolve. Shop `basePos`/`baseAbc` unchanged.
+- Key files: `BedBoundaryOverlay.cs`, `ViewportView.axaml.cs`, `BedBoundaryOverlayTest.cs`.
+
+### 2026-09-15 — fefe94e live fail: AABB overrode heated pose
+
+- Symptom: SB101 after `fefe94e` — BASE #6 Preview, heated rectangle visible lower-left, cyan square still on the rotary. Console: `HeatedBed mesh loaded from cell.heatedBed`.
+- Cause: `ResolveHeatedOverlay` used mesh AABB first. A local/unposed or print-area AABB (or live 1800×1800 → `HeatedGridCorner` → `VisualGridCorner`) overrode `heatedBed.WorldOrigin`. Overlay was rectangular (not polar) but XY was rotary.
+- Fix: accept AABB only when its centre is on the heated pose (XY ≤ 1200 mm, Z ≤ 400 mm). Otherwise place from `heatedBed.WorldOrigin` (or live HeatedBed `WorldTransform.Row3`). Viewport logs `[bed] heated overlay source=aabb|heatedBed.WorldOrigin|fallback` with corner/datum XYZ. Rebuild after GPU upload. Shop `basePos`/`baseAbc` unchanged.
+- Key files: `BedBoundaryOverlay.cs`, `ViewportView.axaml.cs`, `BedBoundaryOverlayTest.cs`.
+
+### 2026-09-15 — BASE #6 cyan grid was still on the rotary
+
+- Symptom: SB101 PR #7, BASE #6 Preview, square cyan overlay sat on the rotary platter, not on the heated rectangle.
+- Cause: `BedBoundaryOverlay.HeatedGridCorner` used `bed.VisualGridCorner` / `bed.Origin` whenever size matched live 1800×1800 (rotary print-area). `cell.heatedBed` pose was ignored for the overlay.
+- Fix: heated resolve places the rectangle on the heated mesh world AABB, or ROBROOT+`basePos` if the mesh is not loaded yet. Rotary bases still use polar on `bed` visual grid. Shop `basePos`/`baseAbc` unchanged.
+- Key files: `BedBoundaryOverlay.cs`, `ViewportView.axaml.cs`.
+
+### 2026-09-15 — Commit shop `lfam3_HeatedBed.glb`
+
+- Symptom: `ff318dd` loaded `cell.heatedBed` correctly on SB101, but clean clones missed the ~40KB mesh.
+- Fix: checked in shop `lfam3_HeatedBed.glb` at `assets/cells/LFAM3/` and `src/assets/cells/LFAM3/`. No `basePos`/`baseAbc` change.
+- Key files: `assets/cells/LFAM3/lfam3_HeatedBed.glb`, `src/assets/cells/LFAM3/lfam3_HeatedBed.glb`.
+
+### 2026-09-15 — Shop heatedBed restore (do not load LFAM3Bed.glb)
+
+- Symptom: BASE #6 Preview showed square grid + ghosted rotary, but the solid heated plate was missing / wrong scale and orientation.
+- Cause: PR loaded hidden `bed.modelPath` (`LFAM3Bed.glb`, print-area/grid) as `HeatedBed` and posed it from `bed.origin`. Shop Release already has a dedicated `heatedBed` block + `lfam3_HeatedBed.glb` posed with `basePos`/`baseAbc` (same KUKA convention as rotary). Git assets had no `heatedBed` block.
+- Fix: revert hidden-flat-bed load. `CellEnvironmentBuilder` loads `cell.heatedBed` into env node `HeatedBed` via `KukaAbc(baseAbc) * Translate(ROBROOT + basePos)`. Overlay / Arctic grid / BASE #6 ghosting unchanged. Shop numbers synced into all four `lfam3.json` copies.
+- Key files: `CellConfig.cs` (`HeatedBedCellConfig`), `CellEnvironmentBuilder.cs`, `CellSceneLoader.cs`, `ViewportView.axaml.cs`, `assets/cells/LFAM3/lfam3.json` (+ source mirrors), `lfam3_HeatedBed.glb`.
+
+### 2026-09-15 — LFAM 3 heated bed mesh, Arctic grid, base ghosting
+
+- Symptom: Preview/Body (Arctic) hid the bed grid; LFAM 3 heated-bed mesh was missing; no solid/ghost swap on BASE #6.
+- Cause: `SceneRenderer` skipped the overlay when `ShaderMode.Arctic`. `bed.hidden: true` skipped `LFAM3Bed.glb`. `ApplyBaseBedGhosting` did not exist on Improved-Cell (not a regression from this PR — it was never loaded).
+- Fix: draw print-area overlay whenever Bed grid is on (Arctic included; 2D slice still skips). Load the flat bed mesh on dual-bed cells as `HeatedBed`. `BaseBedGhosting` + `ApplyBaseBedGhosting` on the same rebuild paths as the overlay: BASE #6 heated solid / rotary ghosted (α 0.25); rotary base the reverse. Arctic shader honors `uBaseColor.a`. Heated mesh is not spun with E1.
+- Size fallback unchanged: 1800×1800 from `bed.width/depth`.
+- Key files: `SceneRenderer.cs`, `MeshRenderer.cs`, `CellSceneLoader.cs`, `BaseBedGhosting.cs`, `ViewportView.axaml.cs`.
+
+### 2026-09-15 — LFAM 3 BASE #6 heated-bed grid is rectangular
+
+- Symptom: with BASE #6 (HEATED-BED) selected on LFAM 3, the print-area overlay stayed a polar/circular rotary grid.
+- Cause: `BedBoundaryRenderer` draws a circle whenever `diameter > 0`. Cell swap always passed the rotary `bed.diameter` (1828.8). There was no rebuild when `KrlBaseIndex` changed. `ApplyBaseBedGhosting` does not exist on this branch — mesh ghosting was not the overlay path.
+- Fix: `BedBoundaryOverlay.Resolve` uses diameter 0 + `bed.width`×`bed.depth` (1800×1800; no dedicated heated size in JSON) for heated bases. Viewport rebuilds on cell swap, `KrlBaseIndex` change, `RebuildBed`, and `RebuildBedGridSize`. E1 no longer spins the overlay while the heated base is active. Rotary bases stay polar. Bed-grid visibility + Arctic skip unchanged.
+- Key files: `BedBoundaryOverlay.cs`, `ViewportView.axaml.cs`, `CellConfig.cs`, `assets/cells/LFAM3/lfam3.json`.
+- Tests: `BedBoundaryOverlayTest`.
+
+### 2026-09-03 — AdaOne mill baseline (OPERATION + TOOLPATHING)
+
+- Ask: clear MILL 2 OPERATION and 3 TOOLPATHING; start fresh from AdaOne/Eidos on `feature/Improved-Cell`. Do not keep PlanarCut / T12 mill generate.
+- Was: SPSM tiles plus generic passes; generate routed to SurfaceFollowMillGenerator.
+- Fix: AdaOne catalog (Multi-axis finishing, Drilling, Planar facing, Planar clearing, Cutout, Contouring, Swarf, Morph). Per-op cards, engagement, tool compensation. Generate → `AdaMillPlanner`. PlanarCut tile and mill generate path removed.
+- Files: `MillOperationKind.cs`, `AdaMachiningSettings.cs`, `AdaMillPlanner.cs`, `MeshWaterline.cs`, `MillSidebarSettings.cs`, `SubtractiveSettingsViewModel.cs`, `RightPanelView.axaml`, `ViewportView.axaml.cs`, `ConsoleCommandRegistry.cs`.
+- Tests: `AdaMillPlannerTest` 9 passed.
+
 
 ### 2026-08-26 — First-layer print speed and RPM % increase
 

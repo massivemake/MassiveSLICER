@@ -96,6 +96,12 @@ public sealed class MeshRenderer : IDisposable
     /// <summary>0 = opaque, 1 = mask (alpha discard), 2 = blend.</summary>
     public int AlphaModeInt { get; set; }
 
+    /// <summary>
+    /// Multiplies <see cref="Color"/>.W at draw time (1 = solid). Used for the inactive
+    /// heated/rotary bed ghost; survives Arctic/shader Color restomps.
+    /// </summary>
+    public float GhostOpacity { get; set; } = 1f;
+
     /// <summary>Alpha cutoff for mask mode.</summary>
     public float AlphaCutoff { get; set; } = 0.5f;
 
@@ -395,13 +401,13 @@ void main() {
                 vec3 dN = fwidth(Nm);
                 float crease = 1.0 - clamp(length(dN) * 9.0, 0.0, 0.50);
                 float cavity = 1.0 - clamp((1.0 - NdotL) * 0.35, 0.0, 0.18);
-                vec3 base = vec3(0.93, 0.93, 0.95);
+                vec3 base = max(uBaseColor.rgb, vec3(0.0));
                 vec3 lit = base * hemi * (0.82 + 0.18 * NdotL * uLightIntensity) * crease * cavity;
                 float h = max(vWorldPos.z - uFloorZ, 0.0);
                 float vertGround = exp(-h / 28.0);
                 lit *= mix(1.0, 0.78, vertGround * 0.55);
                 lit = applySelectionOverlay(lit);
-                fragColor = vec4(pow(max(lit, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+                fragColor = vec4(pow(max(lit, vec3(0.0)), vec3(1.0 / 2.2)), uBaseColor.a);
                 return;
             }
 
@@ -595,7 +601,9 @@ void main() {
 
         _shader.SetVector3("uLightDir",       lightDir);
         _shader.SetVector3("uViewPos",        viewPos);
-        _shader.SetVector4("uBaseColor",      Color);
+        var drawColor = Color;
+        drawColor.W *= Math.Clamp(GhostOpacity, 0f, 1f);
+        _shader.SetVector4("uBaseColor",      drawColor);
         _shader.SetFloat("uSpecular",         SpecularStrength);
         _shader.SetFloat("uShininess",        Shininess);
         _shader.SetFloat("uMetallic",         Metallic);
@@ -620,7 +628,7 @@ void main() {
         _shader.SetVector3("uEmissiveFactor", EmissiveFactor);
         _shader.SetFloat("uNormalScale",      NormalScale);
         _shader.SetFloat("uOcclusionStrength", OcclusionStrength);
-        _shader.SetInt("uAlphaMode",          AlphaModeInt);
+        _shader.SetInt("uAlphaMode",          drawColor.W < 0.999f ? 2 : AlphaModeInt);
         _shader.SetFloat("uRimGlow",          RimGlow);
         _shader.SetFloat("uAlphaCutoff",      AlphaCutoff);
         _shader.SetFloat("uExposure",         Exposure);

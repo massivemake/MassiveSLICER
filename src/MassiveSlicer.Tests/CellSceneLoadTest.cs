@@ -71,7 +71,26 @@ public class CellSceneLoadTest(ITestOutputHelper output)
         output.WriteLine($"BedHidden={cell.Bed.Hidden} RobotBase={payload.RobotBaseNode is not null} BedNode={payload.BedNode is not null} Env={payload.EnvironmentNodes.Count} meshes={meshes}");
 
         Assert.NotNull(payload.RobotBaseNode);
+        Assert.True(cell.Bed.Hidden);
         Assert.Null(payload.BedNode);
+        Assert.NotNull(cell.HeatedBed);
+        Assert.Contains(cell.KrlBases, b => b.Index == 6 && b.Name == "HEATED-BED");
+        Assert.Equal(6, cell.HeatedBed!.KrlBaseIndex);
+        Assert.Equal("assets/cells/LFAM3/lfam3_HeatedBed.glb", cell.HeatedBed.ModelPath);
+        Assert.Equal(1065.37f, cell.HeatedBed.BasePos[0], 2);
+        Assert.Equal(1515.7982f, cell.HeatedBed.BasePos[1], 3);
+        Assert.Equal(-873.757f, cell.HeatedBed.BasePos[2], 2);
+        bool heatedAsset = AssetPaths.Exists(cell.HeatedBed.ModelPath);
+        if (heatedAsset)
+        {
+            var heated = payload.EnvironmentNodes.FirstOrDefault(n => n.Name == "HeatedBed");
+            Assert.NotNull(heated);
+            var expected = CellEnvironmentBuilder.KukaBaseWorldMatrix(
+                cell.HeatedBed.BasePos, cell.HeatedBed.BaseAbc, cell.Robot.WorldPosition);
+            Assert.Equal(expected.Row3.X, heated!.LocalTransform.Row3.X, 2);
+            Assert.Equal(expected.Row3.Y, heated.LocalTransform.Row3.Y, 2);
+            Assert.Equal(expected.Row3.Z, heated.LocalTransform.Row3.Z, 2);
+        }
         Assert.True(payload.EnvironmentNodes.Any(n => n.Name == "RotaryBed"));
         Assert.True(meshes > 0);
     }

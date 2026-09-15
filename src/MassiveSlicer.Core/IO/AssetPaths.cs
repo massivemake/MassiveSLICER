@@ -78,6 +78,13 @@ public static class AssetPaths
     /// <summary>First existing <c>assets/cells</c> directory, if any.</summary>
     public static string? FindCellsDirectory()
     {
+        // Prefer the copy beside the running exe (publish / Apps / bin/Release).
+        // Walking CWD first loaded a different git checkout's stale lfam3.json
+        // (rotary 1/2 only) and hid BASE #6 in the live Apps install.
+        var besideExe = Path.Combine(AppContext.BaseDirectory, "assets", "cells");
+        if (Directory.Exists(besideExe))
+            return besideExe;
+
         foreach (var root in SearchRoots())
         {
             var dir = Path.Combine(root, "assets", "cells");
@@ -158,7 +165,7 @@ public static class AssetPaths
         var normalized = relativePath.Replace('\\', '/');
         var variants   = new List<string> { normalized };
 
-        // Prefer the live repo / NAS cells tree before publish copies beside the .exe.
+        // Preferred cells dir (exe-adjacent publish copy, then env/NAS) before other roots.
         if (normalized.StartsWith("assets/cells/", StringComparison.OrdinalIgnoreCase))
         {
             var preferred = CellPaths.PreferredCellsDirectory();

@@ -32,6 +32,12 @@ public sealed record CellConfig
     /// <summary>Rotary positioner bed (LFAM 3). Null = flat bed only.</summary>
     public RotaryBedCellConfig? RotaryBed { get; init; }
 
+    /// <summary>
+    /// Lower heated plate (LFAM 3 BASE #6). Posed with <c>basePos</c>/<c>baseAbc</c>
+    /// like the rotary env mesh — not <see cref="BedCellConfig.Origin"/> / <c>bed.modelPath</c>.
+    /// </summary>
+    public HeatedBedCellConfig? HeatedBed { get; init; }
+
     /// <summary>Linear rail (LFAM 1 E1). Null = no rail translation in the viewport.</summary>
     public RobotRailCellConfig? RobotRail { get; init; }
 
@@ -40,6 +46,35 @@ public sealed record CellConfig
 
     /// <summary>Named KUKA BASE_DATA entries available on this cell (for dropdowns and KRL export).</summary>
     public IReadOnlyList<KrlBaseEntry> KrlBases { get; init; } = [];
+
+    /// <summary>
+    /// LFAM 3 BASE #6 must appear in the ROBOT CELL dropdown even when a stale
+    /// publish copy only lists rotary 1/2. Does not invent WORLD/Calibration
+    /// entries or change shop <c>basePos</c>/<c>baseAbc</c>.
+    /// </summary>
+    public static IReadOnlyList<KrlBaseEntry> EnsureHeatedKrlBase(
+        IReadOnlyList<KrlBaseEntry>? bases,
+        HeatedBedCellConfig? heatedBed,
+        BedCellConfig? bed = null)
+    {
+        var list = bases is { Count: > 0 } ? bases : [];
+        int want = heatedBed is { KrlBaseIndex: > 0 } hb
+            ? hb.KrlBaseIndex
+            : BedBoundaryOverlay.Lfam3HeatedBaseIndex;
+        foreach (var b in list)
+            if (b.Index == want) return list;
+
+        bool infer = heatedBed is not null
+                     || (bed?.Diameter is > 0f && list.Count > 0);
+        if (!infer) return list;
+
+        return [..list, new KrlBaseEntry
+        {
+            Name = heatedBed?.Name is { Length: > 0 } n ? n : "HEATED-BED",
+            Index = want,
+            Overlay = BedBoundaryOverlay.RectangularOverlay,
+        }];
+    }
 
     /// <summary>
     /// Returns <see cref="Tools"/> when non-empty, otherwise falls back to the legacy
@@ -280,13 +315,25 @@ public sealed record BedCellConfig
     public float? Diameter { get; init; }
 
     /// <summary>
+    /// Optional print-area size of the lower heated bed (mm). Used for the rectangular overlay
+    /// when a heated KRL base is active. Null = fall back (see <see cref="BedBoundaryOverlay"/>).
+    /// </summary>
+    public float? HeatedWidth { get; init; }
+
+    /// <summary>See <see cref="HeatedWidth"/>.</summary>
+    public float? HeatedDepth { get; init; }
+
+    /// <summary>
     /// Sign applied to E1 when rotating scene geometry about <see cref="Origin"/>:
     /// +1 = CCW about world +Z, −1 = CW. Set by rotary-bed rotation calibration.
     /// Null defaults to −1 (the original hard-coded direction).
     /// </summary>
     public float? RotationSign { get; init; }
 
-    /// <summary>When true the flat bed mesh is omitted (rotary bed replaces it).</summary>
+    /// <summary>
+    /// When true the print-area / grid bed mesh (<c>bed.modelPath</c>) is omitted.
+    /// LFAM 3's solid plate is <see cref="CellConfig.HeatedBed"/>, not this hidden grid bed.
+    /// </summary>
     public bool Hidden { get; init; }
 
     /// <summary>LFAM 3-style circular turntable (imports centre on <see cref="Origin"/>).</summary>
@@ -465,11 +512,36 @@ public sealed record RotaryBedCellConfig
     public float OrientationOffsetDeg { get; init; } = DefaultOrientationOffsetDeg;
 }
 
+/// <summary>
+/// LFAM 3 lower heated plate. Shop Release poses this with KUKA <c>basePos</c>/<c>baseAbc</c>
+/// relative to ROBROOT — same convention as <see cref="RotaryBedCellConfig"/>.
+/// </summary>
+public sealed record HeatedBedCellConfig
+{
+    public string Name { get; init; } = "HEATED-BED";
+    public required string ModelPath { get; init; }
+    public int KrlBaseIndex { get; init; } = 6;
+    public float[] BasePos { get; init; } = [0f, 0f, 0f];
+    public float[] BaseAbc { get; init; } = [0f, 0f, 0f];
+
+    /// <summary>World-space wrapper origin: ROBROOT + <see cref="BasePos"/> (mm). Overlay/mesh pose — not <see cref="BedCellConfig.Origin"/>.</summary>
+    public Float3 WorldOrigin(Float3 robrootWorld) => new(
+        robrootWorld.X + (BasePos.Length > 0 ? BasePos[0] : 0f),
+        robrootWorld.Y + (BasePos.Length > 1 ? BasePos[1] : 0f),
+        robrootWorld.Z + (BasePos.Length > 2 ? BasePos[2] : 0f));
+}
+
 /// <summary>A named KUKA BASE_DATA entry exposed for dropdowns and KRL export.</summary>
 public sealed record KrlBaseEntry
 {
     public required string Name  { get; init; }
     public required int    Index { get; init; }
+
+    /// <summary>
+    /// Overlay shape for this base: <c>rectangular</c> (heated / lower bed) or
+    /// <c>polar</c> (rotary platter). Null = infer from name / LFAM 3 BASE 6.
+    /// </summary>
+    public string? Overlay { get; init; }
 }
 
 /// <summary>

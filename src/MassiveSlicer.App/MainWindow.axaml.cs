@@ -361,8 +361,12 @@ public partial class MainWindow : Window
                         vm.Console.LogError("[cell] Robot model did not load — check console for missing .glb paths.");
                     if (payload.BedNode is null && payload.RotaryBedPivot is null && !payload.Config.Bed.Hidden)
                         vm.Console.LogError("[cell] Bed model did not load.");
-                    if (payload.Config.Bed.Hidden && payload.RotaryBedPivot is null)
+                    if (payload.Config.Bed.Hidden && payload.BedNode is null && payload.RotaryBedPivot is null)
                         vm.Console.Log("[cell] LFAM 3 uses a hidden flat bed; rotary bed mesh was not built.");
+                    if (payload.EnvironmentNodes.Any(n => n.Name == "HeatedBed"))
+                        vm.Console.Log("[cell] HeatedBed mesh loaded from cell.heatedBed (ghosted when a rotary BASE is active).");
+                    else if (payload.Config.HeatedBed is not null)
+                        vm.Console.LogError("[cell] heatedBed is configured but lfam3_HeatedBed.glb did not load.");
 
                     var bedCfg = payload.Config.Bed;
                     var rp     = payload.Config.Robot.WorldPosition;

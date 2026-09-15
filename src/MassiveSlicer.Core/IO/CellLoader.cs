@@ -26,8 +26,12 @@ public static class CellLoader
         if (string.IsNullOrWhiteSpace(json))
             throw new InvalidDataException($"Cell file is empty (0 bytes) — restore from git or a backup: {path}");
 
-        return JsonSerializer.Deserialize<CellConfig>(json, Options)
+        var cell = JsonSerializer.Deserialize<CellConfig>(json, Options)
             ?? throw new InvalidDataException($"Cell file deserialized to null: {path}");
+        var bases = CellConfig.EnsureHeatedKrlBase(cell.KrlBases, cell.HeatedBed, cell.Bed);
+        if (!ReferenceEquals(bases, cell.KrlBases))
+            cell = cell with { KrlBases = bases };
+        return cell;
     }
 
     /// <summary>Returns paths of all <c>*.json</c> files under the given directory (recursive).</summary>

@@ -253,6 +253,8 @@ public partial class ViewportView : UserControl
 
     // Rotary bed (E1): the bed mesh wrapper node + its centre, so E1 can spin it about the vertical axis.
     private SceneNode? _bedNode;
+    // Lower heated / flat bed on dual-bed cells (LFAM 3). Same instance as _bedNode when loaded.
+    private SceneNode? _heatedBedRoot;
     private Vector3    _bedOriginLocal;
     private Vector3    _bedBaseMarker;
     private Vector3    _bedGridCorner;
@@ -263,6 +265,8 @@ public partial class ViewportView : UserControl
     // Set on the UI thread by a manual bed edit; consumed on the GL thread (SetBedBoundary creates GL resources).
     private (float X, float Y, float Z, float Diameter, float Sign)? _pendingBedRebuild;
     private (float Width, float Depth)? _pendingBedGridResize;
+    // Set on the UI thread when KRL BASE changes; consumed on the GL thread (SetBedBoundary).
+    private bool _pendingBedOverlayRebuild;
     // Robot cell state
     private Vector3  _robrootWorldPos;
     private Vector3  _tcpOffsetLocal;
@@ -782,6 +786,11 @@ public partial class ViewportView : UserControl
                     nameof(RobotPanelViewModel.A5) or nameof(RobotPanelViewModel.A6) or
                     nameof(RobotPanelViewModel.E1))
                     GlCanvas.RequestNextFrameRendering();
+                else if (pe.PropertyName is nameof(RobotPanelViewModel.KrlBaseIndex))
+                {
+                    _pendingBedOverlayRebuild = true;
+                    GlCanvas.RequestNextFrameRendering();
+                }
             };
             robot.OnToolSelected              = OnToolSwapRequested;
             robot.OnSaveHomePositionRequested = (name, angles) => SaveHomePosition(vm, name, angles);
@@ -2219,6 +2228,12 @@ public partial class ViewportView : UserControl
                 RebuildBedGridSize(gridSize.Width, gridSize.Depth);
             }
 
+            if (_pendingBedOverlayRebuild)
+            {
+                _pendingBedOverlayRebuild = false;
+                ApplyActiveBedBoundary();
+            }
+
             if (vm.Robot is { } e1Robot && e1Robot.E1 != _lastSyncE1)
             {
                 _lastSyncE1 = e1Robot.E1;
@@ -2245,15 +2260,12 @@ public partial class ViewportView : UserControl
                     float e1Rad = (float)(_bedRotationSign * e1Robot.E1 * Math.PI / 180.0);
                     var c = _bedOriginLocal;
 
-                    if (_bedNode is not null)
-                        _bedNode.LocalTransform =
-                            Matrix4.CreateRotationZ(e1Rad) *
-                            Matrix4.CreateTranslation(c.X, c.Y, c.Z);
-
-                    _renderer.BedBoundaryModel =
-                        Matrix4.CreateTranslation(-c.X, -c.Y, -c.Z) *
-                        Matrix4.CreateRotationZ(e1Rad) *
-                        Matrix4.CreateTranslation(c.X, c.Y, c.Z);
+                    // Heated bed mesh stays world-fixed. Overlay follows E1 only on a rotary base.
+                    _renderer.BedBoundaryModel = ActiveBedOverlayIsHeated()
+                        ? Matrix4.Identity
+                        : Matrix4.CreateTranslation(-c.X, -c.Y, -c.Z) *
+                          Matrix4.CreateRotationZ(e1Rad) *
+                          Matrix4.CreateTranslation(c.X, c.Y, c.Z);
                 }
             }
         }
@@ -2562,7 +2574,7 @@ public partial class ViewportView : UserControl
         var corner = new Vector3(x - _bedWidth * 0.5f, y - _bedDepth * 0.5f, z);
         _bedGridCorner = corner;
         _bedGridDatum  = new Vector3(x, y, z);
-        _renderer.SetBedBoundary(_bedBaseMarker, corner, _bedWidth, _bedDepth, _bedGridDatum, diameter);
+        ApplyActiveBedBoundary();
 
         // Recentre the rotary-bed mesh in X/Y onto the calibrated axis, but PRESERVE its Z. The bed
         // calibration measures where the rotary AXIS is (X/Y centre) and its rotation — it does not
@@ -2586,8 +2598,90 @@ public partial class ViewportView : UserControl
     {
         _bedWidth = width;
         _bedDepth = depth;
-        _renderer.SetBedBoundary(
-            _bedBaseMarker, _bedGridCorner, _bedWidth, _bedDepth, _bedGridDatum, _bedDiameter);
+        ApplyActiveBedBoundary();
+    }
+
+    /// <summary>
+    /// Rebuilds the print-area overlay for the active KRL base. Heated / BASE #6 is a
+    /// rectangle with diameter 0; rotary bases keep the polar platter. GL thread only.
+    /// </summary>
+    private void ApplyActiveBedBoundary()
+    {
+        if (_vm?.ActiveCell is not { } cell)
+        {
+            _renderer.SetBedBoundary(
+                _bedBaseMarker, _bedGridCorner, _bedWidth, _bedDepth, _bedGridDatum, _bedDiameter);
+            return;
+        }
+
+        int baseIdx = _vm.Robot is { KrlBaseIndex: > 0 } r ? r.KrlBaseIndex : 0;
+        var spec = BedBoundaryOverlay.Resolve(
+            cell.Bed,
+            cell.Robot.WorldPosition,
+            baseIdx,
+            cell.KrlBases,
+            liveWidth: _bedWidth,
+            liveDepth: _bedDepth,
+            liveDiameter: _bedDiameter,
+            heatedBed: cell.HeatedBed,
+            liveHeatedOrigin: TryLiveHeatedOrigin());
+
+        var corner = new Vector3(spec.GridCorner.X, spec.GridCorner.Y, spec.GridCorner.Z);
+        var datum  = new Vector3(spec.Datum.X, spec.Datum.Y, spec.Datum.Z);
+        _renderer.SetBedBoundary(_bedBaseMarker, corner, spec.Width, spec.Depth, datum, spec.Diameter);
+        if (spec.IsRectangular)
+            _renderer.BedBoundaryModel = Matrix4.Identity;
+        else
+            _lastSyncE1 = double.NaN; // re-apply platter spin about the rotary centre next frame
+        if (spec.IsRectangular && BedBoundaryOverlay.IsHeatedPrintBase(baseIdx, cell.KrlBases, cell.Bed))
+            LogHeatedOverlay(spec);
+        ApplyBaseBedGhosting();
+    }
+
+    /// <summary>
+    /// BASE #6: heated solid, rotary ghosted. Rotary base: rotary solid, heated ghosted.
+    /// </summary>
+    private void ApplyBaseBedGhosting()
+    {
+        var heated = _heatedBedRoot;
+        if (heated is null || _rotaryBedRoot is null)
+        {
+            BaseBedGhosting.SetGhost(_bedNode, ghost: false);
+            return;
+        }
+
+        BaseBedGhosting.Apply(heated, _rotaryBedRoot, ActiveBedOverlayIsHeated());
+    }
+
+    private bool ActiveBedOverlayIsHeated()
+        => _vm?.ActiveCell is { } cell
+           && BedBoundaryOverlay.IsHeatedPrintBase(
+               _vm.Robot is { KrlBaseIndex: > 0 } r ? r.KrlBaseIndex : 0,
+               cell.KrlBases,
+               cell.Bed);
+
+    /// <summary>HeatedBed wrapper translation. Null when the node is missing or still identity.</summary>
+    private Float3? TryLiveHeatedOrigin()
+    {
+        if (_heatedBedRoot is null) return null;
+        var t = _heatedBedRoot.WorldTransform.Row3;
+        if (MathF.Abs(t.X) + MathF.Abs(t.Y) + MathF.Abs(t.Z) <= 1f) return null;
+        return new Float3(t.X, t.Y, t.Z);
+    }
+
+    private void LogHeatedOverlay(BedBoundaryOverlaySpec spec)
+    {
+        var msg =
+            $"[bed] heated overlay source={spec.Source} " +
+            $"corner=({spec.GridCorner.X:F1}, {spec.GridCorner.Y:F1}, {spec.GridCorner.Z:F1}) " +
+            $"datum=({spec.Datum.X:F1}, {spec.Datum.Y:F1}, {spec.Datum.Z:F1}) " +
+            $"size={spec.Width:F0}x{spec.Depth:F0}";
+        System.Console.WriteLine(msg);
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel mvm)
+                mvm.Console.Log(msg);
+        });
     }
 
     private void RebuildFrameMatrices()
@@ -3030,6 +3124,7 @@ public partial class ViewportView : UserControl
         _multiTools                 = null;
         _rotaryBedPivot             = null;
         _rotaryBedRoot              = null;
+        _heatedBedRoot              = null;
         _robotBaseNode              = null;
         _collisionWorld             = null;
         _robotRail                  = null;
@@ -3058,9 +3153,9 @@ public partial class ViewportView : UserControl
         _bedDepth        = b.Depth;
         _bedDiameter     = b.Diameter ?? 0f;
         _bedRotationSign = b.RotationSign ?? -1f;
-        // Blue origin marker stays at BASE 0,0,0; grid/border follow visual placement.
-        _renderer.SetBedBoundary(
-            _bedBaseMarker, _bedGridCorner, _bedWidth, _bedDepth, _bedGridDatum, _bedDiameter);
+        // Blue origin marker stays at BASE 0,0,0; grid/border follow visual placement
+        // and the active KRL base (heated = rectangle, rotary = polar).
+        ApplyActiveBedBoundary();
         Dispatcher.UIThread.Post(() => vm.SyncBedGridSize(b.Width, b.Depth));
 
         // Focus on the centre of the print area and set radius to the bed diagonal
@@ -3107,8 +3202,10 @@ public partial class ViewportView : UserControl
         EnqueueCellGpuUpload(swap.BoosterNode);
         EnqueueCellGpuUpload(swap.BedNode);
 
-        // Retain the bed wrapper so E1 can rotate it about the vertical axis through its centre.
+        // Print-area / grid bed (LFAM 1/2). LFAM 3 heated plate is the HeatedBed env node
+        // posed from cell.heatedBed basePos/baseAbc — do not apply bed.origin to it.
         _bedNode        = swap.BedNode;
+        _heatedBedRoot  = null;
         var meshOrigin  = b.VisualMeshOrigin(rpBed);
         _bedOriginLocal = new Vector3(meshOrigin.X, meshOrigin.Y, meshOrigin.Z);
         if (_bedNode is not null)
@@ -3136,6 +3233,11 @@ public partial class ViewportView : UserControl
                 _rotaryBedRoot = env;   // so bed recentring can relocate the turntable to match
                 UploadVisiblePendingMeshes(env);
             }
+            else if (env.Name == "HeatedBed")
+            {
+                _heatedBedRoot = env;
+                UploadVisiblePendingMeshes(env);
+            }
             else
                 EnqueueCellGpuUpload(env);
         }
@@ -3153,8 +3255,15 @@ public partial class ViewportView : UserControl
             cellEnvOutliner.Add((bedNode, "Print Bed"));
             RegisterLfamInfrastructure(bedNode);
         }
+        if (_heatedBedRoot is { } heatedNode)
+        {
+            cellEnvOutliner.Add((heatedNode, "Heated Bed"));
+            RegisterLfamInfrastructure(heatedNode);
+        }
 
         RegisterLfamInfrastructure(rotaryPivot, _rotaryBedRoot);
+        // Overlay first runs before env attach; rebuild now so BASE #6 can use the heated AABB.
+        ApplyActiveBedBoundary();
 
         Dispatcher.UIThread.Post(() =>
         {
@@ -3308,8 +3417,7 @@ public partial class ViewportView : UserControl
         foreach (var n in root.SelfAndDescendantsForRender())
         {
             if (n.PendingMesh is not { } data) continue;
-            n.Mesh        = GpuMeshCache.Acquire(data);
-            n.PendingMesh = null;
+            BindUploadedMesh(n, data);
         }
     }
 
@@ -3319,9 +3427,16 @@ public partial class ViewportView : UserControl
         {
             if (n.PendingMesh is not { } data) continue;
             if (!IsInVisibleSubtree(n)) continue;
-            n.Mesh        = GpuMeshCache.Acquire(data);
-            n.PendingMesh = null;
+            BindUploadedMesh(n, data);
         }
+    }
+
+    private static void BindUploadedMesh(SceneNode n, MeshData data)
+    {
+        n.Mesh        = GpuMeshCache.Acquire(data);
+        n.PendingMesh = null;
+        if (n.Mesh is { } mesh && BaseBedGhosting.IsGhosted(n))
+            mesh.GhostOpacity = BaseBedGhosting.GhostOpacity;
     }
 
     private void EnqueueCellGpuUpload(SceneNode? root)
@@ -3356,6 +3471,8 @@ public partial class ViewportView : UserControl
             {
                 _cellGpuUploadPending = false;
                 System.Console.WriteLine("[cell] GPU upload complete");
+                // Heated AABB/picking data is valid only after upload; rebuild overlay now.
+                ApplyActiveBedBoundary();
             }
             return false;
         }
@@ -3365,8 +3482,7 @@ public partial class ViewportView : UserControl
         {
             var n = _cellGpuUploadQueue.Dequeue();
             if (n.PendingMesh is not { } data) continue;
-            n.Mesh        = GpuMeshCache.Acquire(data);
-            n.PendingMesh = null;
+            BindUploadedMesh(n, data);
             uploaded++;
         }
 
@@ -6307,9 +6423,8 @@ public partial class ViewportView : UserControl
         try
         {
             var mill = BuildMillSettings(sub);
-            bool planar = sub.IsPlanarFacing || sub.IsPlanarClearing;
             NVec3? approach = null;
-            bool lockAxis = false;
+            bool planar = sub.ShowsPlanarToolAxis;
             if (planar)
             {
                 if (sub.PlanarToolAxis.Kind == MillPlanarAxisKind.PaintedFace)
@@ -6320,17 +6435,20 @@ public partial class ViewportView : UserControl
                 else if (sub.PlanarToolAxis.Kind == MillPlanarAxisKind.Camera)
                     ApplyCameraToolAxis(sub);
                 approach = sub.ResolvePlanarApproach();
-                lockAxis = true;
             }
+            var ada = sub.ToAdaMachining();
+            var millReq = new AdaMillRequest
+            {
+                Settings     = ada,
+                Positions    = positions,
+                Normals      = normals,
+                Indices      = indices,
+                ApproachAxis = approach,
+            };
             var toolpath = await Task.Run(() =>
             {
                 cancel.ThrowIfCancellationRequested();
-                return planar
-                    ? MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.Generate(
-                        positions, normals, indices, mill,
-                        approachAxis: approach, lockToolToApproach: lockAxis)
-                    : MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.GenerateMultiAxis(
-                        positions, normals, indices, mill);
+                return AdaMillPlanner.Generate(millReq);
             }, cancel);
 
             cancel.ThrowIfCancellationRequested();
@@ -13269,6 +13387,8 @@ public partial class ViewportView : UserControl
         {
             if (env.Name == "RotaryBed")
                 _devNodeKinds[env] = ("rotary", null);
+            if (env.Name == "HeatedBed")
+                _devNodeKinds[env] = ("heated", null);
         }
         if (_multiTools is not null)
         {
@@ -13416,7 +13536,7 @@ public partial class ViewportView : UserControl
         if (vm.ActiveCell is not { } config) return;
 
         var envNodes = _renderer.SceneRoot.Children
-            .Where(n => n.Name is "Extruder Stand" or "Scanner Stand" or "Spindle Stand" or "RotaryBed")
+            .Where(n => n.Name is "Extruder Stand" or "Scanner Stand" or "Spindle Stand" or "RotaryBed" or "HeatedBed")
             .ToList();
 
         var payload = new CellSwapPayload(
@@ -13433,6 +13553,7 @@ public partial class ViewportView : UserControl
             FlangeAttachment: null);
 
         CellEnvironmentBuilder.RefreshPlacements(payload);
+        ApplyActiveBedBoundary();
 
         if (_bedNode is not null && config.Bed is { } bed)
         {
