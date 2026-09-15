@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-15** (stale robot-validation banner after clean pass)
+Last updated: **2026-09-15** (Cloud Agent headless dev environment: .NET 8 + Xvfb + Mesa softpipe)
 
 ---
 
@@ -516,6 +516,30 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-15 — Cloud Agent dev environment (headless build/test/GUI)
+
+- What: stood up a reproducible Cursor Cloud Agent environment for the repo on
+  Linux x86_64 (Ubuntu 24.04). Installed .NET 8 SDK (symlinked to
+  `/usr/local/bin/dotnet`, no `DOTNET_ROOT` needed), the Avalonia/OpenGL/X11
+  runtime libs, `Xvfb` (display `:99`), and Mesa software GL.
+- Key finding: **Avalonia blacklists the `llvmpipe` software renderer**
+  (`Renderer 'llvmpipe' is blacklisted`), so its GL backend never initializes,
+  meshes never GPU-upload, and slicing fails with `mesh has no geometry`
+  (geometry is read from `MeshRenderer.PickingData`, set on the GL thread during
+  upload). Fix: use Mesa `softpipe` (`GALLIUM_DRIVER=softpipe`) — GL 3.3 / GLSL
+  3.30, above the viewport minimum, and not blacklisted.
+- Verified end-to-end via the localhost control bridge (`LocalControlBridge`,
+  `:8723`): imported `assets/test/test_cube.stl` → `slice` → **99 layers, 593
+  moves**, collision hulls for all links, **"All 593 reachable"**, Toolpath view
+  renders the layer stack. Pause the "Realtime" auto-slice
+  (`viewset RealtimeSlicingPaused true`) before importing or an early auto-slice
+  races the GPU upload and shows a transient `mesh has no geometry` toast.
+- Test suite: 953/985 pass; the ~32 failures are the documented path/CWD + WIP
+  set plus the Windows-only STA/COM headless-UI tests
+  (`TransformNumberBoxClickTest`, `SidebarExpandScrollTest`,
+  `TcpAxisLabelLayoutTest`) — platform limits, not regressions.
+- Key files: `AGENTS.md` / `CLAUDE.md` ("Cursor Cloud specific instructions").
 
 ### 2026-09-15 — Stale robot-validation banner after a later clean pass
 
