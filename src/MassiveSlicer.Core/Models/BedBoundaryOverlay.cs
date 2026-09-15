@@ -78,18 +78,17 @@ public static class BedBoundaryOverlay
         (Float3 Min, Float3 Max)? heatedMeshAabb = null,
         Float3? liveHeatedOrigin = null)
     {
+        _ = heatedMeshAabb; // ignored — AABB must not set XY/Z (SB101 5dc4cad)
+
         var gridCorner = bed.VisualGridCorner(robrootWorld);
         var gridDatum = bed.HasVisualShift && bed.GridOrigin is null
             ? gridCorner
             : new Float3(bed.Origin.X, bed.Origin.Y, gridCorner.Z);
 
         if (IsHeatedPrintBase(krlBaseIndex, bases, bed))
-        {
-            _ = heatedMeshAabb; // ignored — AABB must not set XY/Z (SB101 5dc4cad)
             return ResolveHeatedOverlay(
                 bed, robrootWorld, liveWidth, liveDepth, heatedMeshSize,
                 heatedBed, liveHeatedOrigin);
-        }
 
         float widthR = liveWidth ?? bed.Width;
         float depthR = liveDepth ?? bed.Depth;
