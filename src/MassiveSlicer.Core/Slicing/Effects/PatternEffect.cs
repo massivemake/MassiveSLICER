@@ -67,8 +67,24 @@ public static class PatternEffect
     /// </summary>
     private const float MaxStepFraction = 0.25f;
 
+    /// <summary>How long instability must persist before it counts as the taper, in layers.</summary>
+    private const int Sustained = 25;
+
+    /// <summary>
+    /// How much of what remains above the strict limit to keep the requested count for
+    /// anyway. The pattern drifts there rather than breaking, and drifting as the pattern
+    /// asked for beats handing over early to something else.
+    /// </summary>
+    private const float WavyHandoverDelay = 0.5f;
+
+    /// <summary>Where each candidate count would hand over: (count, layer, total).</summary>
+    public static readonly List<(int Count, int Layer, int Total)> HandoverByCount = [];
+
     /// <summary>The cycle count each layer was given, for `sinecheck`.</summary>
     public static readonly List<(int Layer, int Cycles)> CyclePlan = [];
+
+    /// <summary>Layers that gave up on a cycle count and went wavy: (layer, long, short).</summary>
+    public static readonly List<(int Layer, int Long, int Short)> WavyLayers = [];
 
     /// <summary>
     /// Layers where tracking the wall below did NOT land on the requested cycle count, as
@@ -153,7 +169,29 @@ public static class PatternEffect
         int[]? cyclePlan = sineCycles
             ? PlanCycleCounts(toolpath, settings, settings.PatternSineCyclesPerLayer)
             : null;
+
+        // The wavelength the sine was running at where the taper took over, so the wavy
+        // ending can continue at that size rather than arriving at a different scale.
+        float handoverWavelength = 0f;
+        if (cyclePlan is not null)
+            for (int i = 0; i < cyclePlan.Length; i++)
+                if (cyclePlan[i] < 0)
+                {
+                    int from = Math.Clamp(-cyclePlan[i], 0, toolpath.Layers.Count - 1);
+                    float loop = 0f;
+                    foreach (var (cs, ce) in Chains(toolpath.Layers[from]))
+                    {
+                        float len = 0f;
+                        for (int k = cs; k < ce; k++)
+                            len += Vector3.Distance(toolpath.Layers[from].Moves[k].From,
+                                                    toolpath.Layers[from].Moves[k].To);
+                        if (len > loop) loop = len;
+                    }
+                    handoverWavelength = loop / MathF.Max(1, settings.PatternSineCyclesPerLayer);
+                    break;
+                }
         CyclePlan.Clear();
+        WavyLayers.Clear();
         if (sineCycles) ctx.Frequency = settings.PatternSineCyclesPerLayer;
 
         bool arcMode = sineCycles || settings.PatternMapping != PatternMappingMode.Radial;
@@ -196,8 +234,48 @@ public static class PatternEffect
             // layer below it put together.
             if (sineCycles)
             {
-                ctx.Frequency = cyclePlan![layerOrdinal];
-                CyclePlan.Add((layer.Index, cyclePlan[layerOrdinal]));
+
+                // Once the count the layer can carry has fallen to a quarter of what was
+                // asked for, the pattern has stopped being the pattern anyway — holding the
+                // pretence just means a coarse sine that reads as a different object bolted
+                // on. Past that, stop counting cycles and simply be wavy: two wave lengths
+                // set from the bead rather than from a count, added together so it does not
+                // read as one repeating thing, each closing on the loop so the seam still
+                // meets. It sells the ending instead of arguing with it.
+                ctx.WavyLong = ctx.WavyShort = 0;
+                int planned = cyclePlan[layerOrdinal];
+                if (planned < 0)
+                {
+                    int from = -planned;                       // layer the taper took over
+                    float loop = 0f;
+                    foreach (var (cs, ce) in Chains(layer))
+                    {
+                        float len = 0f;
+                        for (int k = cs; k < ce; k++)
+                            len += Vector3.Distance(layer.Moves[k].From, layer.Moves[k].To);
+                        if (len > loop) loop = len;
+                    }
+                    float bead = MathF.Max(1f, settings.BeadWidth);
+
+                    // Carry on at the size the sine was, so the changeover is a change of
+                    // character and not of scale — the eye forgives the first and not the
+                    // second. The wave only grows once the wall can no longer hold that size
+                    // against the bead.
+                    float wanted = MathF.Max(handoverWavelength, 2f * bead);
+                    int lng  = Math.Max(3, (int)MathF.Round(loop / wanted));
+                    int shrt = Math.Max(lng + 1, (int)MathF.Round(lng * 1.6f));
+                    if (shrt % lng == 0) shrt++;
+                    ctx.WavyLong = lng;
+                    ctx.WavyShort = shrt;
+                    ctx.Frequency = shrt;
+                    WavyLayers.Add((layer.Index, lng, shrt));
+                    CyclePlan.Add((layer.Index, -lng));
+                }
+                else
+                {
+                    ctx.Frequency = planned;
+                    CyclePlan.Add((layer.Index, planned));
+                }
 
                 // Both layers put phase 0 at the anchor, so where the count changes the two
                 // waves stay opposed AT the anchor and drift apart away from it — the one
@@ -660,7 +738,6 @@ public static class PatternEffect
         // Trigger only where the requested count stops working AND stays not working. A part
         // can lurch for a layer or two in the middle of an otherwise steady stretch, and
         // dropping on that would coarsen a large span of perfectly good wall for nothing.
-        const int Sustained = 25;
         int start = -1;
         for (int i = widest + 1; i < n; i++)
         {
@@ -677,38 +754,47 @@ public static class PatternEffect
             return plan;
         }
 
-        // Step down in a few gentle changes rather than one hard one.
-        //
-        // Going straight from the requested count to whatever the top needs is a change of
-        // several times over, and a pattern that suddenly gets five times coarser does not
-        // read as the same pattern tapering — it reads as a different object starting. Held
-        // to about a quarter at a time, each change is small enough to pass as the part
-        // narrowing, and each is made only where the wall actually stops supporting the count
-        // it is on, so they space themselves out along the taper instead of being dealt out
-        // on a schedule.
-        for (int i = 0; i < start; i++) plan[i] = requested;
+        // Hold on past the point the count strictly stops working. The wall does not fall
+        // apart the instant the phase budget is spent — it drifts, and drifting while still
+        // the pattern you asked for reads better than handing over early to something else.
+        // So wait out a share of what is left before changing anything.
+        start += (int)((n - start) * WavyHandoverDelay);
+        start = Math.Min(start, n - 1);
 
-        int current = requested;
-        for (int i = start; i < n; i++)
+        // What a different requested count would buy: a smaller one spends its phase budget
+        // more slowly and so carries further up the part. Recorded so the answer can be read
+        // off rather than guessed at.
+        HandoverByCount.Clear();
+        foreach (int candidate in new[] { 250, 200, 175, 150, 125, 100, 75, 50 })
         {
-            if (ceiling[i] < current)
+            int where = n;
+            for (int i = widest + 1; i < n; i++)
             {
-                int floorCount = Math.Max(4, (int)(current * (1f - MaxStepFraction)));
-                int target     = Math.Max(floorCount, ceiling[i]);
-
-                // Within what this step allows, prefer the count sharing the most structure
-                // with the one being left: the two waves then beat evenly around the loop
-                // rather than in a few lumps.
-                int next = target, bestFactor = Gcd(current, target);
-                for (int r = target; r >= Math.Max(4, (int)(target * 0.85f)); r--)
+                if (smooth[i] <= 1f) continue;
+                float ch = MathF.Abs(smooth[i] - smooth[i - 1]) / smooth[i];
+                if (i + 1 < n) ch = MathF.Max(ch, MathF.Abs(smooth[i + 1] - smooth[i]) / smooth[i]);
+                int steadyHere = ch > 1e-6f ? (int)(MaxPhaseErrorTurns / ch) : candidate;
+                if (steadyHere >= candidate) continue;
+                int run = 0;
+                for (int j = i; j < n; j++)
                 {
-                    int f = Gcd(current, r);
-                    if (f > bestFactor) { bestFactor = f; next = r; }
+                    float c2 = MathF.Abs(smooth[j] - smooth[j - 1]) / MathF.Max(1f, smooth[j]);
+                    int st2 = c2 > 1e-6f ? (int)(MaxPhaseErrorTurns / c2) : candidate;
+                    if (st2 >= candidate) break;
+                    run++;
                 }
-                current = Math.Max(4, Math.Min(next, current - 1));
+                if (run >= Sustained) { where = i; break; }
+                i += run;
             }
-            plan[i] = current;
+            HandoverByCount.Add((candidate, where, n));
         }
+
+        // One transition, not two. Stepping the count down and THEN switching to a wavy
+        // ending gave two visible changes on the part — the steps bursting through the start
+        // of the taper, then the switch later on. So the stepped sine goes: the requested
+        // count is held while the wall supports it, and where it stops, the wavy ending takes
+        // over directly. `start` is where that happens.
+        for (int i = 0; i < n; i++) plan[i] = i < start ? requested : -start;
         return plan;
     }
 
@@ -866,6 +952,15 @@ public static class PatternEffect
         public float Cx, Cy, ZMin, Height, Radius, CellMm;
         /// <summary>Half-cycle phase flip applied to Sine, alternating layer to layer.</summary>
         public float SinePhase;
+
+        /// <summary>
+        /// Past the point where an honest cycle count stops fitting the layer, the wave stops
+        /// being one sine and becomes two of different lengths added together. Both are pinned
+        /// to a size the nozzle can actually draw and both close on the loop, so it still meets
+        /// itself at the seam — but it no longer pretends to a cycle count that the geometry
+        /// cannot carry. Zero means the ordinary single sine.
+        /// </summary>
+        public int WavyLong, WavyShort;
         private (float theta, float z)[] _sunflower = [];
         private float _sunBumpR;
 
@@ -930,7 +1025,10 @@ public static class PatternEffect
 
         private float Value(float theta, float z) => Type switch
         {
-            PatternType.Sine      => MathF.Sin(theta * Frequency + SinePhase),
+            PatternType.Sine      => WavyLong > 0
+                ? 0.62f * MathF.Sin(theta * WavyLong  + SinePhase)
+                + 0.38f * MathF.Sin(theta * WavyShort + SinePhase * 0.5f)
+                : MathF.Sin(theta * Frequency + SinePhase),
             PatternType.Ripple    => MathF.Sin(z / Height * Frequency * TwoPi),
             PatternType.Guilloche => Guilloche(theta, z),
             PatternType.HWave     => HWave(theta, z),

@@ -1349,25 +1349,33 @@ public sealed class ConsoleCommandRegistry
                 var plan = MassiveSlicer.Core.Slicing.Effects.PatternEffect.CyclePlan;
                 if (plan.Count > 0)
                 {
-                    static int G(int a2, int b2) { while (b2 != 0) (a2, b2) = (b2, a2 % b2); return a2; }
-                    // The sequence of counts, and where each change happens.
-                    var steps = new List<(int Layer, int From, int To)>();
-                    for (int i = 1; i < plan.Count; i++)
-                        if (plan[i].Cycles != plan[i - 1].Cycles)
-                            steps.Add((plan[i].Layer, plan[i - 1].Cycles, plan[i].Cycles));
-                    if (steps.Count == 0)
-                        ctx.Log($"[sinecheck] cycle plan: {plan[0].Cycles} throughout, never reduced");
+                    int sineTo = plan.Count;
+                    for (int i = 0; i < plan.Count; i++)
+                        if (plan[i].Cycles < 0) { sineTo = i; break; }
+                    if (sineTo >= plan.Count)
+                        ctx.Log($"[sinecheck] cycle plan: {plan[0].Cycles} throughout, taper never took over");
                     else
-                    {
-                        ctx.Log($"[sinecheck] cycle plan: {plan[0].Cycles} held to layer {steps[0].Layer} "
-                              + $"({100.0 * steps[0].Layer / plan.Count:F0}% up), then {steps.Count} change(s):");
-                        foreach (var st in steps.Take(12))
-                            ctx.Log($"    layer {st.Layer,4} ({100.0 * st.Layer / plan.Count,3:F0}% up): "
-                                  + $"{st.From} -> {st.To}  ({100.0 * (st.From - st.To) / st.From:F0}% coarser, "
-                                  + $"beats {G(st.From, st.To)}x round the loop)");
-                        if (steps.Count > 12) ctx.Log($"    ... and {steps.Count - 12} more");
-                    }
+                        ctx.Log($"[sinecheck] cycle plan: {plan[0].Cycles} held to layer {plan[sineTo].Layer} "
+                              + $"({100.0 * sineTo / plan.Count:F0}% up), then the wavy ending — one change");
                 }
+
+                // What a different requested count would buy you, since a smaller one spends
+                // its phase budget slower and carries further up the part.
+                var byCount = MassiveSlicer.Core.Slicing.Effects.PatternEffect.HandoverByCount;
+                if (byCount.Count > 0)
+                {
+                    ctx.Log("[sinecheck] where each count would hand over to the wavy ending:");
+                    foreach (var (c, lyr, tot) in byCount)
+                        ctx.Log(lyr >= tot
+                            ? $"    {c,4} cycles: holds the whole part"
+                            : $"    {c,4} cycles: to layer {lyr,4} ({100.0 * lyr / tot,3:F0}% up)");
+                }
+
+                var wavy = MassiveSlicer.Core.Slicing.Effects.PatternEffect.WavyLayers;
+                if (wavy.Count > 0 && plan.Count > 0)
+                    ctx.Log($"[sinecheck] wavy ending on {wavy.Count} layer(s), from layer {wavy[0].Layer} "
+                          + $"({100.0 * wavy[0].Layer / plan.Count:F0}% up) — "
+                          + $"{wavy[0].Long}+{wavy[0].Short} waves there, {wavy[^1].Long}+{wavy[^1].Short} at the top");
 
                 // How steady the outline fit is. The wall changes smoothly, so the shift
                 // should too; jitter is the fit being noisy, and the wave multiplies it by
