@@ -1,4 +1,4 @@
-# MassiveSLICER verification map
+﻿# MassiveSLICER verification map
 
 Maintained recipes for driving MassiveSLICER through `control-massiveslicer.ps1` and LocalControlBridge. Read this index, then the matching feature file.
 
@@ -16,7 +16,7 @@ Maintained recipes for driving MassiveSLICER through `control-massiveslicer.ps1`
 - Prefer console command names from `command help` over UI coordinates.
 - Treat every helper invocation as literal.
 - Record the feature ID on every artifact path under `artifacts/<feature-id>/`.
-- HTTP `ok` after `POST /command` is not enough when the command opens a picker or starts async work — confirm console text.
+- HTTP `ok` after `POST /command` is not enough when the command opens a picker or starts async work â€” confirm console text.
 
 ## Proof and skip reporting
 
@@ -29,5 +29,6 @@ Maintained recipes for driving MassiveSLICER through `control-massiveslicer.ps1`
 - [Workspace new/open/save](./workspace.md)
 - [Import and slice](./import-and-slice.md)
 - [Viewport camera](./viewport-camera.md)
+- [Viewport overlays and display settings](./viewport-overlays.md)
 - [Screenshot bridge](./screenshot-bridge.md)
 - [Robot IK/FK simulation (scrub and reachability)](./ik-fk-scrub.md)

@@ -1,4 +1,4 @@
-# Viewport camera
+﻿# Viewport camera
 
 Camera console commands orbit, zoom, pan, and frame the scene without touching the robot.
 
@@ -31,3 +31,5 @@ Preconditions:
 - `cam-orbit` / `cam-zoom` / `cam-pan` are absolute sets, not relative deltas.
 - **`viewport-home` is not a camera command.** It resets viewport robot joints to the additive home preset. Do not use it for camera proof (see `ik-fk-scrub.md`).
 - GL viewport may look black in OS screenshots; prefer bridge `screenshot`, which composites the viewport.
+
+Visibility toggles (Grid / Bed grid / Axes) live in [viewport-overlays.md](./viewport-overlays.md) — Arctic shader hides Grid and Bed grid even when checked.

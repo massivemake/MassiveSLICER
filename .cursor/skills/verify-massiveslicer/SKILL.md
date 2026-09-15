@@ -79,3 +79,12 @@ powershell -NoProfile -File $ctrl screenshot -Path .cursor/skills/verify-massive
 Feature map: `features/README.md` (includes `ik-fk-scrub` for sim IK/FK).
 
 Safe starter proof for kinematics: see `features/ik-fk-scrub.md` — never `sync` / `move-*` in default verify.
+
+## Launch without Open File Security Warning
+
+Do **not** Start-Process the Release exe directly from `Z:\` (network zone warning). Prefer:
+
+1. Sync: `robocopy Z:\Research\LFAM\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows C:\Users\MassiveMAKE\Apps\MassiveSlicer.App /MIR`
+2. Start: `Start-Process C:\Users\MassiveMAKE\Apps\MassiveSlicer.App\MassiveSlicer.App.exe -WorkingDirectory Z:\Research\LFAM\MassiveSLICER`
+
+HKCU ZoneMap already maps `192.168.0.191` to Local Intranet for this user; local copy is still the reliable agent path.
