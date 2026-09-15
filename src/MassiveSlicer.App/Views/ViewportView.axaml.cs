@@ -2625,7 +2625,8 @@ public partial class ViewportView : UserControl
             liveDiameter: _bedDiameter,
             heatedMeshSize: TryHeatedBedMeshSize(),
             heatedBed: cell.HeatedBed,
-            heatedMeshAabb: TryHeatedBedMeshAabb());
+            heatedMeshAabb: TryHeatedBedMeshAabb(),
+            liveHeatedOrigin: TryLiveHeatedOrigin());
 
         var corner = new Vector3(spec.GridCorner.X, spec.GridCorner.Y, spec.GridCorner.Z);
         var datum  = new Vector3(spec.Datum.X, spec.Datum.Y, spec.Datum.Z);
@@ -2634,6 +2635,8 @@ public partial class ViewportView : UserControl
             _renderer.BedBoundaryModel = Matrix4.Identity;
         else
             _lastSyncE1 = double.NaN; // re-apply platter spin about the rotary centre next frame
+        if (spec.IsRectangular && BedBoundaryOverlay.IsHeatedPrintBase(baseIdx, cell.KrlBases, cell.Bed))
+            LogHeatedOverlay(spec);
         ApplyBaseBedGhosting();
     }
 
@@ -2679,6 +2682,30 @@ public partial class ViewportView : UserControl
         }
         if (max.X - min.X <= 1f || max.Y - min.Y <= 1f) return null;
         return (new Float3(min.X, min.Y, min.Z), new Float3(max.X, max.Y, max.Z));
+    }
+
+    /// <summary>HeatedBed wrapper translation. Null when the node is missing or still identity.</summary>
+    private Float3? TryLiveHeatedOrigin()
+    {
+        if (_heatedBedRoot is null) return null;
+        var t = _heatedBedRoot.WorldTransform.Row3;
+        if (MathF.Abs(t.X) + MathF.Abs(t.Y) + MathF.Abs(t.Z) <= 1f) return null;
+        return new Float3(t.X, t.Y, t.Z);
+    }
+
+    private void LogHeatedOverlay(BedBoundaryOverlaySpec spec)
+    {
+        var msg =
+            $"[bed] heated overlay source={spec.Source} " +
+            $"corner=({spec.GridCorner.X:F1}, {spec.GridCorner.Y:F1}, {spec.GridCorner.Z:F1}) " +
+            $"datum=({spec.Datum.X:F1}, {spec.Datum.Y:F1}, {spec.Datum.Z:F1}) " +
+            $"size={spec.Width:F0}x{spec.Depth:F0}";
+        System.Console.WriteLine(msg);
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel mvm)
+                mvm.Console.Log(msg);
+        });
     }
 
     private void RebuildFrameMatrices()
@@ -3468,6 +3495,8 @@ public partial class ViewportView : UserControl
             {
                 _cellGpuUploadPending = false;
                 System.Console.WriteLine("[cell] GPU upload complete");
+                // Heated AABB/picking data is valid only after upload; rebuild overlay now.
+                ApplyActiveBedBoundary();
             }
             return false;
         }
@@ -13546,6 +13575,7 @@ public partial class ViewportView : UserControl
             FlangeAttachment: null);
 
         CellEnvironmentBuilder.RefreshPlacements(payload);
+        ApplyActiveBedBoundary();
 
         if (_bedNode is not null && config.Bed is { } bed)
         {

@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-15** (BASE #6 grid on heated plate, not rotary)
+Last updated: **2026-09-15** (BASE #6 overlay: pose wins over bad AABB)
 
 ---
 
@@ -516,6 +516,13 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-15 — fefe94e live fail: AABB overrode heated pose
+
+- Symptom: SB101 after `fefe94e` — BASE #6 Preview, heated rectangle visible lower-left, cyan square still on the rotary. Console: `HeatedBed mesh loaded from cell.heatedBed`.
+- Cause: `ResolveHeatedOverlay` used mesh AABB first. A local/unposed or print-area AABB (or live 1800×1800 → `HeatedGridCorner` → `VisualGridCorner`) overrode `heatedBed.WorldOrigin`. Overlay was rectangular (not polar) but XY was rotary.
+- Fix: accept AABB only when its centre is on the heated pose (XY ≤ 1200 mm, Z ≤ 400 mm). Otherwise place from `heatedBed.WorldOrigin` (or live HeatedBed `WorldTransform.Row3`). Viewport logs `[bed] heated overlay source=aabb|heatedBed.WorldOrigin|fallback` with corner/datum XYZ. Rebuild after GPU upload. Shop `basePos`/`baseAbc` unchanged.
+- Key files: `BedBoundaryOverlay.cs`, `ViewportView.axaml.cs`, `BedBoundaryOverlayTest.cs`.
 
 ### 2026-09-15 — BASE #6 cyan grid was still on the rotary
 

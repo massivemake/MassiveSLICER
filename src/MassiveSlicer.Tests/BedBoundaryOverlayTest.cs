@@ -51,6 +51,7 @@ public class BedBoundaryOverlayTest
         Assert.Equal(1828.8f, spec.Diameter, 2);
         Assert.Equal(1800f, spec.Width, 1);
         Assert.Equal(1800f, spec.Depth, 1);
+        Assert.Equal("rotary/visual-grid", spec.Source);
     }
 
     [Fact]
@@ -66,6 +67,7 @@ public class BedBoundaryOverlayTest
         Assert.Equal(bed.GridOrigin.Value.Y, spec.GridCorner.Y, 2);
         Assert.Equal(bed.Origin.X, spec.Datum.X, 2);
         Assert.Equal(bed.Origin.Y, spec.Datum.Y, 2);
+        Assert.Equal("fallback", spec.Source);
     }
 
     [Fact]
@@ -182,6 +184,7 @@ public class BedBoundaryOverlayTest
         Assert.Equal(pose.Z, heated.Datum.Z, 2);
         Assert.NotEqual(cell.Bed.VisualGridCorner(cell.Robot.WorldPosition).X, heated.GridCorner.X, 0);
         Assert.NotEqual(cell.Bed.Origin.X, heated.Datum.X, 0);
+        Assert.Equal("heatedBed.WorldOrigin", heated.Source);
 
         var rotary = BedBoundaryOverlay.Resolve(
             cell.Bed, cell.Robot.WorldPosition, 2, cell.KrlBases, heatedBed: cell.HeatedBed);
@@ -212,6 +215,75 @@ public class BedBoundaryOverlayTest
         Assert.Equal(1065.37f - 900f, spec.GridCorner.X, 1);
         Assert.Equal(1515.7982f - 900f, spec.GridCorner.Y, 1);
         Assert.NotEqual(Lfam3Bed().GridOrigin!.Value.X, spec.GridCorner.X, 0);
+        Assert.Equal("heatedBed.WorldOrigin", spec.Source);
+    }
+
+    [Fact]
+    public void Live_heated_node_origin_places_rectangle_without_json()
+    {
+        var live = new Float3(1065.37f, 1515.7982f, 126.243f);
+        var spec = BedBoundaryOverlay.Resolve(
+            Lfam3Bed(), Robroot, 6, Lfam3Bases(),
+            liveWidth: 1800f, liveDepth: 1800f,
+            liveHeatedOrigin: live);
+
+        Assert.True(spec.IsRectangular);
+        Assert.Equal(live.X, spec.Datum.X, 2);
+        Assert.Equal(live.Y, spec.Datum.Y, 2);
+        Assert.Equal(live.Z, spec.Datum.Z, 2);
+        Assert.Equal(live.X - 900f, spec.GridCorner.X, 1);
+        Assert.Equal(live.Y - 900f, spec.GridCorner.Y, 1);
+        Assert.Equal("HeatedBed node", spec.Source);
+        Assert.NotEqual(Lfam3Bed().GridOrigin!.Value.X, spec.GridCorner.X, 0);
+    }
+
+    [Fact]
+    public void Rotary_like_aabb_does_not_override_heated_pose()
+    {
+        var heatedBed = new HeatedBedCellConfig
+        {
+            ModelPath = "assets/cells/LFAM3/lfam3_HeatedBed.glb",
+            BasePos = [1065.37f, 1515.7982f, -873.757f],
+            BaseAbc = [-0.087f, 0.11306581f, 0.093820065f],
+        };
+        var bed = Lfam3Bed();
+        // fefe94e SB101 miss: print-area / rotary AABB won first.
+        var rotaryMin = bed.GridOrigin!.Value;
+        var rotaryMax = new Float3(rotaryMin.X + 1800f, rotaryMin.Y + 1800f, rotaryMin.Z);
+        var spec = BedBoundaryOverlay.Resolve(
+            bed, Robroot, 6, Lfam3Bases(),
+            liveWidth: 1800f, liveDepth: 1800f,
+            heatedBed: heatedBed,
+            heatedMeshAabb: (rotaryMin, rotaryMax));
+
+        Assert.True(spec.IsRectangular);
+        Assert.Equal("heatedBed.WorldOrigin", spec.Source);
+        Assert.Equal(1065.37f, spec.Datum.X, 2);
+        Assert.Equal(1515.7982f, spec.Datum.Y, 2);
+        Assert.Equal(126.243f, spec.Datum.Z, 2);
+        Assert.True(MathF.Abs(spec.GridCorner.X - rotaryMin.X) > 200f);
+        Assert.True(MathF.Abs(spec.GridCorner.Y - rotaryMin.Y) > 200f);
+        Assert.True(MathF.Abs(spec.GridCorner.Z - rotaryMin.Z) > 200f);
+    }
+
+    [Fact]
+    public void Local_unposed_aabb_does_not_override_heated_pose()
+    {
+        var heatedBed = new HeatedBedCellConfig
+        {
+            ModelPath = "assets/cells/LFAM3/lfam3_HeatedBed.glb",
+            BasePos = [1065.37f, 1515.7982f, -873.757f],
+            BaseAbc = [-0.087f, 0.11306581f, 0.093820065f],
+        };
+        // Wrapper-local plate (~1830×1230 at offset ~505,232) with identity world matrix.
+        var spec = BedBoundaryOverlay.Resolve(
+            Lfam3Bed(), Robroot, 6, Lfam3Bases(),
+            heatedBed: heatedBed,
+            heatedMeshAabb: (new Float3(-410f, -383f, -10f), new Float3(1420f, 847f, 20f)));
+
+        Assert.Equal("heatedBed.WorldOrigin", spec.Source);
+        Assert.Equal(1065.37f, spec.Datum.X, 2);
+        Assert.Equal(1515.7982f, spec.Datum.Y, 2);
     }
 
     [Fact]
@@ -240,6 +312,7 @@ public class BedBoundaryOverlayTest
         Assert.Equal((min.X + max.X) * 0.5f, spec.Datum.X, 1);
         Assert.Equal((min.Y + max.Y) * 0.5f, spec.Datum.Y, 1);
         Assert.Equal(max.Z, spec.Datum.Z, 1);
+        Assert.Equal("aabb", spec.Source);
     }
 
     [Fact]
@@ -280,6 +353,7 @@ public class BedBoundaryOverlayTest
         Assert.True(MathF.Abs(spec.GridCorner.X - rotaryCorner.X) > 200f);
         Assert.True(MathF.Abs(spec.GridCorner.Y - rotaryCorner.Y) > 200f);
         Assert.True(MathF.Abs(spec.GridCorner.Z - rotaryCorner.Z) > 200f);
+        Assert.Equal("aabb", spec.Source);
     }
 
     static string? FindRepoRoot()
