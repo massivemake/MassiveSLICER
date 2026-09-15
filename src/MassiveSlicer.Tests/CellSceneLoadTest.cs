@@ -71,7 +71,12 @@ public class CellSceneLoadTest(ITestOutputHelper output)
         output.WriteLine($"BedHidden={cell.Bed.Hidden} RobotBase={payload.RobotBaseNode is not null} BedNode={payload.BedNode is not null} Env={payload.EnvironmentNodes.Count} meshes={meshes}");
 
         Assert.NotNull(payload.RobotBaseNode);
-        Assert.Null(payload.BedNode);
+        bool heatedAsset = cell.Bed.ModelPath is { } bedPath && AssetPaths.Exists(bedPath);
+        if (heatedAsset)
+        {
+            Assert.NotNull(payload.BedNode);
+            Assert.Equal("HeatedBed", payload.BedNode!.Name);
+        }
         Assert.True(payload.EnvironmentNodes.Any(n => n.Name == "RotaryBed"));
         Assert.True(meshes > 0);
     }

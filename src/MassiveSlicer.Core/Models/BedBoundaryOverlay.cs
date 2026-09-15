@@ -29,6 +29,13 @@ public static class BedBoundaryOverlay
     /// <summary>
     /// True when the active KRL base is the lower heated / rectangular bed.
     /// </summary>
+    /// <summary>
+    /// Print-area overlay is drawn whenever Bed grid is on, including Arctic / Preview / Body.
+    /// Only the 2D slice viewer suppresses it (and the world ground grid still skips Arctic).
+    /// </summary>
+    public static bool ShouldDrawOverlay(bool showBedGrid, bool slicePlaneViewerActive)
+        => showBedGrid && !slicePlaneViewerActive;
+
     public static bool IsHeatedPrintBase(
         int krlBaseIndex,
         IReadOnlyList<KrlBaseEntry>? bases,

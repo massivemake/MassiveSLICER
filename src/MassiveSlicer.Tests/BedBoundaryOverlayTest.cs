@@ -33,6 +33,14 @@ public class BedBoundaryOverlayTest
     ];
 
     [Fact]
+    public void Overlay_draws_in_arctic_preview_when_bed_grid_is_on()
+    {
+        Assert.True(BedBoundaryOverlay.ShouldDrawOverlay(showBedGrid: true, slicePlaneViewerActive: false));
+        Assert.False(BedBoundaryOverlay.ShouldDrawOverlay(showBedGrid: false, slicePlaneViewerActive: false));
+        Assert.False(BedBoundaryOverlay.ShouldDrawOverlay(showBedGrid: true, slicePlaneViewerActive: true));
+    }
+
+    [Fact]
     public void Rotary_base_keeps_polar_diameter()
     {
         var spec = BedBoundaryOverlay.Resolve(Lfam3Bed(), Robroot, 2, Lfam3Bases());

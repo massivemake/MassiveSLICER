@@ -253,6 +253,8 @@ public partial class ViewportView : UserControl
 
     // Rotary bed (E1): the bed mesh wrapper node + its centre, so E1 can spin it about the vertical axis.
     private SceneNode? _bedNode;
+    // Lower heated / flat bed on dual-bed cells (LFAM 3). Same instance as _bedNode when loaded.
+    private SceneNode? _heatedBedRoot;
     private Vector3    _bedOriginLocal;
     private Vector3    _bedBaseMarker;
     private Vector3    _bedGridCorner;
@@ -2258,12 +2260,7 @@ public partial class ViewportView : UserControl
                     float e1Rad = (float)(_bedRotationSign * e1Robot.E1 * Math.PI / 180.0);
                     var c = _bedOriginLocal;
 
-                    if (_bedNode is not null)
-                        _bedNode.LocalTransform =
-                            Matrix4.CreateRotationZ(e1Rad) *
-                            Matrix4.CreateTranslation(c.X, c.Y, c.Z);
-
-                    // Lower heated bed is world-fixed; only the rotary platter spins with E1.
+                    // Heated bed mesh stays world-fixed. Overlay follows E1 only on a rotary base.
                     _renderer.BedBoundaryModel = ActiveBedOverlayIsHeated()
                         ? Matrix4.Identity
                         : Matrix4.CreateTranslation(-c.X, -c.Y, -c.Z) *
@@ -2635,6 +2632,22 @@ public partial class ViewportView : UserControl
             _renderer.BedBoundaryModel = Matrix4.Identity;
         else
             _lastSyncE1 = double.NaN; // re-apply platter spin about the rotary centre next frame
+        ApplyBaseBedGhosting();
+    }
+
+    /// <summary>
+    /// BASE #6: heated solid, rotary ghosted. Rotary base: rotary solid, heated ghosted.
+    /// </summary>
+    private void ApplyBaseBedGhosting()
+    {
+        var heated = _heatedBedRoot;
+        if (heated is null || _rotaryBedRoot is null)
+        {
+            BaseBedGhosting.SetGhost(_bedNode, ghost: false);
+            return;
+        }
+
+        BaseBedGhosting.Apply(heated, _rotaryBedRoot, ActiveBedOverlayIsHeated());
     }
 
     private bool ActiveBedOverlayIsHeated()
@@ -3094,6 +3107,7 @@ public partial class ViewportView : UserControl
         _multiTools                 = null;
         _rotaryBedPivot             = null;
         _rotaryBedRoot              = null;
+        _heatedBedRoot              = null;
         _robotBaseNode              = null;
         _collisionWorld             = null;
         _robotRail                  = null;
@@ -3171,8 +3185,9 @@ public partial class ViewportView : UserControl
         EnqueueCellGpuUpload(swap.BoosterNode);
         EnqueueCellGpuUpload(swap.BedNode);
 
-        // Retain the bed wrapper so E1 can rotate it about the vertical axis through its centre.
+        // Flat / heated bed — world-fixed. Rotary E1 spin is on _rotaryBedRoot only.
         _bedNode        = swap.BedNode;
+        _heatedBedRoot  = swap.Config.RotaryBed is not null ? swap.BedNode : null;
         var meshOrigin  = b.VisualMeshOrigin(rpBed);
         _bedOriginLocal = new Vector3(meshOrigin.X, meshOrigin.Y, meshOrigin.Z);
         if (_bedNode is not null)
@@ -3214,11 +3229,12 @@ public partial class ViewportView : UserControl
         }
         if (swap.BedNode is { } bedNode)
         {
-            cellEnvOutliner.Add((bedNode, "Print Bed"));
+            cellEnvOutliner.Add((bedNode, bedNode.Name == "HeatedBed" ? "Heated Bed" : "Print Bed"));
             RegisterLfamInfrastructure(bedNode);
         }
 
         RegisterLfamInfrastructure(rotaryPivot, _rotaryBedRoot);
+        ApplyBaseBedGhosting();
 
         Dispatcher.UIThread.Post(() =>
         {
@@ -3372,8 +3388,7 @@ public partial class ViewportView : UserControl
         foreach (var n in root.SelfAndDescendantsForRender())
         {
             if (n.PendingMesh is not { } data) continue;
-            n.Mesh        = GpuMeshCache.Acquire(data);
-            n.PendingMesh = null;
+            BindUploadedMesh(n, data);
         }
     }
 
@@ -3383,9 +3398,16 @@ public partial class ViewportView : UserControl
         {
             if (n.PendingMesh is not { } data) continue;
             if (!IsInVisibleSubtree(n)) continue;
-            n.Mesh        = GpuMeshCache.Acquire(data);
-            n.PendingMesh = null;
+            BindUploadedMesh(n, data);
         }
+    }
+
+    private static void BindUploadedMesh(SceneNode n, MeshData data)
+    {
+        n.Mesh        = GpuMeshCache.Acquire(data);
+        n.PendingMesh = null;
+        if (n.Mesh is { } mesh && BaseBedGhosting.IsGhosted(n))
+            mesh.GhostOpacity = BaseBedGhosting.GhostOpacity;
     }
 
     private void EnqueueCellGpuUpload(SceneNode? root)
@@ -3429,8 +3451,7 @@ public partial class ViewportView : UserControl
         {
             var n = _cellGpuUploadQueue.Dequeue();
             if (n.PendingMesh is not { } data) continue;
-            n.Mesh        = GpuMeshCache.Acquire(data);
-            n.PendingMesh = null;
+            BindUploadedMesh(n, data);
             uploaded++;
         }
 

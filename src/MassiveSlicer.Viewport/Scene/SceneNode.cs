@@ -64,6 +64,12 @@ public sealed class SceneNode
     /// geometry and toolpaths inside the volume stay visible (e.g. effector range glow).</summary>
     public bool TranslucentPass { get; set; } = false;
 
+    /// <summary>
+    /// Inactive print bed on a dual-bed cell (heated vs rotary). Drawn translucent;
+    /// does not affect picking policy beyond <see cref="TranslucentPass"/>.
+    /// </summary>
+    public bool EnvironmentGhost { get; set; }
+
     /// <summary>Excluded from ray picking entirely (never steals clicks).</summary>
     public bool PickIgnore { get; set; } = false;
 

@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-15** (LFAM 3 BASE #6 heated-bed rectangular overlay)
+Last updated: **2026-09-15** (LFAM 3 heated bed load + Arctic overlay + base ghosting)
 
 ---
 
@@ -516,6 +516,14 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-15 — LFAM 3 heated bed mesh, Arctic grid, base ghosting
+
+- Symptom: Preview/Body (Arctic) hid the bed grid; LFAM 3 heated-bed mesh was missing; no solid/ghost swap on BASE #6.
+- Cause: `SceneRenderer` skipped the overlay when `ShaderMode.Arctic`. `bed.hidden: true` skipped `LFAM3Bed.glb`. `ApplyBaseBedGhosting` did not exist on Improved-Cell (not a regression from this PR — it was never loaded).
+- Fix: draw print-area overlay whenever Bed grid is on (Arctic included; 2D slice still skips). Load the flat bed mesh on dual-bed cells as `HeatedBed`. `BaseBedGhosting` + `ApplyBaseBedGhosting` on the same rebuild paths as the overlay: BASE #6 heated solid / rotary ghosted (α 0.25); rotary base the reverse. Arctic shader honors `uBaseColor.a`. Heated mesh is not spun with E1.
+- Size fallback unchanged: 1800×1800 from `bed.width/depth`.
+- Key files: `SceneRenderer.cs`, `MeshRenderer.cs`, `CellSceneLoader.cs`, `BaseBedGhosting.cs`, `ViewportView.axaml.cs`.
 
 ### 2026-09-15 — LFAM 3 BASE #6 heated-bed grid is rectangular
 

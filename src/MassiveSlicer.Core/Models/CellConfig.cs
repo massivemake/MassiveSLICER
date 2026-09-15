@@ -295,7 +295,10 @@ public sealed record BedCellConfig
     /// </summary>
     public float? RotationSign { get; init; }
 
-    /// <summary>When true the flat bed mesh is omitted (rotary bed replaces it).</summary>
+    /// <summary>
+    /// When true the flat bed is not the sole print surface (a rotary platter is).
+    /// The mesh is still loaded on dual-bed cells so BASE #6 can show the lower heated bed.
+    /// </summary>
     public bool Hidden { get; init; }
 
     /// <summary>LFAM 3-style circular turntable (imports centre on <see cref="Origin"/>).</summary>

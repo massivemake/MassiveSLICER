@@ -11,7 +11,7 @@ internal static class CellSceneCache
     private static readonly Dictionary<string, (long MtimeUtcTicks, CellSwapPayload Template)> _cache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Bump when stand prep / env build changes so cached cells rebuild.</summary>
-    private const int GeometryVersion = 14;
+    private const int GeometryVersion = 15;
 
     public static string CacheKey(string cellPath)
     {
