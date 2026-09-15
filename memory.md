@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-15** (stale robot-validation banner after clean pass)
+Last updated: **2026-09-15** (Send-to-Drive v2 pointer for large jobs)
 
 ---
 
@@ -485,6 +485,7 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 | Outliner | `OutlinerItemView.axaml`, `LeftPanelView.axaml`, `OutlinerItemViewModel.CanDelete` |
 | Screenshot | `AppScreenshotCapture.cs`, `MainWindow.CaptureAppScreenshotAsync` |
 | Tests | `CellSceneLoadTest.cs`, `GltfImportTest.cs`, `Lfam3LoadTest.cs`, `KrlToolpathHandlingTest.cs`, `KrlImportOutlinerTest.cs`, `PbrMaterialSettingsTest.cs`, `OutlinerCanDeleteTest.cs` |
+| MassiveDRIVE send | `MassiveDriveJobExporter.cs`, `MassiveDriveJobV2Writer.cs`, `MassiveDriveSegmentBinary.cs`, `MassiveDriveClient.cs`, `docs/massivedrive-job-v2.md` |
 
 ---
 
@@ -516,6 +517,12 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-15 — Send-to-Drive writes v2 job dir + pointer (not 1GB JSON)
+- Symptom: LFAM3 curtain Send was ~1GB v1 JSON over HTTP; Drive re-parsed for minutes.
+- Cause: `MassiveDriveJobExporter` + `POST /api/jobs/package` serialized every segment as pretty JSON.
+- Fix: large jobs write `massivedrive.job/v2` on the shared jobs disk (`manifest.json`, fixed-stride LE `segments.bin`, downsampled preview, summary) and POST `/api/jobs/package/pointer` (`job_id`, `name`, relative `root`, `sha256`). Small jobs (`<8000` segs / `<4MB`) keep v1 JSON. Prefs `MassiveDriveForceLegacyJson` is the escape hatch. UNC/share write failure stages locally and errors clearly (Samba user `massive`). `frames.tool` / `frames.base` (incl. heated BASE #6) unchanged.
+- Key files: `MassiveDriveJobExporter.cs`, `MassiveDriveSegmentBinary.cs`, `MassiveDriveJobV2Writer.cs`, `MassiveDriveJobV2.cs`, `MassiveDriveClient.cs`, `ViewportView.axaml.cs`, `CellConfig.cs`, `AppPreferences.cs`, `docs/massivedrive-job-v2.md`, LFAM3 `lfam3.json` (`massiveDriveJobsRoot`).
 
 ### 2026-09-15 — Stale robot-validation banner after a later clean pass
 

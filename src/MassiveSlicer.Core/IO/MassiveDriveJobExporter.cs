@@ -9,8 +9,9 @@ using MassiveSlicer.Core.Slicing.Effects;
 namespace MassiveSlicer.Core.IO;
 
 /// <summary>
-/// Export settings for MassiveDRIVE job packages (<c>massivedrive.job/v1</c>).
-/// Drive executes the path over RSI + ClearCore; no print KRL is loaded.
+/// Export settings for MassiveDRIVE job packages (<c>massivedrive.job/v1</c> JSON
+/// and <c>massivedrive.job/v2</c> on-disk). Drive executes the path over RSI +
+/// ClearCore; no print KRL is loaded.
 /// </summary>
 public sealed record MassiveDriveExportSettings
 {
@@ -71,7 +72,7 @@ public sealed record MassiveDriveExportSettings
 }
 
 /// <summary>
-/// Builds MassiveDRIVE job package JSON from a <see cref="Toolpath"/>.
+/// Builds MassiveDRIVE job packages from a <see cref="Toolpath"/>.
 /// </summary>
 public static class MassiveDriveJobExporter
 {
@@ -82,8 +83,8 @@ public static class MassiveDriveJobExporter
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    /// <summary>Export toolpath to a dictionary matching massivedrive.job/v1.</summary>
-    public static Dictionary<string, object?> ExportDict(Toolpath toolpath, MassiveDriveExportSettings s)
+    /// <summary>Export toolpath to typed segments + envelope (v1 JSON or v2 directory).</summary>
+    public static MassiveDriveJobBuild Export(Toolpath toolpath, MassiveDriveExportSettings s)
     {
         ArgumentNullException.ThrowIfNull(toolpath);
         ArgumentNullException.ThrowIfNull(s);
@@ -91,7 +92,7 @@ public static class MassiveDriveJobExporter
         if (!s.MillOrientation)
             toolpath = TravelMarkerPostProcessor.Apply(toolpath);
 
-        var segments = new List<Dictionary<string, object?>>();
+        var segments = new List<MassiveDriveSegment>();
         int i = 0;
         int prevLayer = -1;
         var rpmInputs = RpmInputs(s);
@@ -143,56 +144,47 @@ public static class MassiveDriveJobExporter
                 bool layerChange = move.IsLayerChange || (prevLayer >= 0 && layer.Index != prevLayer && kind == "print");
                 prevLayer = layer.Index;
 
-                // Pose: XYZ + KUKA ABC from surface normal (same math as KRL export / viewport)
-                var from = PoseDict(move.From, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
-                var to = PoseDict(move.To, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
+                var from = Pose(move.From, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
+                var to = Pose(move.To, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
 
-                var seg = new Dictionary<string, object?>
+                string? comment = null;
+                if (move.IsPreTravelStart && move.IsPostTravelEnd)
+                    comment = TravelMarkerPostProcessor.PreTravelStartComment + " " + TravelMarkerPostProcessor.PostTravelStartComment;
+                else if (move.IsPreTravelStart)
+                    comment = TravelMarkerPostProcessor.PreTravelStartComment;
+                else if (move.IsPostTravelEnd)
+                    comment = TravelMarkerPostProcessor.PostTravelStartComment;
+
+                int rpmPct = 0;
+                if (kind == "print" && !move.IsWipe && layerS is not null)
                 {
-                    ["i"] = i,
-                    ["kind"] = kind,
-                    ["layer"] = layer.Index,
-                    ["from"] = from,
-                    ["to"] = to,
-                    ["speed_mm_s"] = Math.Round(speed, 3),
-                    ["flow_scale"] = Math.Round(
+                    float rpm = ToolpathRpm.SteppedPercent(ToolpathRpm.MovePercent(move, layerS));
+                    if (rpm > 0f)
+                        rpmPct = (int)rpm;
+                }
+
+                segments.Add(new MassiveDriveSegment
+                {
+                    Index = i,
+                    Kind = kind,
+                    Layer = layer.Index,
+                    From = from,
+                    To = to,
+                    SpeedMmS = Math.Round(speed, 3),
+                    FlowScale = Math.Round(
                         (double)(move.IsWipe ? move.WipeRpmScale
                             : move.IsResumeRamp ? move.ResumeRpmScale
                             : move.PrintSpeedScale * Math.Max(0.05f, move.HeightScale)),
                         4),
-                };
-                if (kind == "travel")
-                    seg["reverse"] = s.TravelReverse && !s.MillOrientation && !move.IsZHop;
-                if (layerChange)
-                    seg["layer_change"] = true;
-                var segMeta = new Dictionary<string, object?>();
-                if (move.IsWipe)
-                    segMeta["wipe"] = true;
-                if (move.IsResumeRamp)
-                    segMeta["resume_ramp"] = true;
-                if (move.IsPreTravelStart)
-                    segMeta["pre_travel_start"] = true;
-                if (move.IsPostTravelEnd)
-                {
-                    segMeta["post_travel_start"] = true;
-                    segMeta["post_travel_end"] = true;
-                }
-                if (move.IsPreTravelStart && move.IsPostTravelEnd)
-                    segMeta["comment"] = TravelMarkerPostProcessor.PreTravelStartComment + " " + TravelMarkerPostProcessor.PostTravelStartComment;
-                else if (move.IsPreTravelStart)
-                    segMeta["comment"] = TravelMarkerPostProcessor.PreTravelStartComment;
-                else if (move.IsPostTravelEnd)
-                    segMeta["comment"] = TravelMarkerPostProcessor.PostTravelStartComment;
-                if (segMeta.Count > 0)
-                    seg["meta"] = segMeta;
-                if (kind == "print" && !move.IsWipe && layerS is not null)
-                {
-                    float rpmPct = ToolpathRpm.SteppedPercent(ToolpathRpm.MovePercent(move, layerS));
-                    if (rpmPct > 0f)
-                        seg["rpm_pct"] = (int)rpmPct;
-                }
-
-                segments.Add(seg);
+                    Reverse = kind == "travel" && s.TravelReverse && !s.MillOrientation && !move.IsZHop,
+                    LayerChange = layerChange,
+                    RpmPct = rpmPct,
+                    Wipe = move.IsWipe,
+                    ResumeRamp = move.IsResumeRamp,
+                    PreTravelStart = move.IsPreTravelStart,
+                    PostTravelEnd = move.IsPostTravelEnd,
+                    Comment = comment,
+                });
                 i++;
             }
         }
@@ -200,9 +192,6 @@ public static class MassiveDriveJobExporter
         if (segments.Count == 0)
             throw new InvalidOperationException("Toolpath has no exportable print/travel moves.");
 
-        // Slicer draws each move as its own line. Drive builds one polyline of
-        // consecutive poses, so a hop whose From is the last print's From (not To)
-        // draws a reverse along that edge — the "sloppy" MAKE on Cell 3D / path scrub.
         StitchContinuous(segments, s);
 
         var jobId = string.IsNullOrWhiteSpace(s.JobId)
@@ -271,30 +260,32 @@ public static class MassiveDriveJobExporter
         if (!s.AbsolutePath)
             meta["absolute"] = false;
 
-        var dict = new Dictionary<string, object?>
+        return new MassiveDriveJobBuild
         {
-            ["format"] = "massivedrive.job/v1",
-            ["cell_id"] = s.CellId,
-            ["job_id"] = jobId,
-            ["name"] = s.Name,
-            ["source"] = source,
-            ["units"] = new Dictionary<string, string>
+            JobId = jobId,
+            CellId = s.CellId,
+            Name = s.Name,
+            Segments = segments,
+            Source = source,
+            Defaults = defaults,
+            Frames = new Dictionary<string, int>
+            {
+                ["tool"] = s.Tool,
+                ["base"] = s.Base,
+            },
+            Meta = meta,
+            Units = new Dictionary<string, string>
             {
                 ["length"] = "mm",
                 ["speed"] = "mm/s",
                 ["angles"] = "deg",
             },
-            ["frames"] = new Dictionary<string, int>
-            {
-                ["tool"] = s.Tool,
-                ["base"] = s.Base,
-            },
-            ["defaults"] = defaults,
-            ["segments"] = segments,
-            ["meta"] = meta,
         };
-        return dict;
     }
+
+    /// <summary>Export toolpath to a dictionary matching massivedrive.job/v1.</summary>
+    public static Dictionary<string, object?> ExportDict(Toolpath toolpath, MassiveDriveExportSettings s)
+        => Export(toolpath, s).ToV1Dict();
 
     public static string ExportJson(Toolpath toolpath, MassiveDriveExportSettings s)
         => JsonSerializer.Serialize(ExportDict(toolpath, s), JsonOpts);
@@ -331,7 +322,7 @@ public static class MassiveDriveJobExporter
     /// Pose as {x,y,z,a,b,c} in print-bed BASE (same <see cref="KrlExporter.WorldToBase"/> as SRC).
     /// Drive adds meta.bed_origin for RSI / $POS_ACT. File Z is layer height (~3), not bed world (~919).
     /// </summary>
-    static Dictionary<string, double> PoseDict(
+    static MassiveDrivePose Pose(
         Vector3 p,
         Vector3 layerNormal,
         Vector3 moveNormal,
@@ -349,15 +340,13 @@ public static class MassiveDriveJobExporter
                 n, s.ToolheadOffsetA, s.ToolheadOffsetB, s.ToolheadOffsetC, tcpYawDeg);
 
         var basePt = ToBase(p, s);
-        return new Dictionary<string, double>
-        {
-            ["x"] = Math.Round(basePt.X, 3),
-            ["y"] = Math.Round(basePt.Y, 3),
-            ["z"] = Math.Round(basePt.Z, 3),
-            ["a"] = Math.Round(a, 3),
-            ["b"] = Math.Round(b, 3),
-            ["c"] = Math.Round(c, 3),
-        };
+        return new MassiveDrivePose(
+            Math.Round(basePt.X, 3),
+            Math.Round(basePt.Y, 3),
+            Math.Round(basePt.Z, 3),
+            Math.Round(a, 3),
+            Math.Round(b, 3),
+            Math.Round(c, 3));
     }
 
     static Vector3 ToBase(Vector3 stored, MassiveDriveExportSettings s)
@@ -383,19 +372,19 @@ public static class MassiveDriveJobExporter
     /// closing edge (MassiveDRIVE Issue 1).
     /// </summary>
     internal static void StitchContinuous(
-        List<Dictionary<string, object?>> segments, MassiveDriveExportSettings s)
+        List<MassiveDriveSegment> segments, MassiveDriveExportSettings s)
     {
         const float gapMm = 0.5f;
         if (segments.Count < 2) return;
 
-        var stitched = new List<Dictionary<string, object?>>(segments.Count + 8);
-        var prev = Xyz(segments[0]["from"]);
+        var stitched = new List<MassiveDriveSegment>(segments.Count + 8);
+        var prev = segments[0].From.Xyz;
         int i = 0;
         foreach (var seg in segments)
         {
-            var from = Xyz(seg["from"]);
-            var to = Xyz(seg["to"]);
-            var kind = seg["kind"] as string ?? "print";
+            var from = seg.From.Xyz;
+            var to = seg.To.Xyz;
+            var kind = seg.Kind;
             if (Dist(prev, from) > gapMm)
             {
                 if (kind == "travel" && IsVertical(from, to))
@@ -403,23 +392,21 @@ public static class MassiveDriveJobExporter
                     float dz = to.Z - from.Z;
                     from = prev;
                     to = new Vector3(prev.X, prev.Y, prev.Z + dz);
-                    SetXyz(seg, "from", from);
-                    SetXyz(seg, "to", to);
+                    seg.From = seg.From.WithXyz(from);
+                    seg.To = seg.To.WithXyz(to);
                 }
                 else if (kind == "travel")
                 {
                     from = prev;
-                    SetXyz(seg, "from", from);
+                    seg.From = seg.From.WithXyz(from);
                 }
-                else if (SegIsWipe(seg))
+                else if (seg.Wipe)
                 {
-                    // Wipe tagged at last print From. Translate onto live TCP —
-                    // do not insert a reverse travel along the closing edge.
                     var delta = to - from;
                     from = prev;
                     to = prev + delta;
-                    SetXyz(seg, "from", from);
-                    SetXyz(seg, "to", to);
+                    seg.From = seg.From.WithXyz(from);
+                    seg.To = seg.To.WithXyz(to);
                 }
                 else
                 {
@@ -428,38 +415,34 @@ public static class MassiveDriveJobExporter
                 }
             }
 
-            seg["i"] = i;
+            seg.Index = i;
             stitched.Add(seg);
             i++;
-            prev = Xyz(seg["to"]);
+            prev = seg.To.Xyz;
         }
 
         segments.Clear();
         segments.AddRange(stitched);
     }
 
-    static Dictionary<string, object?> MakeStitchTravel(
+    static MassiveDriveSegment MakeStitchTravel(
         Vector3 from,
         Vector3 to,
-        Dictionary<string, object?> next,
+        MassiveDriveSegment next,
         MassiveDriveExportSettings s,
         int i)
     {
-        var abcSrc = next["from"];
-        var hopFrom = CopyPose(abcSrc, from);
-        var hopTo = CopyPose(abcSrc, to);
-        var seg = new Dictionary<string, object?>
+        return new MassiveDriveSegment
         {
-            ["i"] = i,
-            ["kind"] = "travel",
-            ["layer"] = next.TryGetValue("layer", out var ly) ? ly : 0,
-            ["from"] = hopFrom,
-            ["to"] = hopTo,
-            ["speed_mm_s"] = Math.Round((double)s.TravelSpeedMmS, 3),
-            ["flow_scale"] = 0.0,
-            ["reverse"] = s.TravelReverse && !s.MillOrientation,
+            Index = i,
+            Kind = "travel",
+            Layer = next.Layer,
+            From = next.From.WithXyz(from),
+            To = next.From.WithXyz(to),
+            SpeedMmS = Math.Round((double)s.TravelSpeedMmS, 3),
+            FlowScale = 0.0,
+            Reverse = s.TravelReverse && !s.MillOrientation,
         };
-        return seg;
     }
 
     static bool IsVertical(Vector3 a, Vector3 b)
@@ -468,52 +451,5 @@ public static class MassiveDriveJobExporter
         return dx * dx + dy * dy < 0.25f && MathF.Abs(a.Z - b.Z) > 0.5f;
     }
 
-    static bool SegIsWipe(Dictionary<string, object?> seg)
-    {
-        if (string.Equals(seg.TryGetValue("kind", out var kind) ? kind as string : null,
-                "wipe", StringComparison.OrdinalIgnoreCase))
-            return true;
-        if (seg.TryGetValue("meta", out var raw) && raw is Dictionary<string, object?> meta
-            && meta.TryGetValue("wipe", out var w))
-        {
-            if (w is bool b) return b;
-            if (w is int n) return n != 0;
-        }
-        return false;
-    }
-
     static float Dist(Vector3 a, Vector3 b) => Vector3.Distance(a, b);
-
-    static Vector3 Xyz(object? pose)
-    {
-        if (pose is Dictionary<string, double> d)
-            return new Vector3((float)d["x"], (float)d["y"], (float)d["z"]);
-        throw new InvalidOperationException("segment pose is not a dict");
-    }
-
-    static void SetXyz(Dictionary<string, object?> seg, string key, Vector3 p)
-    {
-        var pose = CopyPose(seg[key], p);
-        seg[key] = pose;
-    }
-
-    static Dictionary<string, double> CopyPose(object? src, Vector3 p)
-    {
-        double a = 0, b = 90, c = 0;
-        if (src is Dictionary<string, double> d)
-        {
-            d.TryGetValue("a", out a);
-            d.TryGetValue("b", out b);
-            d.TryGetValue("c", out c);
-        }
-        return new Dictionary<string, double>
-        {
-            ["x"] = Math.Round(p.X, 3),
-            ["y"] = Math.Round(p.Y, 3),
-            ["z"] = Math.Round(p.Z, 3),
-            ["a"] = Math.Round(a, 3),
-            ["b"] = Math.Round(b, 3),
-            ["c"] = Math.Round(c, 3),
-        };
-    }
 }
