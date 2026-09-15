@@ -1349,24 +1349,23 @@ public sealed class ConsoleCommandRegistry
                 var plan = MassiveSlicer.Core.Slicing.Effects.PatternEffect.CyclePlan;
                 if (plan.Count > 0)
                 {
-                    static int G(int a2, int b2) { while (b2 != 0) (a2, b2) = (b2, a2 % b2); return a2; }
-                    // The sequence of counts, and where each change happens.
-                    var steps = new List<(int Layer, int From, int To)>();
+                    int held = plan[0].Cycles;
+                    int startsAt = plan.Count;
+                    for (int i = 1; i < plan.Count; i++)
+                        if (plan[i].Cycles != held) { startsAt = i; break; }
+                    int changes = 0, biggest = 0;
                     for (int i = 1; i < plan.Count; i++)
                         if (plan[i].Cycles != plan[i - 1].Cycles)
-                            steps.Add((plan[i].Layer, plan[i - 1].Cycles, plan[i].Cycles));
-                    if (steps.Count == 0)
-                        ctx.Log($"[sinecheck] cycle plan: {plan[0].Cycles} throughout, never reduced");
+                        {
+                            changes++;
+                            biggest = Math.Max(biggest, Math.Abs(plan[i - 1].Cycles - plan[i].Cycles));
+                        }
+                    if (startsAt >= plan.Count)
+                        ctx.Log($"[sinecheck] cycle plan: {held} throughout, never reduced");
                     else
-                    {
-                        ctx.Log($"[sinecheck] cycle plan: {plan[0].Cycles} held to layer {steps[0].Layer} "
-                              + $"({100.0 * steps[0].Layer / plan.Count:F0}% up), then {steps.Count} change(s):");
-                        foreach (var st in steps.Take(12))
-                            ctx.Log($"    layer {st.Layer,4} ({100.0 * st.Layer / plan.Count,3:F0}% up): "
-                                  + $"{st.From} -> {st.To}  ({100.0 * (st.From - st.To) / st.From:F0}% coarser, "
-                                  + $"beats {G(st.From, st.To)}x round the loop)");
-                        if (steps.Count > 12) ctx.Log($"    ... and {steps.Count - 12} more");
-                    }
+                        ctx.Log($"[sinecheck] cycle plan: {held} held to layer {plan[startsAt].Layer} "
+                              + $"({100.0 * startsAt / plan.Count:F0}% up), then sheds with the taper to "
+                              + $"{plan[^1].Cycles} — {changes} change(s), never more than {biggest} at once");
                 }
 
                 // How steady the outline fit is. The wall changes smoothly, so the shift

@@ -65,7 +65,19 @@ public static class PatternEffect
     /// leaving. A quarter still reads as the part narrowing; going several times over in one
     /// layer reads as a different pattern starting, however well it lines up.
     /// </summary>
-    private const float MaxStepFraction = 0.25f;
+    /// <summary>
+    /// How much of what is left above the strict limit to keep the requested count for
+    /// anyway. The limit is cautious — the wall drifts rather than breaking the moment the
+    /// phase budget is spent.
+    /// </summary>
+    private const float HandoverDelay = 0.5f;
+
+    /// <summary>
+    /// The fewest layers a cycle count is kept before it may change. Neighbours sharing a
+    /// count alternate cleanly; neighbours differing by even one lose it over half the loop.
+    /// So changes are gathered rather than dribbled out one layer at a time.
+    /// </summary>
+    private const int MinCountRun = 12;
 
     /// <summary>The cycle count each layer was given, for `sinecheck`.</summary>
     public static readonly List<(int Layer, int Cycles)> CyclePlan = [];
@@ -677,37 +689,50 @@ public static class PatternEffect
             return plan;
         }
 
-        // Step down in a few gentle changes rather than one hard one.
+        // Hold on past the strict limit before touching anything. The wall drifts rather
+        // than falling apart when the phase budget runs out, and drifting as the pattern you
+        // asked for beats changing to something else early.
+        start += (int)((n - start) * HandoverDelay);
+        start = Math.Min(start, n - 1);
+
+        // Then shed cycles in step with the shrinking, so the WAVELENGTH stays put.
         //
-        // Going straight from the requested count to whatever the top needs is a change of
-        // several times over, and a pattern that suddenly gets five times coarser does not
-        // read as the same pattern tapering — it reads as a different object starting. Held
-        // to about a quarter at a time, each change is small enough to pass as the part
-        // narrowing, and each is made only where the wall actually stops supporting the count
-        // it is on, so they space themselves out along the taper instead of being dealt out
-        // on a schedule.
-        for (int i = 0; i < start; i++) plan[i] = requested;
-
+        // The count was never the thing worth preserving — the size of a wave is what the eye
+        // reads. Holding the count while the loop shrinks squeezes the pattern finer until it
+        // cannot be drawn; holding the count and then stepping it down in stages makes the
+        // pattern visibly coarser in a way that reads as a different object. Shedding in
+        // proportion keeps every wave the same size it always was, all the way to the tip,
+        // and the count simply follows the geometry down.
+        //
+        // Counts stay whole so each layer still closes on itself, but they now change by one
+        // at a time and only when the loop has actually shrunk past the next whole wave — far
+        // below noticing.
+        // Shed in batches, not every layer.
+        //
+        // Two layers only alternate cleanly when they carry the SAME count. Where they differ
+        // by one, their waves start opposed at the anchor and slip apart all the way round,
+        // fully stacked by the far side — so a single cycle of difference costs alternation
+        // across half the circumference, not at one spot. Adjusting every layer therefore
+        // means no pair anywhere above the handover ever matches.
+        //
+        // Holding each count for a run of layers instead leaves most neighbours identical and
+        // cleanly opposed, and gathers the cost into one bigger change every so often. The
+        // wavelength wanders a few percent between changes, which nobody can see; losing the
+        // alternation everywhere is plainly visible.
+        float wavelength = smooth[start] / requested;
         int current = requested;
-        for (int i = start; i < n; i++)
+        int heldFor = 0;
+        for (int i = 0; i < n; i++)
         {
-            if (ceiling[i] < current)
+            if (i < start) { plan[i] = requested; continue; }
+            int fits = Math.Clamp((int)MathF.Round(smooth[i] / MathF.Max(1e-3f, wavelength)), 3, requested);
+            if (heldFor >= MinCountRun && fits != current)
             {
-                int floorCount = Math.Max(4, (int)(current * (1f - MaxStepFraction)));
-                int target     = Math.Max(floorCount, ceiling[i]);
-
-                // Within what this step allows, prefer the count sharing the most structure
-                // with the one being left: the two waves then beat evenly around the loop
-                // rather than in a few lumps.
-                int next = target, bestFactor = Gcd(current, target);
-                for (int r = target; r >= Math.Max(4, (int)(target * 0.85f)); r--)
-                {
-                    int f = Gcd(current, r);
-                    if (f > bestFactor) { bestFactor = f; next = r; }
-                }
-                current = Math.Max(4, Math.Min(next, current - 1));
+                current = fits;
+                heldFor = 0;
             }
             plan[i] = current;
+            heldFor++;
         }
         return plan;
     }
