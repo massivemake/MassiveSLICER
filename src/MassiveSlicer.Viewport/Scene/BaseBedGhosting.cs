@@ -36,4 +36,16 @@ public static class BaseBedGhosting
             if (cur.EnvironmentGhost) return true;
         return false;
     }
+
+    /// <summary>True when <paramref name="node"/> is the dual-bed heated plate (or under it).</summary>
+    public static bool IsHeatedBedSubtree(SceneNode node)
+    {
+        for (var cur = node; cur is not null; cur = cur.Parent)
+            if (cur.Name == "HeatedBed") return true;
+        return false;
+    }
+
+    /// <summary>Solid lower bed in Arctic — not the ghosted inactive plate.</summary>
+    public static bool IsSolidHeatedBed(SceneNode node)
+        => IsHeatedBedSubtree(node) && !IsGhosted(node);
 }

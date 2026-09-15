@@ -2660,8 +2660,8 @@ public partial class ViewportView : UserControl
     /// <summary>XY AABB of the loaded flat/heated bed mesh, when the cell actually spawned one.</summary>
     private (float Width, float Depth)? TryHeatedBedMeshSize()
     {
-        if (_bedNode is null) return null;
-        var (min, max) = ImportHelper.ComputeSubtreeAabb(_bedNode);
+        if (_heatedBedRoot is null) return null;
+        var (min, max) = ImportHelper.ComputeSubtreeAabb(_heatedBedRoot);
         float w = max.X - min.X;
         float d = max.Y - min.Y;
         return w > 1f && d > 1f ? (w, d) : null;
@@ -3185,9 +3185,10 @@ public partial class ViewportView : UserControl
         EnqueueCellGpuUpload(swap.BoosterNode);
         EnqueueCellGpuUpload(swap.BedNode);
 
-        // Flat / heated bed — world-fixed. Rotary E1 spin is on _rotaryBedRoot only.
+        // Print-area / grid bed (LFAM 1/2). LFAM 3 heated plate is the HeatedBed env node
+        // posed from cell.heatedBed basePos/baseAbc — do not apply bed.origin to it.
         _bedNode        = swap.BedNode;
-        _heatedBedRoot  = swap.Config.RotaryBed is not null ? swap.BedNode : null;
+        _heatedBedRoot  = null;
         var meshOrigin  = b.VisualMeshOrigin(rpBed);
         _bedOriginLocal = new Vector3(meshOrigin.X, meshOrigin.Y, meshOrigin.Z);
         if (_bedNode is not null)
@@ -3215,6 +3216,11 @@ public partial class ViewportView : UserControl
                 _rotaryBedRoot = env;   // so bed recentring can relocate the turntable to match
                 UploadVisiblePendingMeshes(env);
             }
+            else if (env.Name == "HeatedBed")
+            {
+                _heatedBedRoot = env;
+                UploadVisiblePendingMeshes(env);
+            }
             else
                 EnqueueCellGpuUpload(env);
         }
@@ -3229,8 +3235,13 @@ public partial class ViewportView : UserControl
         }
         if (swap.BedNode is { } bedNode)
         {
-            cellEnvOutliner.Add((bedNode, bedNode.Name == "HeatedBed" ? "Heated Bed" : "Print Bed"));
+            cellEnvOutliner.Add((bedNode, "Print Bed"));
             RegisterLfamInfrastructure(bedNode);
+        }
+        if (_heatedBedRoot is { } heatedNode)
+        {
+            cellEnvOutliner.Add((heatedNode, "Heated Bed"));
+            RegisterLfamInfrastructure(heatedNode);
         }
 
         RegisterLfamInfrastructure(rotaryPivot, _rotaryBedRoot);
@@ -13354,6 +13365,8 @@ public partial class ViewportView : UserControl
         {
             if (env.Name == "RotaryBed")
                 _devNodeKinds[env] = ("rotary", null);
+            if (env.Name == "HeatedBed")
+                _devNodeKinds[env] = ("heated", null);
         }
         if (_multiTools is not null)
         {
@@ -13501,7 +13514,7 @@ public partial class ViewportView : UserControl
         if (vm.ActiveCell is not { } config) return;
 
         var envNodes = _renderer.SceneRoot.Children
-            .Where(n => n.Name is "Extruder Stand" or "Scanner Stand" or "Spindle Stand" or "RotaryBed")
+            .Where(n => n.Name is "Extruder Stand" or "Scanner Stand" or "Spindle Stand" or "RotaryBed" or "HeatedBed")
             .ToList();
 
         var payload = new CellSwapPayload(

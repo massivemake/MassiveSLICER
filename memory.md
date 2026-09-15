@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-15** (LFAM 3 heated bed load + Arctic overlay + base ghosting)
+Last updated: **2026-09-15** (LFAM 3 heatedBed from shop Release pose)
 
 ---
 
@@ -516,6 +516,13 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-15 — Shop heatedBed restore (do not load LFAM3Bed.glb)
+
+- Symptom: BASE #6 Preview showed square grid + ghosted rotary, but the solid heated plate was missing / wrong scale and orientation.
+- Cause: PR loaded hidden `bed.modelPath` (`LFAM3Bed.glb`, print-area/grid) as `HeatedBed` and posed it from `bed.origin`. Shop Release already has a dedicated `heatedBed` block + `lfam3_HeatedBed.glb` posed with `basePos`/`baseAbc` (same KUKA convention as rotary). Git assets had no `heatedBed` block.
+- Fix: revert hidden-flat-bed load. `CellEnvironmentBuilder` loads `cell.heatedBed` into env node `HeatedBed` via `KukaAbc(baseAbc) * Translate(ROBROOT + basePos)`. Overlay / Arctic grid / BASE #6 ghosting unchanged. Shop numbers synced into all four `lfam3.json` copies.
+- Key files: `CellConfig.cs` (`HeatedBedCellConfig`), `CellEnvironmentBuilder.cs`, `CellSceneLoader.cs`, `ViewportView.axaml.cs`, `assets/cells/LFAM3/lfam3.json` (+ source mirrors), `lfam3_HeatedBed.glb`.
 
 ### 2026-09-15 — LFAM 3 heated bed mesh, Arctic grid, base ghosting
 

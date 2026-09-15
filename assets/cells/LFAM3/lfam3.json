@@ -178,6 +178,21 @@
     "machineDefIndex": 2,
     "orientationOffsetDeg": -0.99
   },
+  "heatedBed": {
+    "name": "HEATED-BED",
+    "modelPath": "assets/cells/LFAM3/lfam3_HeatedBed.glb",
+    "krlBaseIndex": 6,
+    "basePos": [
+      1065.37,
+      1515.7982,
+      -873.757
+    ],
+    "baseAbc": [
+      -0.087,
+      0.11306581,
+      0.093820065
+    ]
+  },
   "tools": [
     {
       "name": "Extruder",

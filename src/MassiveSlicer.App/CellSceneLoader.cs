@@ -97,11 +97,11 @@ internal static class CellSceneLoader
         var environment = CellEnvironmentBuilder.Build(cell);
 
         SceneNode? bedNode = null;
-        if (cell.Bed.ModelPath is { } bedPath && !AssetPaths.Exists(bedPath))
+        if (cell.Bed.Hidden)
+            System.Console.WriteLine($"[cell] {cell.Name}: flat bed mesh hidden (rotary bed or grid only).");
+        else if (cell.Bed.ModelPath is { } bedPath && !AssetPaths.Exists(bedPath))
             System.Console.Error.WriteLine($"[cell] bed model missing: {bedPath}");
-        // Dual-bed cells (LFAM 3) keep Hidden=true so the rotary platter is the default
-        // print surface, but the flat mesh is still the lower heated bed and must load.
-        if (cell.Bed.ModelPath is { } bedPath2 && AssetPaths.Exists(bedPath2))
+        if (!cell.Bed.Hidden && cell.Bed.ModelPath is { } bedPath2 && AssetPaths.Exists(bedPath2))
         {
             try
             {
@@ -111,10 +111,9 @@ internal static class CellSceneLoader
                     ? GltfLoader.Load(resolved)
                     : StlLoader.Load(resolved, $"{cell.Name}_Bed");
                 var o       = cell.Bed.VisualMeshOrigin(cell.Robot.WorldPosition);
-                bool dualBed = cell.RotaryBed is not null;
                 var wrapper = new SceneNode
                 {
-                    Name           = dualBed ? "HeatedBed" : bed.Name + "_Root",
+                    Name           = bed.Name + "_Root",
                     LocalTransform = Matrix4.CreateTranslation(o.X, o.Y, o.Z),
                     Selectable     = false,
                 };
@@ -122,13 +121,9 @@ internal static class CellSceneLoader
                 wrapper.MarkEnvironmentSubtree();
                 ApplyBedMaterialTint(wrapper);
                 bedNode = wrapper;
-                if (cell.Bed.Hidden)
-                    System.Console.WriteLine($"[cell] {cell.Name}: loaded hidden flat bed as HeatedBed (dual-bed ghosting).");
             }
             catch { /* non-critical */ }
         }
-        else if (cell.Bed.Hidden)
-            System.Console.WriteLine($"[cell] {cell.Name}: flat bed mesh hidden (rotary bed or grid only).");
 
         ct.ThrowIfCancellationRequested();
 

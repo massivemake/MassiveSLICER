@@ -32,6 +32,12 @@ public sealed record CellConfig
     /// <summary>Rotary positioner bed (LFAM 3). Null = flat bed only.</summary>
     public RotaryBedCellConfig? RotaryBed { get; init; }
 
+    /// <summary>
+    /// Lower heated plate (LFAM 3 BASE #6). Posed with <c>basePos</c>/<c>baseAbc</c>
+    /// like the rotary env mesh — not <see cref="BedCellConfig.Origin"/> / <c>bed.modelPath</c>.
+    /// </summary>
+    public HeatedBedCellConfig? HeatedBed { get; init; }
+
     /// <summary>Linear rail (LFAM 1 E1). Null = no rail translation in the viewport.</summary>
     public RobotRailCellConfig? RobotRail { get; init; }
 
@@ -296,8 +302,8 @@ public sealed record BedCellConfig
     public float? RotationSign { get; init; }
 
     /// <summary>
-    /// When true the flat bed is not the sole print surface (a rotary platter is).
-    /// The mesh is still loaded on dual-bed cells so BASE #6 can show the lower heated bed.
+    /// When true the print-area / grid bed mesh (<c>bed.modelPath</c>) is omitted.
+    /// LFAM 3's solid plate is <see cref="CellConfig.HeatedBed"/>, not this hidden grid bed.
     /// </summary>
     public bool Hidden { get; init; }
 
@@ -475,6 +481,19 @@ public sealed record RotaryBedCellConfig
     /// Future scans auto-compensate (they're placed by world pose); the mesh rotates to match them.
     /// </summary>
     public float OrientationOffsetDeg { get; init; } = DefaultOrientationOffsetDeg;
+}
+
+/// <summary>
+/// LFAM 3 lower heated plate. Shop Release poses this with KUKA <c>basePos</c>/<c>baseAbc</c>
+/// relative to ROBROOT — same convention as <see cref="RotaryBedCellConfig"/>.
+/// </summary>
+public sealed record HeatedBedCellConfig
+{
+    public string Name { get; init; } = "HEATED-BED";
+    public required string ModelPath { get; init; }
+    public int KrlBaseIndex { get; init; } = 6;
+    public float[] BasePos { get; init; } = [0f, 0f, 0f];
+    public float[] BaseAbc { get; init; } = [0f, 0f, 0f];
 }
 
 /// <summary>A named KUKA BASE_DATA entry exposed for dropdowns and KRL export.</summary>

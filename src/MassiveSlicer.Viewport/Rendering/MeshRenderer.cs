@@ -401,7 +401,7 @@ void main() {
                 vec3 dN = fwidth(Nm);
                 float crease = 1.0 - clamp(length(dN) * 9.0, 0.0, 0.50);
                 float cavity = 1.0 - clamp((1.0 - NdotL) * 0.35, 0.0, 0.18);
-                vec3 base = vec3(0.93, 0.93, 0.95);
+                vec3 base = max(uBaseColor.rgb, vec3(0.0));
                 vec3 lit = base * hemi * (0.82 + 0.18 * NdotL * uLightIntensity) * crease * cavity;
                 float h = max(vWorldPos.z - uFloorZ, 0.0);
                 float vertGround = exp(-h / 28.0);
