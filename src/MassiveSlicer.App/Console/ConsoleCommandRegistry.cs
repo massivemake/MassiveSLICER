@@ -2786,6 +2786,40 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "export-src",
+            Aliases = ["exportsrc", "export-krl"],
+            Description = "Write the active toolpath's .src into a folder — same writer as Export KRL, so it uses the active robot's KRL recipe",
+            Usage = "export-src <folder>",
+            Execute = (ctx, args) =>
+            {
+                var dir = args.Trim().Trim('"');
+                if (dir.Length == 0) { ctx.LogError("usage: export-src <folder>"); return; }
+                if (ctx.Main.Viewport.ExportKrlToDirectory is not { } export)
+                {
+                    ctx.LogError("[export-src] viewport not ready");
+                    return;
+                }
+                _ = Run();
+
+                async Task Run()
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(dir);
+                        var path = await export(dir, 1);
+                        if (path is null) ctx.LogError("[export-src] nothing written — slice something first");
+                        else ctx.Log($"[export-src] wrote {path} ({ctx.Main.RightPanel.Additive.KrlPostProcess.CellName} recipe)");
+                    }
+                    catch (Exception ex)
+                    {
+                        ctx.LogError($"[export-src] failed: {ex.Message}");
+                    }
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "origin",
             Aliases = ["pivot"],
             Description = "Inspect or move the selected part's pivot (the point the gizmo sits on)",
@@ -3140,7 +3174,7 @@ public sealed class ConsoleCommandRegistry
             Name = "krlpost",
             Aliases = ["krl-post", "krlpostprocess"],
             Description = "KRL post-processing: show state, import/export, Lab pull/publish, toggle Robot Mode / Travel Moves",
-            Usage = "krlpost | krlpost open | krlpost export <path> | krlpost import <path> | krlpost pull | krlpost publish | krlpost robot <on|off> | krlpost travel <on|off> | krlpost air <on|off> | krlpost urm <on|off> | krlpost apocvel <0-100> | krlpost reset <header|footer> | krlpost save-default <header|footer>",
+            Usage = "krlpost | krlpost cells | krlpost open | krlpost export <path> | krlpost import <path> | krlpost pull | krlpost publish | krlpost restore | krlpost robot <on|off> | krlpost travel <on|off> | krlpost air <on|off> | krlpost urm <on|off> | krlpost apocvel <0-100> | krlpost reset <header|footer> | krlpost save-default <header|footer>",
             Execute = (ctx, args) =>
             {
                 var add  = ctx.Main.RightPanel.Additive;
@@ -3149,6 +3183,7 @@ public sealed class ConsoleCommandRegistry
 
                 void Report()
                 {
+                    ctx.Log($"[krlpost] robot: {(post.CellName.Length > 0 ? post.CellName : "(no cell)")} — dialog title \"{post.DialogTitle}\"");
                     ctx.Log($"[krlpost] Robot Mode: {(add.RobotModeEnabled ? "ON" : "off")}");
                     ctx.Log($"[krlpost] Travel Moves (start/stop): {(add.TravelStartStopEnabled ? "ON" : "off")}");
                     ctx.Log($"[krlpost] Extruder Air (OUT[5]): {(add.ExtruderAirEnabled ? "ON" : "off")}");
@@ -3185,9 +3220,9 @@ public sealed class ConsoleCommandRegistry
                                 ctx.LogError($"[krlpost] import failed: {err}");
                                 break;
                             }
-                            post.LoadFrom(imported);
+                            post.LoadForCell(imported);
                             post.Save();
-                            ctx.Log($"[krlpost] imported {path}");
+                            ctx.Log($"[krlpost] imported {path} into {post.CellName}");
                             Report();
                         }
                         catch (Exception ex)
@@ -3203,6 +3238,31 @@ public sealed class ConsoleCommandRegistry
                     case "publish" or "lab-publish" or "push":
                         ctx.Log("[krlpost] publish started — connect MassiveLAB first if this no-ops");
                         _ = PublishKrlPostToLab(ctx, post);
+                        break;
+                    case "cells" or "robots":
+                    {
+                        var doc = KrlPostProcessLoader.Load();
+                        var names = KrlPostProcessCells.Names(doc);
+                        ctx.Log($"[krlpost] editing: {(post.CellName.Length > 0 ? post.CellName : "(no cell)")}");
+                        ctx.Log(names.Count == 0
+                            ? "[krlpost] local file has no per-robot recipes yet — every robot uses the shared recipe"
+                            : $"[krlpost] local per-robot recipes: {string.Join(", ", names)}");
+                        foreach (var name in names)
+                        {
+                            var r = KrlPostProcessCells.Find(doc, name)!;
+                            ctx.Log($"[krlpost]   {name}: header {r.HeaderText.Length} chars, footer {r.FooterText.Length} chars, " +
+                                    $"$APO.CVEL {r.ApoCvel?.ToString("0.##") ?? "-"}, ACC.CP line {(r.HeaderText.Contains("$ACC.CP") ? "yes" : "no")}");
+                        }
+                        ctx.Log($"[krlpost] shared recipe: header {doc.HeaderText.Length} chars (frozen fallback for robots without their own)");
+                        var parked = KrlPostProcessSectionBackup.Load();
+                        ctx.Log(parked.Count == 0
+                            ? "[krlpost] nothing parked (no robot recipes missing from the Lab)"
+                            : $"[krlpost] ⚠ parked (missing from Lab): {string.Join(", ", parked.Keys)} — `krlpost restore` republishes them");
+                        break;
+                    }
+                    case "restore":
+                        ctx.Log("[krlpost] restore started — connect MassiveLAB first if this no-ops");
+                        _ = RestoreKrlPostToLab(ctx);
                         break;
                     case "open":
                         ctx.Log(add.RequestOpenKrlPostProcess()
@@ -4189,12 +4249,25 @@ public sealed class ConsoleCommandRegistry
         try
         {
             post.Save();
-            var summary = await ctx.Main.Viewport.Erp.PublishKrlPostProcessAsync(post.ToSettings());
+            var summary = await ctx.Main.Viewport.Erp.PublishKrlPostProcessAsync(post.CellName, post.ToSettings());
             ctx.Log($"[krlpost] {summary}");
         }
         catch (Exception ex)
         {
             ctx.LogError($"[krlpost] publish failed: {ex.Message}");
+        }
+    }
+
+    static async Task RestoreKrlPostToLab(ConsoleCommandContext ctx)
+    {
+        try
+        {
+            var summary = await ctx.Main.Viewport.Erp.RestoreKrlMissingCellsAsync();
+            ctx.Log($"[krlpost] {summary}");
+        }
+        catch (Exception ex)
+        {
+            ctx.LogError($"[krlpost] restore failed: {ex.Message}");
         }
     }
 }

@@ -732,9 +732,16 @@ public sealed partial class ViewportViewModel : ViewModelBase
             if (value is not null)
                 RobotSmb.SetActiveCell(value.Name, value.BridgeIp);
             RebuildSendTargets();
+            ActiveCellChanged?.Invoke(value);
         }
     }
     private CellConfig? _activeCell;
+
+    /// <summary>
+    /// Raised on every <see cref="ActiveCell"/> assignment, including a reload of the same
+    /// cell's JSON. Listeners that only care about a robot switch compare the name.
+    /// </summary>
+    public event Action<CellConfig?>? ActiveCellChanged;
 
     /// <summary>Per-cell SMB credentials for direct Export-to-Robot uploads.</summary>
     public RobotSmbViewModel RobotSmb { get; } = new();

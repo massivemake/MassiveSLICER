@@ -175,6 +175,14 @@ public sealed class MainWindowViewModel : ViewModelBase
         RightPanel.Subtractive.DeleteBitFromErp = bit => Viewport.Erp.DeleteMillBitInBackground(bit);
         Viewport.Erp.PresetsLibraryChanged += ReloadPresetLibrariesFromDisk;
         Viewport.Erp.KrlPostProcessPulled += ApplyLabKrlPostProcess;
+        Viewport.Erp.KrlMissingCellsChanged += missing =>
+        {
+            RightPanel.Additive.KrlPostProcess.MissingLabCells = missing;
+            if (missing.Count > 0)
+                Console.LogError($"[krlpost] Lab KRL recipe is missing {string.Join(", ", missing)} — " +
+                                 "open KRL Post-Processing to restore from this PC.");
+        };
+        Viewport.ActiveCellChanged += OnActiveCellChangedForKrl;
         Toolbar.SetRecentWorkspaces(AppPreferences.RecentWorkspaces);
         Toolbar.OpenRecentRequested += (_, recentPath) =>
         {
@@ -261,7 +269,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         foreach (var preset in MaterialPresetsLoader.Load())
             RightPanel.Additive.MaterialPresets.Add(preset);
 
-        RightPanel.Additive.KrlPostProcess.LoadFrom(KrlPostProcessLoader.Load());
+        RightPanel.Additive.KrlPostProcess.LoadForCell(KrlPostProcessLoader.Load());
 
         if (AppPreferences.SelectedMaterialPresetName is { } savedPreset)
         {
@@ -295,7 +303,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         SyncViewportFromPrefs();
         // Factory / Lab recipe wins over machine prefs and .mass flags for KRL
         // Post-Processing (header, footer, Robot Mode, Travel Moves).
-        RightPanel.Additive.KrlPostProcess.LoadFrom(KrlPostProcessLoader.Load());
+        RightPanel.Additive.KrlPostProcess.LoadForCell(KrlPostProcessLoader.Load());
         PersistSettings();
         _lastCommittedPrefsJson = CapturePrefsJson();
 
@@ -4144,7 +4152,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         SyncViewportFromPrefs();
         // Settings-menu / Lab recipe owns KRL post-process — a .mass must not
         // restore stale Robot Mode / Travel Moves / header over it.
-        RightPanel.Additive.KrlPostProcess.LoadFrom(KrlPostProcessLoader.Load());
+        RightPanel.Additive.KrlPostProcess.LoadForCell(KrlPostProcessLoader.Load());
         if (doc.Settings.Mill is { } millSnap)
             Console.Log($"[workspace] Restored mill {millSnap.SelectedOperation} / {millSnap.AreaSelectTool}.");
         if (doc.UiSession?.XBracingShowHelper is bool showXHelper)
@@ -4294,10 +4302,31 @@ public sealed class MainWindowViewModel : ViewModelBase
         Console.Log("[erp] local preset + mill-tool libraries reloaded from ERP sync");
     }
 
-    /// <summary>Lab team default is the factory recipe — apply Rules + Header + Footer.</summary>
+    /// <summary>
+    /// A new active cell is a new robot: load its KRL recipe (Rules + Header + Footer).
+    /// A reload of the same cell's JSON changes nothing.
+    /// </summary>
+    private void OnActiveCellChangedForKrl(CellConfig? cell)
+    {
+        void Apply()
+        {
+            var post = RightPanel.Additive.KrlPostProcess;
+            if (!post.SetCell(cell?.Name, KrlPostProcessLoader.Load())) return;
+            Console.Log($"[krlpost] KRL Post-Processing now edits and exports the {post.CellName} recipe");
+            // During construction prefs are still being restored; the end of init persists.
+            if (_lastCommittedPrefsJson.Length == 0) return;
+            PersistSettings();
+            PreferencesLoader.Save(AppPreferences);
+        }
+
+        if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess()) Apply();
+        else Avalonia.Threading.Dispatcher.UIThread.Post(Apply);
+    }
+
+    /// <summary>Lab recipe document pulled — apply the active robot's Rules + Header + Footer.</summary>
     private void ApplyLabKrlPostProcess(KrlPostProcessSettings settings)
     {
-        RightPanel.Additive.KrlPostProcess.LoadFrom(settings);
+        RightPanel.Additive.KrlPostProcess.LoadForCell(settings);
         PersistSettings();
         PreferencesLoader.Save(AppPreferences);
         Console.Log("[erp] applied Lab KRL post-process default (Rules + Header + Footer)");
