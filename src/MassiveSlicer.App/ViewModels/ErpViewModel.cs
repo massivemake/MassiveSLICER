@@ -736,6 +736,24 @@ public sealed class ErpViewModel : ViewModelBase
     public string KrlPostProcessSyncStatus { get; private set; } = "";
 
     /// <summary>
+    /// Robots this PC had a KRL recipe for that the Lab no longer has — set by every pull.
+    /// Non-empty almost always means someone published from a build older than per-robot
+    /// recipes. Those robots export the shared recipe until restored.
+    /// </summary>
+    public IReadOnlyList<string> KrlMissingCells { get; private set; } = [];
+
+    /// <summary>Raised on the UI thread when <see cref="KrlMissingCells"/> changes.</summary>
+    public event Action<IReadOnlyList<string>>? KrlMissingCellsChanged;
+
+    private void SetKrlMissingCells(IReadOnlyList<string> missing)
+    {
+        if (missing.SequenceEqual(KrlMissingCells, StringComparer.OrdinalIgnoreCase)) return;
+        KrlMissingCells = missing;
+        OnPropertyChanged(nameof(KrlMissingCells));
+        KrlMissingCellsChanged?.Invoke(missing);
+    }
+
+    /// <summary>
     /// Last presets-sync summary (console + optional status). Empty until first connect attempt.
     /// </summary>
     public string PresetsSyncStatus { get; private set; } = "";
@@ -766,6 +784,7 @@ public sealed class ErpViewModel : ViewModelBase
                     PresetsLibraryChanged?.Invoke();
                 if (krl.Settings is { } recipe)
                     KrlPostProcessPulled?.Invoke(recipe);
+                SetKrlMissingCells(krl.MissingCells);
             });
         }
         catch (Exception ex)
@@ -836,6 +855,7 @@ public sealed class ErpViewModel : ViewModelBase
         {
             KrlPostProcessSyncStatus = krl.Summary;
             OnPropertyChanged(nameof(KrlPostProcessSyncStatus));
+            SetKrlMissingCells(krl.MissingCells);
         });
         return krl.Settings;
     }
@@ -853,23 +873,48 @@ public sealed class ErpViewModel : ViewModelBase
             OnPropertyChanged(nameof(KrlPostProcessSyncStatus));
             if (krl.Settings is { } recipe)
                 KrlPostProcessPulled?.Invoke(recipe);
+            SetKrlMissingCells(krl.MissingCells);
         });
         return krl.Summary;
     }
 
-    /// <summary>Publish the current recipe as the Lab team default.</summary>
-    public async Task<string> PublishKrlPostProcessAsync(KrlPostProcessSettings settings)
+    /// <summary>
+    /// Publish <paramref name="recipe"/> as <paramref name="cellName"/>'s Lab recipe. Other
+    /// robots' entries and the shared recipe on the Lab are left as they are.
+    /// </summary>
+    public async Task<string> PublishKrlPostProcessAsync(string cellName, KrlPostProcessSettings recipe)
     {
         var client = _client;
         if (client is null || !IsConnected)
             return "not connected to Lab";
-        var summary = await ErpKrlPostProcessSync.PublishAsync(client, settings, _log, CancellationToken.None);
+        if (string.IsNullOrWhiteSpace(cellName))
+            return "no active cell — not published";
+        var summary = await ErpKrlPostProcessSync.PublishCellAsync(
+            client, cellName, recipe, _log, CancellationToken.None);
+        PostKrlStatusAfterWrite(summary);
+        return summary;
+    }
+
+    /// <summary>Re-publish the robot recipes this PC parked when they vanished from the Lab.</summary>
+    public async Task<string> RestoreKrlMissingCellsAsync()
+    {
+        var client = _client;
+        if (client is null || !IsConnected)
+            return "not connected to Lab";
+        var summary = await ErpKrlPostProcessSync.RestoreMissingCellsAsync(client, _log, CancellationToken.None);
+        PostKrlStatusAfterWrite(summary);
+        return summary;
+    }
+
+    private void PostKrlStatusAfterWrite(string summary)
+    {
+        var missing = KrlPostProcessSectionBackup.StillMissing(KrlPostProcessLoader.Load());
         Post(() =>
         {
             KrlPostProcessSyncStatus = summary;
             OnPropertyChanged(nameof(KrlPostProcessSyncStatus));
+            SetKrlMissingCells(missing);
         });
-        return summary;
     }
 
     /// <summary>Fetches /pricing and caches it. Safe to call repeatedly.</summary>

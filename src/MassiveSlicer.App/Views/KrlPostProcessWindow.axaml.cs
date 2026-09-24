@@ -76,9 +76,10 @@ public partial class KrlPostProcessWindow : Window
                 vm.SyncStatus = $"import failed: {err}";
                 return;
             }
-            vm.LoadFrom(settings);
+            // A file exported from a per-robot document carries every robot; take this one's.
+            vm.LoadForCell(settings);
             vm.Save();
-            vm.SyncStatus = $"imported {files[0].Name} — Rules + Header + Footer applied";
+            vm.SyncStatus = $"imported {files[0].Name} into {vm.CellName} — Rules + Header + Footer applied";
         }
         catch (Exception ex)
         {
@@ -118,9 +119,21 @@ public partial class KrlPostProcessWindow : Window
             return;
         }
         vm.Save();
-        vm.SyncStatus = "publishing to Lab…";
-        var summary = await erp.PublishKrlPostProcessAsync(vm.ToSettings());
+        vm.SyncStatus = $"publishing {vm.CellName} to Lab…";
+        var summary = await erp.PublishKrlPostProcessAsync(vm.CellName, vm.ToSettings());
         vm.SyncStatus = summary;
+    }
+
+    private async void OnRestoreMissing(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not KrlPostProcessSettingsViewModel vm) return;
+        if (GetErp() is not { IsConnected: true } erp)
+        {
+            vm.SyncStatus = "not connected to Lab";
+            return;
+        }
+        vm.SyncStatus = "restoring robot recipes to Lab…";
+        vm.SyncStatus = await erp.RestoreKrlMissingCellsAsync();
     }
 
     ErpViewModel? GetErp()

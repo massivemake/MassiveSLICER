@@ -382,6 +382,67 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
         NotifyStartStopTimingChanged();
     }
 
+    private string _cellName = "";
+
+    /// <summary>
+    /// The robot this dialog edits and exports for, i.e. the active cell's name. Each robot
+    /// has its own complete recipe (<see cref="KrlPostProcessCells"/>).
+    /// </summary>
+    public string CellName
+    {
+        get => _cellName;
+        private set
+        {
+            if (!SetField(ref _cellName, value ?? "")) return;
+            OnPropertyChanged(nameof(DialogTitle));
+        }
+    }
+
+    /// <summary>"KRL Post-Processing — LFAM 1": always names the robot being edited.</summary>
+    public string DialogTitle => string.IsNullOrWhiteSpace(_cellName)
+        ? "KRL Post-Processing"
+        : $"KRL Post-Processing — {_cellName}";
+
+    /// <summary>Loads <see cref="CellName"/>'s recipe out of a whole document (file or Lab).</summary>
+    public void LoadForCell(KrlPostProcessSettings document)
+        => LoadFrom(KrlPostProcessCells.Resolve(document, _cellName));
+
+    /// <summary>
+    /// Switches the robot being edited and loads its recipe from <paramref name="document"/>.
+    /// Returns false and changes nothing when <paramref name="cellName"/> is already active,
+    /// so reloading the same cell's JSON does not clobber the live Rules.
+    /// </summary>
+    public bool SetCell(string? cellName, KrlPostProcessSettings document)
+    {
+        if (string.Equals(_cellName, cellName ?? "", StringComparison.OrdinalIgnoreCase)) return false;
+        CellName = cellName ?? "";
+        LoadForCell(document);
+        return true;
+    }
+
+    private IReadOnlyList<string> _missingLabCells = [];
+
+    /// <summary>Robots whose recipe vanished from the Lab (see <c>ErpViewModel.KrlMissingCells</c>).</summary>
+    public IReadOnlyList<string> MissingLabCells
+    {
+        get => _missingLabCells;
+        set
+        {
+            _missingLabCells = value ?? [];
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasMissingLabCells));
+            OnPropertyChanged(nameof(MissingLabCellsWarning));
+        }
+    }
+
+    public bool HasMissingLabCells => _missingLabCells.Count > 0;
+
+    public string MissingLabCellsWarning => HasMissingLabCells
+        ? $"The Lab has no recipe for {string.Join(", ", _missingLabCells)} any more — it was probably " +
+          "published from an older slicer build. Those robots export the shared recipe until restored. " +
+          "This PC still has its last copy of them."
+        : "";
+
     public KrlPostProcessSettings ToSettings()
     {
         var add = Owner;
@@ -413,5 +474,21 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
         };
     }
 
-    public void Save() => KrlPostProcessLoader.Save(ToSettings());
+    /// <summary>
+    /// Writes this robot's recipe into the local document. Other robots and the shared recipe
+    /// are kept as they are on disk.
+    /// </summary>
+    public void Save()
+    {
+        var document = KrlPostProcessLoader.Load();
+        if (string.IsNullOrWhiteSpace(_cellName))
+        {
+            // No cell yet (startup only): legacy single-recipe write, robot entries kept.
+            var shared = ToSettings();
+            shared.Cells = document.Cells;
+            KrlPostProcessLoader.Save(shared);
+            return;
+        }
+        KrlPostProcessLoader.Save(KrlPostProcessCells.WithCell(document, _cellName, ToSettings()));
+    }
 }

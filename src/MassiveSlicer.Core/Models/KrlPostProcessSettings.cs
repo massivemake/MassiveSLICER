@@ -42,4 +42,13 @@ public sealed class KrlPostProcessSettings
     public double? ResumeRampStartRpmPercent { get; set; }
     public double? ResumeRampDistanceMm { get; set; }
     public int? ResumeRampSteps { get; set; }
+
+    /// <summary>
+    /// Per-robot recipes, keyed by cell name ("LFAM 1"). Each entry is a complete recipe
+    /// (its own <see cref="Cells"/> is null). The top-level fields above are the shared
+    /// recipe: new builds leave it frozen and only use it for a robot with no entry yet,
+    /// while builds from before per-robot recipes ignore this map and read only the
+    /// top level. See <see cref="IO.KrlPostProcessCells"/>.
+    /// </summary>
+    public Dictionary<string, KrlPostProcessSettings>? Cells { get; set; }
 }

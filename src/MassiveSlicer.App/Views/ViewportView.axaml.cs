@@ -18338,7 +18338,7 @@ public partial class ViewportView : UserControl
         {
             var lab = await vm.Erp.TryRefreshKrlPostProcessAsync();
             if (lab is not null)
-                settings.KrlPostProcess.LoadFrom(lab);
+                settings.KrlPostProcess.LoadForCell(lab);
         }
         catch (Exception ex)
         {
@@ -18508,6 +18508,9 @@ public partial class ViewportView : UserControl
         AdditiveSettingsViewModel settings,
         string path)
     {
+        // The export's own cell decides the robot recipe, even if the active-cell hook
+        // has not caught up yet.
+        settings.KrlPostProcess.SetCell(cell.Name, KrlPostProcessLoader.Load());
         await RefreshKrlPostProcessRecipeAsync(vm, settings);
 
         var wt    = node.WorldTransform;
