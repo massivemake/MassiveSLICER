@@ -133,7 +133,7 @@ public sealed class AutoOrientSpinPlaceTest
     }
 
     [Fact]
-    public void Ranking_prefers_reach_then_margin_then_staying_put()
+    public void Ranking_without_a_bed_prefers_reach_then_margin_then_staying_put()
     {
         var here = new PlacementSearch.Candidate(0f, 0f, 0f);
         var far  = new PlacementSearch.Candidate(0f, 400f, 0f);
@@ -142,13 +142,52 @@ public sealed class AutoOrientSpinPlaceTest
         {
             (far,  new(0, 20.2f)),
             (here, new(1, 60f)),     // best margin but one sample out of reach: loses
-            (spun, new(0, 20.0f)),   // same margin (within 0.5°) as far, but no slide: wins
+            (spun, new(0, 20.0f)),   // comfortable like far, but no slide: wins
         };
-        list.Sort(PlacementSearch.Compare);
+        list.Sort(PlacementSearch.Ranking(Vector2.Zero, bedCenter: null));
         Assert.Equal(spun, list[0].c);
         Assert.Equal(far, list[1].c);
         Assert.Equal(here, list[2].c);
         Assert.Equal(-15f, PlacementSearch.Wrap(345f));
+    }
+
+    [Fact]
+    public void Ranking_keeps_the_part_centred_and_gives_up_edge_clearance_only_when_it_has_to()
+    {
+        // Part currently sits 600 mm right of the bed centre.
+        var pivot = new Vector2(600f, 0f);
+        var atEdge   = new PlacementSearch.Candidate(0f, 0f, 0f);        // where it is: 600 mm off centre
+        var centred  = new PlacementSearch.Candidate(30f, -600f, 0f);    // on the centre
+        var halfway  = new PlacementSearch.Candidate(0f, -300f, 0f);     // 300 mm off centre
+        var rank = PlacementSearch.Ranking(pivot, Vector2.Zero);
+
+        // Both comfortable: the centre wins even though the edge spot has far more room to spare.
+        var both = new List<(PlacementSearch.Candidate c, PlacementSearch.Score s)>
+        {
+            (atEdge,  new(0, 40f)),
+            (halfway, new(0, 12f)),
+            (centred, new(0, 6f)),
+        };
+        both.Sort(rank);
+        Assert.Equal([centred, halfway, atEdge], both.Select(t => t.c));
+
+        // The centre only works with a tight margin: a comfortable spot nearer the edge beats it.
+        var tight = new List<(PlacementSearch.Candidate c, PlacementSearch.Score s)>
+        {
+            (centred, new(0, 2f)),
+            (halfway, new(0, 9f)),
+        };
+        tight.Sort(rank);
+        Assert.Equal(halfway, tight[0].c);
+
+        // The centre cannot reach part of the print at all: never chosen over a spot that can.
+        var unreachable = new List<(PlacementSearch.Candidate c, PlacementSearch.Score s)>
+        {
+            (centred, new(3, 30f)),
+            (atEdge,  new(0, 5.5f)),
+        };
+        unreachable.Sort(rank);
+        Assert.Equal(atEdge, unreachable[0].c);
     }
 
     [Fact]

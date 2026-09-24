@@ -97,20 +97,48 @@ public static class PlacementSearch
     }
 
     /// <summary>
-    /// Ranking, best first: fewest unreachable samples, then the most room to spare, then the
-    /// smallest move from where the operator put the part (so an equally good pose never
-    /// drags the part across the bed for nothing).
+    /// Room to spare, in degrees, that counts as comfortable. Every candidate at or above it is
+    /// as good as any other on robot grounds, so the choice between them goes to the bed centre.
     /// </summary>
-    public static int Compare((Candidate c, Score s) a, (Candidate c, Score s) b)
+    public const float ComfortableMarginDeg = 5f;
+
+    /// <summary>
+    /// Ranking, best first. The shop prefers parts near the middle of the bed and gives up edge
+    /// clearance only when it has to, so:
+    /// fewest unreachable samples; then comfortable poses (≥ <see cref="ComfortableMarginDeg"/>)
+    /// ahead of tight ones; among comfortable poses, closest to the bed centre; then the most
+    /// room to spare; then the smallest move and the smallest turn.
+    /// </summary>
+    /// <param name="pivot">Spin centre (the footprint centre at the current pose), world XY.</param>
+    /// <param name="bedCenter">Bed centre, or null with no bed (then "closest" means least moved).</param>
+    public static Comparison<(Candidate c, Score s)> Ranking(Vector2 pivot, Vector2? bedCenter)
     {
-        int byReach = a.s.Unreachable.CompareTo(b.s.Unreachable);
-        if (byReach != 0) return byReach;
-        // Margins within half a degree are a tie — not worth moving the part for.
-        if (MathF.Abs(a.s.MarginDeg - b.s.MarginDeg) > 0.5f)
-            return b.s.MarginDeg.CompareTo(a.s.MarginDeg);
-        int bySlide = a.c.SlideMm.CompareTo(b.c.SlideMm);
-        if (bySlide != 0) return bySlide;
-        return MathF.Abs(Wrap(a.c.SpinDeg)).CompareTo(MathF.Abs(Wrap(b.c.SpinDeg)));
+        float OffCentre(Candidate c) => bedCenter is { } bc
+            ? Vector2.Distance(pivot + new Vector2(c.Dx, c.Dy), bc)
+            : c.SlideMm;
+
+        return (a, b) =>
+        {
+            int byReach = a.s.Unreachable.CompareTo(b.s.Unreachable);
+            if (byReach != 0) return byReach;
+
+            bool comfyA = a.s.MarginDeg >= ComfortableMarginDeg;
+            bool comfyB = b.s.MarginDeg >= ComfortableMarginDeg;
+            if (comfyA != comfyB) return comfyA ? -1 : 1;
+
+            // Within 10 mm is the same spot for this purpose.
+            float offA = OffCentre(a.c), offB = OffCentre(b.c);
+            if (comfyA && MathF.Abs(offA - offB) > 10f) return offA.CompareTo(offB);
+
+            // Margins within half a degree are a tie — not worth moving the part for.
+            if (MathF.Abs(a.s.MarginDeg - b.s.MarginDeg) > 0.5f)
+                return b.s.MarginDeg.CompareTo(a.s.MarginDeg);
+            if (MathF.Abs(offA - offB) > 10f) return offA.CompareTo(offB);
+
+            int bySlide = a.c.SlideMm.CompareTo(b.c.SlideMm);
+            if (bySlide != 0) return bySlide;
+            return MathF.Abs(Wrap(a.c.SpinDeg)).CompareTo(MathF.Abs(Wrap(b.c.SpinDeg)));
+        };
     }
 
     /// <summary>Spin wrapped to (-180, 180] so 345° reads as the 15° turn it is.</summary>

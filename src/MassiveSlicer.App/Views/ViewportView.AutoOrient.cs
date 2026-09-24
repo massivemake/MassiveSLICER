@@ -35,6 +35,13 @@ public partial class ViewportView
     private const int AutoOrientMaxFullSweeps = 4;
 
     /// <summary>
+    /// Set by the <c>auto-orient check</c> console command: the next run only full-checks the
+    /// part where it sits and moves nothing — for comparing auto-orient's verdict with live
+    /// validation on the identical pose.
+    /// </summary>
+    internal static bool AutoOrientCheckOnlyNext;
+
+    /// <summary>
     /// Auto Orient: finds a spot on the bed, and a spin about the vertical, where the robot can
     /// print every move with no unreachable move, no residual singularity and no predicted
     /// collision — then turns and slides the part there. It never tilts the part.
@@ -50,8 +57,9 @@ public partial class ViewportView
     /// move every bead rigidly. Three passes, each on fewer candidates:
     /// every candidate on a small sample of moves, the best few on a larger sample, then the
     /// full <see cref="ToolpathFeasibilityEvaluator"/> sweep — the same verdict live validation
-    /// gives — best first, until one passes. Ranking is fewest unreachable samples, then the most
-    /// room to spare (joint limits and wrist singularity), then the smallest move.
+    /// gives — best first, until one passes. Ranking is fewest unreachable samples, then the spot
+    /// closest to the bed centre among those with comfortable room to spare on the joints, so a part
+    /// only moves toward the edge when the middle does not work (<see cref="PlacementSearch.Ranking"/>).
     ///
     /// Rail: with E1 motion on, every candidate is planned with the same rail planner export
     /// uses, inside the rail's limits and travel allowance; with it off, the rail stays home.
@@ -158,13 +166,23 @@ public partial class ViewportView
             var cache = BuildScrubCache(toolpath);
             var (samples, footprint, pivot) = await Task.Run(
                 () => SamplePart(toolpath, cache, origin, wt, AutoOrientFineSamples));
-            var candidates = PlacementSearch.Generate(
-                footprint, pivot, bed, bedCenter, AutoOrientSpinStepDeg, AutoOrientGridPerAxis);
+            bool checkOnly = AutoOrientCheckOnlyNext;
+            AutoOrientCheckOnlyNext = false;
+            var candidates = checkOnly
+                ? [new PlacementSearch.Candidate(0f, 0f, 0f)]
+                : PlacementSearch.Generate(
+                    footprint, pivot, bed, bedCenter, AutoOrientSpinStepDeg, AutoOrientGridPerAxis);
+            if (checkOnly)
+                LogToConsole($"[orient] check only: {totalMoves:N0} moves, seed " +
+                             $"[{string.Join(", ", seed.Select(v => v.ToString("0.#")))}], E1 {(e1Motion ? $"on, home {homeE1:0.#}" : "off")}");
 
             var ctx = new PlacementPrescreen.Context(
                 solver, samples, offA, offB, offC, seed, joints, robroot,
                 e1Motion, cell?.RobotRail, homeWorld, homeE1,
                 (float)add.E1YPlusMm, (float)add.E1YMinusMm);
+
+            // Centre of the bed first: edge clearance is given up only when it has to be.
+            var rank = PlacementSearch.Ranking(pivot, bed is null ? null : bedCenter);
 
             // ── Pass 1: every candidate, a small sample ───────────────────────────────
             add.AutoOrientStatusDetail = $"Checking {candidates.Count} spins and spots…";
@@ -177,7 +195,7 @@ public partial class ViewportView
                     ctx, PlacementSearch.Transform(candidates[i], pivot), coarseStride));
                 return candidates.Select((c, i) => (c, s: scores[i])).ToList();
             });
-            coarse.Sort(PlacementSearch.Compare);
+            coarse.Sort(rank);
             add.AutoOrientProgressPercent = 35;
 
             // ── Pass 2: the best few, a larger sample ─────────────────────────────────
@@ -190,7 +208,7 @@ public partial class ViewportView
                     ctx, PlacementSearch.Transform(shortlist[i], pivot)));
                 return shortlist.Select((c, i) => (c, s: scores[i])).ToList();
             });
-            fine.Sort(PlacementSearch.Compare);
+            fine.Sort(rank);
             add.AutoOrientProgressPercent = 50;
             LogToConsole($"[orient] {candidates.Count} candidates, {samples.Length} sample moves; " +
                          $"best sampled: {Describe(fine[0].c, pivot)} margin {fine[0].s.MarginDeg:0.#}° " +
@@ -270,7 +288,8 @@ public partial class ViewportView
                 return;
             }
 
-            if (win.c.IsCurrentPose)
+            if (checkOnly) { }
+            else if (win.c.IsCurrentPose)
             {
                 SetSliceStatus(vm, $"Auto orient: the current placement is already the best spot — " +
                                    $"all {win.total:N0} moves reachable, no singularity, no predicted collision.");
@@ -287,6 +306,11 @@ public partial class ViewportView
                 // the exact path just checked, moved rigidly), undo covers both, and the robot
                 // check re-runs at the new spot instead of showing the old spot's verdict.
                 MirrorTypedTransformDelta(vm, node, before);
+                // Live validation treats ANY rail value on a move as program E1 (imported KRL) and
+                // stops re-planning — but it baked those values itself at the old spot. Clear them
+                // so it re-plans the rail for the new spot instead of judging it with the rail
+                // parked where the old spot needed it. Export always re-plans, so it is unaffected.
+                if (e1Motion) ClearPlannedE1(vm, node);
                 RecordTransformUndo(vm, node, before, node.LocalTransform, "Auto Orient");
                 vm.NotifyRenderNeeded();
                 OnTransformApplied(vm);
@@ -295,7 +319,9 @@ public partial class ViewportView
                                    "no singularity, no predicted collision.");
                 ScheduleClearSliceStatus(vm);
             }
-            LogToConsole($"[orient] chose {Describe(win.c, pivot)} after {candidates.Count} candidates " +
+            string offCentre = bed is null ? "" :
+                $", {NVec2.Distance(pivot + new NVec2(win.c.Dx, win.c.Dy), bedCenter):0} mm from bed centre";
+            LogToConsole($"[orient] chose {Describe(win.c, pivot)}{offCentre} after {candidates.Count} candidates " +
                          $"and {sweeps} full check(s)");
 
             elapsed.Stop();   // the time reported is the search, not this display hold
@@ -313,6 +339,19 @@ public partial class ViewportView
             add.IsAutoOrientRunning = false;
             LogToConsole($"[orient] finished in {elapsed.Elapsed.TotalSeconds:0.0} s");
         }
+    }
+
+    /// <summary>
+    /// Forgets the rail positions baked onto <paramref name="node"/>'s live toolpaths (its own and
+    /// its linked toolpath nodes'), so the next validation plans E1 afresh.
+    /// </summary>
+    private void ClearPlannedE1(ViewportViewModel vm, Viewport.Scene.SceneNode node)
+    {
+        foreach (var n in ResolveLinkedNodes(vm, node).Prepend(node))
+            if (_toolpathByNode.TryGetValue(n, out var tp))
+                foreach (var layer in tp.Layers)
+                    foreach (var mv in layer.Moves)
+                        mv.E1Mm = float.NaN;
     }
 
     /// <summary>"turned 30°, moved to (x, y)" in plain words for the status line.</summary>
