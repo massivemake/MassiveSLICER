@@ -18679,7 +18679,7 @@ public partial class ViewportView : UserControl
         };
         exportSettings = WithRpmInputs(exportSettings, settings);
         exportSettings = KrlPostProcessRecipe.Apply(exportSettings, postProcess);
-        // Approach is an exact-stop LIN from home to Z+ApproachZ (no S/T). Do not
+        // Approach is one exact-stop LIN from home to the first point (no S/T). Do not
         // attach viewport IK joints — those converted on the controller to a TCP
         // through the bed (Rev108 Z ≈ −5 instead of +50).
 

@@ -37,7 +37,7 @@ public sealed record KrlExportSettings
     /// <summary>Wipe extrusion move speed in m/s.</summary>
     public float WipeSpeedMps { get; init; } = 0.12f;
     public int AccelerationPercent { get; init; } = 100;
-    /// <summary>World Z lift above the first/last print position for approach and retreat.</summary>
+    /// <summary>World Z lift above the last print position for the retreat (and the mill approach). The print approach goes straight to the first point.</summary>
     public float ApproachZMm { get; init; } = 50f;
     public float ToolheadOffsetA { get; init; }
     public float ToolheadOffsetB { get; init; }
@@ -161,7 +161,7 @@ public sealed record KrlExportSettings
 
     public float[] HomePosition { get; init; } = [0f, -90f, 90f, 0f, 15f, 0f];
     /// <summary>
-    /// Unused. Approach is an exact-stop LIN from home to first-LIN XY / Z+<see cref="ApproachZMm"/>,
+    /// Unused. The print approach is one exact-stop LIN from home to the first print point,
     /// which keeps the arm configuration the robot has at home.
     /// Viewport joint IK of the same point was not FK-true on the robot (TCP through the bed).
     /// </summary>
@@ -606,16 +606,15 @@ public static class KrlExporter
         string? lastVelText = null;
         WriteVelIfChanged(sb, s.TravelSpeedMps, ref lastVelText);
         float e1Approach = E1ForBase(p0, s, ref lastE1);
-        var approach = new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm);
         sb.AppendLine(";approach");
-        // Exact-stop LIN from home to Z+ApproachZ, same ABC as the first LIN. A LIN
-        // carries no Status/Turn, so the controller keeps the arm configuration it is
-        // already in at home. A cartesian PTP needs S/T, and the one derived from the
-        // home joints was wrong on LFAM 1 and 2 (it asked for the other elbow family:
-        // "Software limit switch -A2"). Viewport joint IK is not used either: those
-        // joints converted on the controller to a TCP through the bed.
-        sb.AppendLine(FormatLinExact(approach, a0, b0, c0, e1Approach));
-        // Exact-stop LIN down to the bed (same ABC — no wrist change).
+        // One exact-stop LIN straight from home to the first print point, same ABC as the
+        // first LIN — what operators on LFAM 1 and 2 got by hand-deleting the old approach
+        // line, and what they printed with. A LIN carries no Status/Turn, so the controller
+        // keeps the arm configuration it has at home. The old cartesian PTP to
+        // Z+ApproachZ needed S/T, and the one derived from the home joints was wrong
+        // ("Software limit switch -A2"); a LIN to Z+ApproachZ first failed on LFAM 1 with
+        // "+A1". Viewport joint IK is not used either: those joints converted on the
+        // controller to a TCP through the bed.
         sb.AppendLine(FormatLinExact(p0, a0, b0, c0, e1Approach));
         // Approach is a travel. First print start writes the single RPM =.
         if (s.UseTravelStartStop)
@@ -1465,8 +1464,8 @@ public static class KrlExporter
         => E1ForMove(null, basePt, s, ref lastE1);
 
     /// <summary>
-    /// First-print approach in BASE (Z = touchdown + ApproachZ). Export writes this
-    /// pose as an exact-stop LIN from home.
+    /// Pose ApproachZ above the first print point in BASE. The print export no longer
+    /// visits it: the approach goes straight from home to the first point.
     /// </summary>
     public static bool TryGetApproachCartesian(
         Toolpath toolpath, KrlExportSettings s,
