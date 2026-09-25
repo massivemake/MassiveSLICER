@@ -75,6 +75,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     private bool _applyingUndoRedo;
     private bool _suppressWorkspaceDirty;
     private string _lastCommittedPrefsJson = "";
+
+    /// <summary>Cell the last swap completed on, so a switch to a different robot can be told apart from a reload.</summary>
+    private string? _lastSwapCellName;
     private CancellationTokenSource? _settingsUndoDebounce;
     private string _lastProgressLogMessage = string.Empty;
 
@@ -553,6 +556,15 @@ public sealed class MainWindowViewModel : ViewModelBase
             {
                 int wantTool = robot.KrlToolIndex;
                 int wantBase = robot.KrlBaseIndex;
+                // A different robot starts on its own default TOOL: the previous cell's number
+                // means nothing on it (LFAM 1 → LFAM 2 kept tool 1 instead of HV 2). The first swap
+                // after launch and same-cell reloads keep the current pick. BASE # is carried as
+                // before; SetKrlFrameOptions drops a base the new cell does not have.
+                bool switchedCell = _lastSwapCellName is not null
+                    && !string.Equals(_lastSwapCellName, cell.Name, StringComparison.OrdinalIgnoreCase);
+                _lastSwapCellName = cell.Name;
+                if (switchedCell)
+                    wantTool = 0;
                 if (_pendingWorkspaceRestore is { } pending)
                 {
                     wantTool = pending.Doc.UiSession?.KrlToolIndex
