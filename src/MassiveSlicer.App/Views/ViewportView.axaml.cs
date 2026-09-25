@@ -459,6 +459,16 @@ public partial class ViewportView : UserControl
             };
             vm.OnFocusRequested       = FocusSelected;
             vm.OnFrameMoveRequested   = FrameCameraToScrubIndex;
+            vm.GetSelectedPartWorldBounds = () =>
+            {
+                if (_renderer.SelectedNode is not { } n) return null;
+                // A selected toolpath measures its part: the seam belongs to the mesh's walls.
+                if (_renderer.IsToolpathNode(n) && n.Parent is { } part) n = part;
+                var (bMin, bMax) = ImportHelper.ComputeSubtreeWorldAabb(n);
+                if (bMin.X > bMax.X) return null;
+                return (new System.Numerics.Vector3(bMin.X, bMin.Y, bMin.Z),
+                        new System.Numerics.Vector3(bMax.X, bMax.Y, bMax.Z));
+            };
             vm.OnBoundsDiagnostic = () =>
             {
                 if (_renderer.SelectedNode is not { } n) return "[bounds] nothing selected.";

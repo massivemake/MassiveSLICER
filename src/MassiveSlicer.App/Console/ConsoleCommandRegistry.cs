@@ -2953,6 +2953,15 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "seam-guide",
+            Aliases = ["seam-guides"],
+            Description = "Read, set, clear, or snap the seam guide to a corner of the selected part — a saved setting that follows you to the next part",
+            Usage = "seam-guide [list | clear | set <x> <y> [z] | add <x> <y> [z] | corner <-x|+x> <-y|+y>]",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.SeamGuideCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "bounds",
             Aliases = ["bbox"],
             Description = "Read-only world bounds, pivot and subtree shape of the selection — changes nothing",
