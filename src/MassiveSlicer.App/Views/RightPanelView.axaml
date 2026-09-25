@@ -264,27 +264,27 @@
                                     <Grid ColumnDefinitions="*,80">
                                         <TextBlock Grid.Column="0" Text="Center X (mm)" FontSize="11" Opacity="0.7"
                                                    VerticalAlignment="Center"/>
-                                        <NumericUpDown Grid.Column="1" FontSize="11" Increment="5" FormatString="F1"
+                                        <NumericUpDown Classes="Length" Grid.Column="1" FontSize="11" Increment="5" FormatString="F1"
                                                        Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportCenterX, Mode=TwoWay}"/>
                                     </Grid>
                                     <Grid ColumnDefinitions="*,80">
                                         <TextBlock Grid.Column="0" Text="Center Y (mm)" FontSize="11" Opacity="0.7"
                                                    VerticalAlignment="Center"/>
-                                        <NumericUpDown Grid.Column="1" FontSize="11" Increment="5" FormatString="F1"
+                                        <NumericUpDown Classes="Length" Grid.Column="1" FontSize="11" Increment="5" FormatString="F1"
                                                        Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportCenterY, Mode=TwoWay}"/>
                                     </Grid>
                                     <Grid ColumnDefinitions="*,80">
                                         <TextBlock Grid.Column="0" Text="Width / Ø (mm)" FontSize="11" Opacity="0.7"
                                                    VerticalAlignment="Center"
                                                    ToolTip.Tip="Rectangle width, or circle diameter. 2×4 actual = 89 × 38 mm."/>
-                                        <NumericUpDown Grid.Column="1" FontSize="11" Minimum="5" Maximum="2000"
+                                        <NumericUpDown Classes="Length" Grid.Column="1" FontSize="11" Minimum="5" Maximum="2000"
                                                        Increment="1" FormatString="F0"
                                                        Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportWidthMm, Mode=TwoWay}"/>
                                     </Grid>
                                     <Grid ColumnDefinitions="*,80">
                                         <TextBlock Grid.Column="0" Text="Depth (mm)" FontSize="11" Opacity="0.7"
                                                    VerticalAlignment="Center"/>
-                                        <NumericUpDown Grid.Column="1" FontSize="11" Minimum="5" Maximum="2000"
+                                        <NumericUpDown Classes="Length" Grid.Column="1" FontSize="11" Minimum="5" Maximum="2000"
                                                        Increment="1" FormatString="F0"
                                                        Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportDepthMm, Mode=TwoWay}"/>
                                     </Grid>
@@ -333,7 +333,7 @@
                                                    Opacity="0.7" VerticalAlignment="Center"/>
                                         <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="4"
                                                     HorizontalAlignment="Right">
-                                            <TextBox Width="72" FontSize="11" Padding="6,4"
+                                            <TextBox Classes="Length" Width="72" FontSize="11" Padding="6,4"
                                                      Text="{Binding $parent[Window].DataContext.Viewport.OffsetDistanceMm, Mode=TwoWay}"
                                                      HorizontalContentAlignment="Right"/>
                                             <TextBlock Text="mm" FontSize="10" Opacity="0.55" VerticalAlignment="Center"/>
@@ -1197,7 +1197,7 @@
                         </Grid>
                         <Grid ColumnDefinitions="*,80">
                             <TextBlock Grid.Column="0" Text="Auto-detect band (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.CurvedAutoDetectBandMm}"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.CurvedAutoDetectBandMm}"/>
                         </Grid>
                         <TextBlock Text="{Binding Additive.CurvedBoundarySummary}" FontSize="10" Opacity="0.75" Margin="0,2,0,0"/>
                         <Grid ColumnDefinitions="*,Auto">
@@ -1251,23 +1251,23 @@
                             </Grid>
                             <Grid ColumnDefinitions="*,80">
                                 <TextBlock Grid.Column="0" Text="Center X (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.SupportCenterX, Mode=TwoWay}"
+                                <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Additive.SupportCenterX, Mode=TwoWay}"
                                                Increment="5" FormatString="F1" FontSize="11"/>
                             </Grid>
                             <Grid ColumnDefinitions="*,80">
                                 <TextBlock Grid.Column="0" Text="Center Y (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.SupportCenterY, Mode=TwoWay}"
+                                <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Additive.SupportCenterY, Mode=TwoWay}"
                                                Increment="5" FormatString="F1" FontSize="11"/>
                             </Grid>
                             <Grid ColumnDefinitions="*,80">
                                 <TextBlock Grid.Column="0" Text="Width / Ø (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                            ToolTip.Tip="Rectangle width, or circle diameter. 2×4 actual = 89 × 38 mm."/>
-                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.SupportWidthMm, Mode=TwoWay}"
+                                <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Additive.SupportWidthMm, Mode=TwoWay}"
                                                Minimum="5" Maximum="2000" Increment="1" FormatString="F0" FontSize="11"/>
                             </Grid>
                             <Grid ColumnDefinitions="*,80">
                                 <TextBlock Grid.Column="0" Text="Depth (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.SupportDepthMm, Mode=TwoWay}"
+                                <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Additive.SupportDepthMm, Mode=TwoWay}"
                                                Minimum="5" Maximum="2000" Increment="1" FormatString="F0" FontSize="11"/>
                             </Grid>
                             <Grid ColumnDefinitions="*,80">
@@ -1299,7 +1299,7 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="Layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                            ToolTip.Tip="In adaptive mode this becomes the maximum layer height"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LayerHeight}"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.LayerHeight}"/>
                             </Grid>
 
                             <Grid Margin="8,2,8,4">
@@ -1308,7 +1308,7 @@
                                     <ColumnDefinition Width="80"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="Bead width (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BeadWidth}"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.BeadWidth}"/>
                             </Grid>
 
                             <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowTiltAngle}">
@@ -1423,7 +1423,7 @@
                                             <ColumnDefinition Width="80"/>
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight, Mode=TwoWay}"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.MinLayerHeight, Mode=TwoWay}"/>
                                     </Grid>
 
                                     <Grid Margin="8,2,8,8" IsVisible="{Binding Additive.ShowAdaptiveControls}">
@@ -1635,7 +1635,7 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="Z hop (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                            ToolTip.Tip="Vertical lift on travel moves. 0 = no hop."/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ZHopMm}"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.ZHopMm}"/>
                             </Grid>
 
                             <!-- First layer speed / RPM overrides (KRL export) -->
@@ -1680,7 +1680,7 @@
                                     <ColumnDefinition Width="80"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="Wipe length (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeLengthMm}"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.WipeLengthMm}"/>
                             </Grid>
 
                             <Grid Margin="8,2,8,4">
@@ -1690,7 +1690,7 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="Wipe ramp (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                            ToolTip.Tip="Shop −1 = dip 1 mm in −Z into the bead with RPM 0, then wipe length (reverse fires on that smash). Positive: last N mm of wipe length ramps RPM to zero. Smash depth is capped at layer height."/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeRampMm}"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.WipeRampMm}"/>
                             </Grid>
 
                             <Grid Margin="8,2,8,4">
@@ -1720,7 +1720,7 @@
                                       IsChecked="{Binding Additive.UseDisplacedStock, Mode=TwoWay}"/>
                             <Grid Margin="8,0,8,4" ColumnDefinitions="*,80" IsEnabled="{Binding Additive.UseDisplacedStock}">
                                 <TextBlock Grid.Column="0" Text="Machining allowance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.StockAllowanceMm, Mode=TwoWay}"
+                                <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Additive.StockAllowanceMm, Mode=TwoWay}"
                                                Minimum="0" Maximum="50" Increment="0.5" FormatString="F1" FontSize="11"/>
                             </Grid>
                         </StackPanel>
@@ -1941,7 +1941,7 @@
                                   IsVisible="{Binding Additive.ShowPatternWavelength}">
                                 <TextBlock Grid.Column="0" Text="Wavelength (mm)" FontSize="11" VerticalAlignment="Center"
                                            ToolTip.Tip="Physical size of one pattern cycle along the path — identical on every layer. The leftover fraction of a cycle lands at the seam."/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox Length"
                                            Text="{Binding Additive.PatternWavelengthMm, Mode=TwoWay}"/>
                             </Grid>
 
@@ -2145,17 +2145,17 @@
                                             <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
                                                 <TextBlock Grid.Column="0" Text="Diameter (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                            ToolTip.Tip="Cylinder diameter. Height is automatic from the model bounds."/>
-                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox Length"
                                                            Text="{Binding Additive.XBracingCylinderDiameterMm, Mode=TwoWay}"/>
                                             </Grid>
                                             <Grid Margin="8,2,8,2" ColumnDefinitions="*,80">
                                                 <TextBlock Grid.Column="0" Text="Center X (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox Length"
                                                            Text="{Binding Additive.XBracingCylinderX, Mode=TwoWay}"/>
                                             </Grid>
                                             <Grid Margin="8,2,8,2" ColumnDefinitions="*,80">
                                                 <TextBlock Grid.Column="0" Text="Center Y (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox Length"
                                                            Text="{Binding Additive.XBracingCylinderY, Mode=TwoWay}"/>
                                             </Grid>
                                             <CheckBox Margin="8,4,8,2"
@@ -2173,13 +2173,13 @@
                                         <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
                                             <TextBlock Grid.Column="0" Text="Depth top (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                        ToolTip.Tip="How far each brace goes into the wall at the TOP of the part. Single-skin grows up to this over layers; dual-wall clamps to thickness."/>
-                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox Length"
                                                        Text="{Binding Additive.XBracingDepthMm, Mode=TwoWay}"/>
                                         </Grid>
                                         <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
                                             <TextBlock Grid.Column="0" Text="Depth bottom (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                        ToolTip.Tip="Brace depth at the BOTTOM of the part. 0 = constant (same as top); set a value to taper depth over height with the ease dropdowns — e.g. a deeper base than tip on a cylinder."/>
-                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox Length"
                                                        Text="{Binding Additive.XBracingDepthBottomMm, Mode=TwoWay}"/>
                                         </Grid>
                                         <StackPanel IsVisible="{Binding Additive.ShowXBracingDepthEase}">
@@ -2201,7 +2201,7 @@
                                         <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
                                             <TextBlock Grid.Column="0" Text="X span (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                        ToolTip.Tip="Horizontal size of one full X cell along the wall."/>
-                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox Length"
                                                        Text="{Binding Additive.XBracingSpanMm, Mode=TwoWay}"/>
                                         </Grid>
                                         <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
@@ -2276,7 +2276,7 @@
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="Amplitude (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                ToolTip.Tip="Peak displacement — how far the path swings left/right of the original line."/>
-                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveAmplitude}"/>
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.WaveAmplitude}"/>
                                 </Grid>
 
                                 <Grid Margin="8,2,8,4">
@@ -2298,7 +2298,7 @@
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="Wavelength (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                ToolTip.Tip="Length of one complete wave cycle along the toolpath."/>
-                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveWavelength}"/>
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.WaveWavelength}"/>
                                 </Grid>
 
                                 <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowCyclesInput}">
@@ -2373,10 +2373,10 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" Text="Amplitude (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                    ToolTip.Tip="Peak displacement at the bottom and top of the toolpath."/>
-                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveAmplitudeBottom, Mode=TwoWay}"
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.WaveAmplitudeBottom, Mode=TwoWay}"
                                                    ToolTip.Tip="Bottom (zMin)"/>
                                         <TextBlock Grid.Column="2" Text="→" HorizontalAlignment="Center" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                        <TextBox   Grid.Column="3" Classes="PanelTextBox" Text="{Binding Additive.WaveAmplitudeTop, Mode=TwoWay}"
+                                        <TextBox   Grid.Column="3" Classes="PanelTextBox Length" Text="{Binding Additive.WaveAmplitudeTop, Mode=TwoWay}"
                                                    ToolTip.Tip="Top (zMax)"/>
                                     </Grid>
 
@@ -2389,10 +2389,10 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" Text="Wavelength (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                    ToolTip.Tip="Wave cycle length at the bottom and top of the toolpath."/>
-                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveWavelengthBottom, Mode=TwoWay}"
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.WaveWavelengthBottom, Mode=TwoWay}"
                                                    ToolTip.Tip="Bottom (zMin)"/>
                                         <TextBlock Grid.Column="2" Text="→" HorizontalAlignment="Center" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                        <TextBox   Grid.Column="3" Classes="PanelTextBox" Text="{Binding Additive.WaveWavelengthTop, Mode=TwoWay}"
+                                        <TextBox   Grid.Column="3" Classes="PanelTextBox Length" Text="{Binding Additive.WaveWavelengthTop, Mode=TwoWay}"
                                                    ToolTip.Tip="Top (zMax)"/>
                                     </Grid>
 
@@ -2454,7 +2454,7 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" Text="Grid width (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                    ToolTip.Tip="Centre-to-centre distance between fill lines — the grid cell width for Grid / Ghost Mesh Grid. Leave 0 to use the bead width."/>
-                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillSpacingMm}"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.InfillSpacingMm}"/>
                                     </Grid>
 
                                     <Grid Margin="8,2,8,4">
@@ -2485,7 +2485,7 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" Text="Branch spacing (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                    ToolTip.Tip="Spacing between support fingers along unsupported edges. 0 = automatic (4× bead width)."/>
-                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LightningBranchSpacingMm}"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.LightningBranchSpacingMm}"/>
                                     </Grid>
                                     <Grid Margin="8,2,8,4">
                                         <Grid.ColumnDefinitions>
@@ -2515,7 +2515,7 @@
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Grid.Column="0" Text="Horizontal bar (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                        ToolTip.Tip="Formbound Buttress: length of the single-bead horizontal support bar under the overhang. The wall cut morphs into this bar as one continuous line."/>
-                                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LightningButtressBarMm}"/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.LightningButtressBarMm}"/>
                                         </Grid>
                                     </StackPanel>
                                 </StackPanel>
@@ -2703,7 +2703,7 @@
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="Y+ allowance (mm)" Classes="LabelMuted" VerticalAlignment="Center"
                                                ToolTip.Tip="How far E1 may travel in the positive direction from the home E1 (mm)."/>
-                                    <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox Length"
                                                Text="{Binding Additive.E1YPlusMm, Mode=TwoWay, StringFormat={}{0:F0}}"
                                                TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                                 </Grid>
@@ -2714,7 +2714,7 @@
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="Y− allowance (mm)" Classes="LabelMuted" VerticalAlignment="Center"
                                                ToolTip.Tip="How far E1 may travel in the negative direction from the home E1 (mm)."/>
-                                    <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox Length"
                                                Text="{Binding Additive.E1YMinusMm, Mode=TwoWay, StringFormat={}{0:F0}}"
                                                TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                                 </Grid>
@@ -2738,7 +2738,7 @@
                                 <TextBlock Grid.Column="0" Text="Retraction height (mm)"
                                            VerticalAlignment="Center" Classes="LabelMuted"
                                            ToolTip.Tip="Z-hop lift after each segment finishes before traveling to the next"/>
-                                <NumericUpDown Grid.Column="1"
+                                <NumericUpDown Classes="Length" Grid.Column="1"
                                                Value="{Binding $parent[Window].DataContext.Viewport.MergedRetractionHeightMm, Mode=TwoWay}"
                                                Minimum="0" Maximum="200" Increment="1"
                                                FormatString="F1" FontSize="11"/>
@@ -3020,7 +3020,7 @@
                                         <Slider Grid.Column="1" Minimum="0" Maximum="3000"
                                                 Value="{Binding Modifiers.SelectedSettings.Offset}"
                                                 VerticalAlignment="Center" Margin="8,0,4,0"/>
-                                        <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit"
+                                        <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit Length"
                                                  Text="{Binding Modifiers.SelectedSettings.Offset, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"
                                                  TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                                     </Grid>
@@ -3046,7 +3046,7 @@
                                         <Slider Grid.Column="1" Minimum="0" Maximum="3000"
                                                 Value="{Binding Modifiers.SelectedSettings.SizeX}"
                                                 VerticalAlignment="Center" Margin="8,0,4,0"/>
-                                        <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit"
+                                        <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit Length"
                                                  Text="{Binding Modifiers.SelectedSettings.SizeX, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"
                                                  TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                                     </Grid>
@@ -3055,7 +3055,7 @@
                                         <Slider Grid.Column="1" Minimum="0" Maximum="3000"
                                                 Value="{Binding Modifiers.SelectedSettings.SizeY}"
                                                 VerticalAlignment="Center" Margin="8,0,4,0"/>
-                                        <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit"
+                                        <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit Length"
                                                  Text="{Binding Modifiers.SelectedSettings.SizeY, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"
                                                  TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                                     </Grid>
@@ -3419,7 +3419,7 @@
                                                        VerticalAlignment="Center"
                                                        ToolTip.Tip="Stick-out from the disc centre along the SpindleBit face normal. Does not change cutter diameter."/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                                                <NumericUpDown Value="{Binding Subtractive.PreviewCylinderLengthMm, Mode=TwoWay}"
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.PreviewCylinderLengthMm, Mode=TwoWay}"
                                                                Minimum="0.5" Maximum="400" Increment="1"
                                                                FormatString="F1" FontSize="11"
                                                                MinHeight="30"/>
@@ -3740,7 +3740,7 @@
                                             <TextBlock Text="Offset Distance" Classes="LabelMuted" VerticalAlignment="Center"
                                                        ToolTip.Tip="Push the mill path along the surface normal. + mm = cutter out (shallower / leave stock). − mm = into the work."/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                <NumericUpDown Value="{Binding Subtractive.OffsetDistanceMm, Mode=TwoWay}"
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.OffsetDistanceMm, Mode=TwoWay}"
                                                                Minimum="-200" Maximum="200" Increment="0.1" FormatString="F2" FontSize="11"/>
                                                 <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                             </Grid>
@@ -3754,7 +3754,7 @@
                                         <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                             <TextBlock Text="Stepdown" Classes="LabelMuted" VerticalAlignment="Center"/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                <NumericUpDown Value="{Binding Subtractive.StepdownMm, Mode=TwoWay}"
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.StepdownMm, Mode=TwoWay}"
                                                                Minimum="0.05" Maximum="100" Increment="0.1" FormatString="F2" FontSize="11"/>
                                                 <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                             </Grid>
@@ -3762,7 +3762,7 @@
                                         <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                             <TextBlock Text="Stepover" Classes="LabelMuted" VerticalAlignment="Center"/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                <NumericUpDown Value="{Binding Subtractive.StepoverMm, Mode=TwoWay}"
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.StepoverMm, Mode=TwoWay}"
                                                                Minimum="0.05" Maximum="100" Increment="0.1" FormatString="F2" FontSize="11"/>
                                                 <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                             </Grid>
@@ -3791,7 +3791,7 @@
                                             <TextBlock Text="Stock to leave" Classes="LabelMuted" VerticalAlignment="Center"
                                                        ToolTip.Tip="Finish allowance left on the surface (mm)"/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                <NumericUpDown Value="{Binding Subtractive.StockToLeaveMm, Mode=TwoWay}"
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.StockToLeaveMm, Mode=TwoWay}"
                                                                Minimum="0" Maximum="20" Increment="0.05" FormatString="F2" FontSize="11"/>
                                                 <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                             </Grid>
@@ -3816,7 +3816,7 @@
                                             <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                                 <TextBlock Text="Cut depth" Classes="LabelMuted" VerticalAlignment="Center"/>
                                                 <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                    <NumericUpDown Value="{Binding Subtractive.CutoutCutDepthMm, Mode=TwoWay}"
+                                                    <NumericUpDown Classes="Length" Value="{Binding Subtractive.CutoutCutDepthMm, Mode=TwoWay}"
                                                                    Minimum="0.05" Maximum="500" Increment="0.1" FormatString="F2" FontSize="11"/>
                                                     <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                                 </Grid>
@@ -3824,7 +3824,7 @@
                                             <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                                 <TextBlock Text="Layer height" Classes="LabelMuted" VerticalAlignment="Center"/>
                                                 <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                    <NumericUpDown Value="{Binding Subtractive.CutoutLayerHeightMm, Mode=TwoWay}"
+                                                    <NumericUpDown Classes="Length" Value="{Binding Subtractive.CutoutLayerHeightMm, Mode=TwoWay}"
                                                                    Minimum="0.05" Maximum="100" Increment="0.1" FormatString="F2" FontSize="11"/>
                                                     <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                                 </Grid>
@@ -3865,7 +3865,7 @@
                                             <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                                 <TextBlock Text="Breakthrough" Classes="LabelMuted" VerticalAlignment="Center"/>
                                                 <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                    <NumericUpDown Value="{Binding Subtractive.DrillingBreakthroughMm, Mode=TwoWay}"
+                                                    <NumericUpDown Classes="Length" Value="{Binding Subtractive.DrillingBreakthroughMm, Mode=TwoWay}"
                                                                    Minimum="0" Maximum="100" Increment="0.5" FormatString="F2" FontSize="11"/>
                                                     <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                                 </Grid>
@@ -3876,7 +3876,7 @@
                                                   IsEnabled="{Binding Subtractive.DrillingPeck}">
                                                 <TextBlock Text="Peck depth" Classes="LabelMuted" VerticalAlignment="Center"/>
                                                 <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                    <NumericUpDown Value="{Binding Subtractive.DrillingPeckDepthMm, Mode=TwoWay}"
+                                                    <NumericUpDown Classes="Length" Value="{Binding Subtractive.DrillingPeckDepthMm, Mode=TwoWay}"
                                                                    Minimum="0.05" Maximum="50" Increment="0.5" FormatString="F2" FontSize="11"/>
                                                     <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                                 </Grid>
@@ -3913,7 +3913,7 @@
                                             <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                                 <TextBlock Text="Cut depth" Classes="LabelMuted" VerticalAlignment="Center"/>
                                                 <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                    <NumericUpDown Value="{Binding Subtractive.SurfaceFinishingCutDepthMm, Mode=TwoWay}"
+                                                    <NumericUpDown Classes="Length" Value="{Binding Subtractive.SurfaceFinishingCutDepthMm, Mode=TwoWay}"
                                                                    Minimum="0" Maximum="200" Increment="0.1" FormatString="F2" FontSize="11"/>
                                                     <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                                 </Grid>
@@ -3938,7 +3938,7 @@
                                         <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                             <TextBlock Text="Approach clearance" Classes="LabelMuted" VerticalAlignment="Center"/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                <NumericUpDown Value="{Binding Subtractive.ApproachClearanceMm, Mode=TwoWay}"
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.ApproachClearanceMm, Mode=TwoWay}"
                                                                Minimum="0" Maximum="1000" Increment="1" FormatString="F2" FontSize="11"/>
                                                 <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                             </Grid>
@@ -3947,7 +3947,7 @@
                                             <TextBlock Text="Feed height" Classes="LabelMuted" VerticalAlignment="Center"
                                                        ToolTip.Tip="AdaOne feed height — drop from clearance to this before the cut"/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                <NumericUpDown Value="{Binding Subtractive.FeedHeightMm, Mode=TwoWay}"
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.FeedHeightMm, Mode=TwoWay}"
                                                                Minimum="0" Maximum="500" Increment="1" FormatString="F2" FontSize="11"/>
                                                 <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                             </Grid>
@@ -3956,7 +3956,7 @@
                                             <TextBlock Text="Retract height" Classes="LabelMuted" VerticalAlignment="Center"
                                                        ToolTip.Tip="Safe rapid / retract Z above the reference plane"/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                <NumericUpDown Value="{Binding Subtractive.RetractHeightMm, Mode=TwoWay}"
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.RetractHeightMm, Mode=TwoWay}"
                                                                Minimum="1" Maximum="500" Increment="1" FormatString="F2" FontSize="11"/>
                                                 <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                             </Grid>
@@ -4066,7 +4066,7 @@
                                         <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                             <TextBlock Text="Lead in" Classes="LabelMuted" VerticalAlignment="Center"/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                <NumericUpDown Value="{Binding Subtractive.LeadInMm, Mode=TwoWay}"
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.LeadInMm, Mode=TwoWay}"
                                                                Minimum="0" Maximum="200" Increment="0.5" FormatString="F2" FontSize="11"/>
                                                 <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                             </Grid>
@@ -4074,7 +4074,7 @@
                                         <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                             <TextBlock Text="Lead out" Classes="LabelMuted" VerticalAlignment="Center"/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                <NumericUpDown Value="{Binding Subtractive.LeadOutMm, Mode=TwoWay}"
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.LeadOutMm, Mode=TwoWay}"
                                                                Minimum="0" Maximum="200" Increment="0.5" FormatString="F2" FontSize="11"/>
                                                 <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
                                             </Grid>
@@ -4135,7 +4135,7 @@
                                         </Grid>
                                         <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
                                             <TextBlock Grid.Column="0" Text="Height scale (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.HeightScaleMm, Mode=TwoWay}"
+                                            <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Subtractive.HeightScaleMm, Mode=TwoWay}"
                                                            Minimum="0" Maximum="200" Increment="0.5" FormatString="F1" FontSize="11"/>
                                         </Grid>
                                         <CheckBox Margin="8,0,8,4" Content="Invert (black = high)" FontSize="11"
@@ -4149,7 +4149,7 @@
                                                    Text="Pushes the low-poly mesh along its normals by the map above (or the model's normal map if none). This is the surface the mill follows."/>
                                         <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
                                             <TextBlock Grid.Column="0" Text="Displacement distance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.DisplacementDistanceMm, Mode=TwoWay}"
+                                            <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Subtractive.DisplacementDistanceMm, Mode=TwoWay}"
                                                            Minimum="0" Maximum="100" Increment="0.25" FormatString="F2" FontSize="11"/>
                                         </Grid>
                                         <Button Margin="8,2,8,4"
@@ -4160,7 +4160,7 @@
                                                 Command="{Binding $parent[Window].DataContext.Viewport.PreviewDisplacedCommand}"/>
                                         <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
                                             <TextBlock Grid.Column="0" Text="Analysis tolerance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.AnalysisToleranceMm, Mode=TwoWay}"
+                                            <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Subtractive.AnalysisToleranceMm, Mode=TwoWay}"
                                                            Minimum="0.01" Maximum="5" Increment="0.05" FormatString="F2" FontSize="11"/>
                                         </Grid>
                                         <Button Margin="8,0,8,4"
@@ -4183,7 +4183,7 @@
                                                   IsChecked="{Binding Subtractive.AutoReferenceFromTop, Mode=TwoWay}"/>
                                         <Grid Margin="8,0,8,4" ColumnDefinitions="*,80" IsEnabled="{Binding !Subtractive.AutoReferenceFromTop}">
                                             <TextBlock Grid.Column="0" Text="Reference Z (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.ReferencePlaneZ, Mode=TwoWay}"
+                                            <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Subtractive.ReferencePlaneZ, Mode=TwoWay}"
                                                            Increment="1" FormatString="F1" FontSize="11"/>
                                         </Grid>
                                         <CheckBox Margin="8,0,8,8" Content="Footprint from part bounds" FontSize="11"

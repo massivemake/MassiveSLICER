@@ -71,7 +71,7 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="Height above bed (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                    ToolTip.Tip="Distance of the cut plane from the bed surface. For a horizontal cut this is simply the height above the bed; a tilted cut measures along its tilt from the bed centre."/>
-                        <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Height}"/>
+                        <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Height}"/>
                     </Grid>
 
                     <TextBlock Text="Normal" Classes="LabelMuted" Margin="0,4,0,0"/>
@@ -107,28 +107,28 @@
                         <Grid ColumnDefinitions="*,90">
                             <TextBlock Text="Spacing (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                        ToolTip.Tip="Distance between connector sites along the cut perimeter."/>
-                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding ConnectorSpacing}"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding ConnectorSpacing}"/>
                         </Grid>
                         <Grid ColumnDefinitions="*,90">
                             <TextBlock Text="Tab width (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding TabWidth}"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding TabWidth}"/>
                         </Grid>
                         <Grid ColumnDefinitions="*,90">
                             <TextBlock Text="Tab depth (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                        ToolTip.Tip="How far alignment tabs protrude past the cut face."/>
-                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding TabDepth}"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding TabDepth}"/>
                         </Grid>
                         <Grid ColumnDefinitions="*,90">
                             <TextBlock Text="Tab height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding TabHeight}"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding TabHeight}"/>
                         </Grid>
                         <Grid ColumnDefinitions="*,90">
                             <TextBlock Text="Bolt Ø (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding BoltDiameter}"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding BoltDiameter}"/>
                         </Grid>
                         <Grid ColumnDefinitions="*,90">
                             <TextBlock Text="Lug Ø (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding BoltLugDiameter}"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding BoltLugDiameter}"/>
                         </Grid>
                         <Grid ColumnDefinitions="*,90">
                             <TextBlock Text="Min corner radius (mm)" VerticalAlignment="Center" Classes="LabelMuted"

@@ -42,7 +42,7 @@
                   IsVisible="{Binding ShowCartesianFields}">
                 <StackPanel Grid.Row="0" Grid.Column="0" Spacing="2">
                     <TextBlock Text="X (mm)" Classes="LabelMuted" FontSize="10"/>
-                    <NumericUpDown Value="{Binding X}"
+                    <NumericUpDown Classes="Length" Value="{Binding X}"
                                    IsEnabled="{Binding IsEditable}"
                                    FormatString="F3"
                                    Increment="1"
@@ -50,7 +50,7 @@
                 </StackPanel>
                 <StackPanel Grid.Row="0" Grid.Column="1" Spacing="2">
                     <TextBlock Text="Y (mm)" Classes="LabelMuted" FontSize="10"/>
-                    <NumericUpDown Value="{Binding Y}"
+                    <NumericUpDown Classes="Length" Value="{Binding Y}"
                                    IsEnabled="{Binding IsEditable}"
                                    FormatString="F3"
                                    Increment="1"
@@ -58,7 +58,7 @@
                 </StackPanel>
                 <StackPanel Grid.Row="1" Grid.Column="0" Spacing="2">
                     <TextBlock Text="Z (mm)" Classes="LabelMuted" FontSize="10"/>
-                    <NumericUpDown Value="{Binding Z}"
+                    <NumericUpDown Classes="Length" Value="{Binding Z}"
                                    IsEnabled="{Binding IsEditable}"
                                    FormatString="F3"
                                    Increment="1"
