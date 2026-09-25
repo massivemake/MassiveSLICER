@@ -232,7 +232,7 @@
                                         <TextBlock Grid.Column="0" Text="Ramp distance (mm)" VerticalAlignment="Center"
                                                    FontSize="11" Classes="LabelMuted"
                                                    ToolTip.Tip="Total path length over which speed and RPM step up. 609.6 mm is about 2 ft."/>
-                                        <TextBox Grid.Column="1" Classes="PanelTextBox"
+                                        <TextBox Grid.Column="1" Classes="PanelTextBox Length"
                                                  Text="{Binding ResumeRampDistanceMm, Mode=TwoWay}"/>
                                     </Grid>
                                     <Grid ColumnDefinitions="*,90" IsVisible="{Binding ResumeRampEnabled}">
@@ -290,7 +290,7 @@
                                 <TextBlock Grid.Column="0" Text="KRL look-ahead (mm)"
                                            VerticalAlignment="Center" FontSize="12" Classes="LabelMuted"
                                            ToolTip.Tip="Forward look-ahead distance for the KRL exporter's Gaussian normal smoother. At 60 mm/s this is about 1 second of pre-rotation per 60 mm. 0 = disabled."/>
-                                <NumericUpDown Grid.Column="1"
+                                <NumericUpDown Classes="Length" Grid.Column="1"
                                                Value="{Binding OrientationLookAheadMm, Mode=TwoWay}"
                                                Minimum="0" Maximum="500" Increment="10"
                                                FormatString="F0" FontSize="11"/>
@@ -299,7 +299,7 @@
                                 <TextBlock Grid.Column="0" Text="KRL sigma (mm)"
                                            VerticalAlignment="Center" FontSize="12" Classes="LabelMuted"
                                            ToolTip.Tip="Gaussian kernel width for KRL normal smoothing. Controls the spread of the orientation transition ramp. Typically half of the look-ahead value."/>
-                                <NumericUpDown Grid.Column="1"
+                                <NumericUpDown Classes="Length" Grid.Column="1"
                                                Value="{Binding OrientationSigmaMm, Mode=TwoWay}"
                                                Minimum="1" Maximum="200" Increment="5"
                                                FormatString="F0" FontSize="11"/>

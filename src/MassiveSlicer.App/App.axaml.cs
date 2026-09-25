@@ -39,6 +39,7 @@ public partial class App : Application
         {
             SliderTypeIn.Install();
             NumericFieldUx.Install();
+            LengthFieldUx.Install();
             MacDockIcon.TrySet("macos-app-icon.png");
             StartupWorkspacePath = ResolveStartupWorkspacePath(desktop.Args);
             desktop.MainWindow = new MainWindow();

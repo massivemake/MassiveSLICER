@@ -609,14 +609,14 @@
                             </Grid>
                             <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
                                 <TextBlock Grid.Column="0" Text="Height Z" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Padding="4,2" VerticalContentAlignment="Center"
                                            Text="{Binding DataContext.RightPanel.Settings.Robot.BedCenterZ,
                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"/>
                             </Grid>
                             <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
                                 <TextBlock Grid.Column="0" Text="Diameter" Classes="LabelMuted" VerticalAlignment="Center"
                                            ToolTip.Tip="Rotary grid diameter (mm). 1828.8 = 6 ft."/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Padding="4,2" VerticalContentAlignment="Center"
                                            Text="{Binding DataContext.RightPanel.Settings.Robot.BedDiameter,
                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F1}}"/>
                             </Grid>

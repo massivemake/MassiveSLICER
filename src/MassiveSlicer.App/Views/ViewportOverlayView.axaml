@@ -128,7 +128,7 @@
                     <Grid ColumnDefinitions="*,90">
                         <TextBlock Text="Height (mm)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"
                                    ToolTip.Tip="Offset along the plane normal from world origin"/>
-                        <TextBox Grid.Column="1" Classes="PanelTextBox" FontSize="11"
+                        <TextBox Grid.Column="1" Classes="PanelTextBox Length" FontSize="11"
                                  Text="{Binding CutToolSession.Height, Mode=TwoWay}"/>
                     </Grid>
 
@@ -170,26 +170,26 @@
                     <StackPanel IsVisible="{Binding CutToolSession.AddConnectors}" Spacing="4" Margin="0,2,0,0">
                         <Grid ColumnDefinitions="*,80">
                             <TextBlock Text="Spacing" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
-                            <TextBox Grid.Column="1" Classes="PanelTextBox" FontSize="11"
+                            <TextBox Grid.Column="1" Classes="PanelTextBox Length" FontSize="11"
                                      Text="{Binding CutToolSession.ConnectorSpacing, Mode=TwoWay}"/>
                         </Grid>
                         <Grid ColumnDefinitions="*,80">
                             <TextBlock Text="Tab W / D / H" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
-                                <TextBox Classes="PanelTextBox" FontSize="10" Width="24"
+                                <TextBox Classes="PanelTextBox Length" FontSize="10" Width="24"
                                          Text="{Binding CutToolSession.TabWidth, Mode=TwoWay}"/>
-                                <TextBox Classes="PanelTextBox" FontSize="10" Width="24"
+                                <TextBox Classes="PanelTextBox Length" FontSize="10" Width="24"
                                          Text="{Binding CutToolSession.TabDepth, Mode=TwoWay}"/>
-                                <TextBox Classes="PanelTextBox" FontSize="10" Width="24"
+                                <TextBox Classes="PanelTextBox Length" FontSize="10" Width="24"
                                          Text="{Binding CutToolSession.TabHeight, Mode=TwoWay}"/>
                             </StackPanel>
                         </Grid>
                         <Grid ColumnDefinitions="*,80">
                             <TextBlock Text="Bolt / Lug Ø" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
-                                <TextBox Classes="PanelTextBox" FontSize="10" Width="36"
+                                <TextBox Classes="PanelTextBox Length" FontSize="10" Width="36"
                                          Text="{Binding CutToolSession.BoltDiameter, Mode=TwoWay}"/>
-                                <TextBox Classes="PanelTextBox" FontSize="10" Width="36"
+                                <TextBox Classes="PanelTextBox Length" FontSize="10" Width="36"
                                          Text="{Binding CutToolSession.BoltLugDiameter, Mode=TwoWay}"/>
                             </StackPanel>
                         </Grid>
@@ -569,7 +569,7 @@
                     <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto" ColumnSpacing="6">
                         <TextBlock Grid.Column="0" Text="W" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center"
                                    ToolTip.Tip="Grid width along +X (mm)"/>
-                        <NumericUpDown Grid.Column="1"
+                        <NumericUpDown Classes="Length" Grid.Column="1"
                                        Value="{Binding BedGridWidth, Mode=TwoWay}"
                                        FormatString="F0"
                                        Minimum="1"
@@ -582,7 +582,7 @@
                                        VerticalContentAlignment="Center"/>
                         <TextBlock Grid.Column="2" Text="D" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="4,0,0,0"
                                    ToolTip.Tip="Grid depth along +Y (mm)"/>
-                        <NumericUpDown Grid.Column="3"
+                        <NumericUpDown Classes="Length" Grid.Column="3"
                                        Value="{Binding BedGridDepth, Mode=TwoWay}"
                                        FormatString="F0"
                                        Minimum="1"
@@ -739,17 +739,17 @@
                         IsVisible="{Binding IsMoveActive}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <ctrl:TransformNumberBox Value="{Binding SelectionX}" FormatString="F2" Width="72" FontSize="11"
+                        <ctrl:TransformNumberBox Classes="Length" Value="{Binding SelectionX}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
                                        Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
                                        ToolTip.Tip="Position along world X. Accepts maths: 45+90, 90/2, 30x3"/>
                         <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <ctrl:TransformNumberBox Value="{Binding SelectionY}" FormatString="F2" Width="72" FontSize="11"
+                        <ctrl:TransformNumberBox Classes="Length" Value="{Binding SelectionY}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
                                        Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
                                        ToolTip.Tip="Position along world Y. Accepts maths: 45+90, 90/2, 30x3"/>
                         <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <ctrl:TransformNumberBox Value="{Binding SelectionZ}" FormatString="F2" Width="72" FontSize="11"
+                        <ctrl:TransformNumberBox Classes="Length" Value="{Binding SelectionZ}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
                                        Padding="5,4" VerticalContentAlignment="Center" Margin="0"
                                        ToolTip.Tip="Position along world Z. Accepts maths: 45+90, 90/2, 30x3"/>
@@ -814,17 +814,17 @@
                         </Border>
 
                         <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <ctrl:TransformNumberBox Value="{Binding ScaleFieldX}" FormatString="F2" Width="72" FontSize="11"
+                        <ctrl:TransformNumberBox Classes.Length="{Binding !IsScalePercent}" Value="{Binding ScaleFieldX}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
                                        Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
                                        ToolTip.Tip="Size along the part's own X. Accepts maths: 1200/2, 300x3"/>
                         <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <ctrl:TransformNumberBox Value="{Binding ScaleFieldY}" FormatString="F2" Width="72" FontSize="11"
+                        <ctrl:TransformNumberBox Classes.Length="{Binding !IsScalePercent}" Value="{Binding ScaleFieldY}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
                                        Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
                                        ToolTip.Tip="Size along the part's own Y. Accepts maths: 1200/2, 300x3"/>
                         <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <ctrl:TransformNumberBox Value="{Binding ScaleFieldZ}" FormatString="F2" Width="72" FontSize="11"
+                        <ctrl:TransformNumberBox Classes.Length="{Binding !IsScalePercent}" Value="{Binding ScaleFieldZ}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
                                        Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
                                        ToolTip.Tip="Size along the part's own Z. Accepts maths: 1200/2, 300x3"/>
