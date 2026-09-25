@@ -2786,6 +2786,24 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "auto-orient",
+            Aliases = ["autoorient", "auto-place"],
+            Description = "Run Auto Orient on the selected part (same as the toolbar button); progress and the elapsed time log as [orient] lines",
+            Usage = "auto-orient | auto-orient check   (check = full-check the part where it sits, move nothing)",
+            Execute = (ctx, args) =>
+            {
+                var add = ctx.Main.RightPanel.Additive;
+                if (add.IsAutoOrientRunning) { ctx.LogError("[orient] already running"); return; }
+                if (!add.AutoOrientCommand.CanExecute(null)) { ctx.LogError("[orient] not available right now"); return; }
+                MassiveSlicer.App.Views.ViewportView.AutoOrientCheckOnlyNext =
+                    args.Trim().Equals("check", StringComparison.OrdinalIgnoreCase);
+                add.AutoOrientCommand.Execute(null);
+                ctx.Log("[orient] started — watch for \"[orient] finished\"");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "export-src",
             Aliases = ["exportsrc", "export-krl"],
             Description = "Write the active toolpath's .src into a folder — same writer as Export KRL, so it uses the active robot's KRL recipe",

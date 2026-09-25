@@ -189,6 +189,31 @@ public struct NodeTransform
         return Vector3.Normalize(Vector3.Cross(v, seed));
     }
 
+    // -- Rigid motion ----------------------------------------------------------
+
+    /// <summary>
+    /// This placement turned by <paramref name="turn"/> about <paramref name="pivot"/>, both in
+    /// the parent's space — the same result as appending <c>T(-pivot)·R(turn)·T(pivot)</c> to
+    /// <see cref="ToMatrix"/>, but written straight into <see cref="Rotation"/> and
+    /// <see cref="Position"/>.
+    /// </summary>
+    /// <remarks>
+    /// Composing a matrix and decomposing it again would square the basis back up with
+    /// Gram-Schmidt (<see cref="FromMatrix"/>), which leaves a sliver of unintended rotation.
+    /// Auto Orient uses this to spin a part about the vertical without that sliver tilting it:
+    /// whichever face was down stays exactly down. Scale and pivot are untouched.
+    /// </remarks>
+    public NodeTransform RotatedAbout(Vector3 pivot, Quaternion turn)
+    {
+        var q = Quaternion.Normalize(turn);
+        // Row-vector composition "R then turn" is the quaternion product turn * R.
+        return new NodeTransform(
+            pivot + Vector3.Transform(Position - pivot, q),
+            Quaternion.Normalize(q * Rotation),
+            Scale,
+            Origin);
+    }
+
     // -- Axes ------------------------------------------------------------------
 
     /// <summary>

@@ -6,54 +6,67 @@ using MassiveSlicer.Viewport.Collision;
 using MassiveSlicer.Viewport.Validation;
 using MassiveSlicer.ViewModels;
 using NMatrix = System.Numerics.Matrix4x4;
+using NVec2 = System.Numerics.Vector2;
 using NVec3 = System.Numerics.Vector3;
 using TkMatrix4 = OpenTK.Mathematics.Matrix4;
+using TkQuaternion = OpenTK.Mathematics.Quaternion;
 using TkVector3 = OpenTK.Mathematics.Vector3;
 
 namespace MassiveSlicer.App.Views;
 
 public partial class ViewportView
 {
+    /// <summary>Spin resolution about the vertical, degrees.</summary>
+    private const float AutoOrientSpinStepDeg = 15f;
+
+    /// <summary>Candidate spots per bed axis.</summary>
+    private const int AutoOrientGridPerAxis = 7;
+
+    /// <summary>Moves IK-checked per candidate in the first, every-candidate pass.</summary>
+    private const int AutoOrientCoarseSamples = 48;
+
+    /// <summary>Moves IK-checked per candidate in the second pass (best few only).</summary>
+    private const int AutoOrientFineSamples = 360;
+
+    /// <summary>Candidates carried from the coarse pass to the fine pass.</summary>
+    private const int AutoOrientFineKeep = 24;
+
+    /// <summary>Full sweeps (every move, repair, collisions) tried before giving up.</summary>
+    private const int AutoOrientMaxFullSweeps = 4;
+
     /// <summary>
-    /// Bed positions tried per rotation candidate (bed centre plus alternates). Every extra one is
-    /// a full re-slice and IK/collision sweep, so this stays small on purpose.
+    /// Set by the <c>auto-orient check</c> console command: the next run only full-checks the
+    /// part where it sits and moves nothing — for comparing auto-orient's verdict with live
+    /// validation on the identical pose.
     /// </summary>
-    private const int MaxAutoOrientPlacements = 5;
-
-    /// <summary>Below this the part did not meaningfully move, so don't claim it did.</summary>
-    private const float AutoOrientMoveEpsMm = 1f;
+    internal static bool AutoOrientCheckOnlyNext;
 
     /// <summary>
-    /// Auto Orient: searches full 3D rotations of the selected part AND a handful of positions on
-    /// the bed for the pose with the least overhang risk that the robot can actually print, then
-    /// rotates and moves the part into it.
+    /// Auto Orient: finds a spot on the bed, and a spin about the vertical, where the robot can
+    /// print every move with no unreachable move, no residual singularity and no predicted
+    /// collision — then turns and slides the part there. It never tilts the part.
     /// </summary>
     /// <remarks>
-    /// Two stages, because overhang risk is cheap to score and robot feasibility is not.
-    /// Stage 1 ranks orientations geometrically (<see cref="OrientationOptimizer"/>), dropping only
-    /// the ones whose footprint is too big for the bed at any position. Stage 2 walks that list
-    /// best-first and, for each rotation, tries a short list of bed placements
-    /// (<see cref="OrientationOptimizer.SuggestPlacements"/>, bed centre first): it slices a
-    /// throwaway copy of the part's geometry in that (rotation, position) pose and runs the real
-    /// validation sweep over it (<see cref="ToolpathFeasibilityEvaluator"/>) — the first combination
-    /// with zero unreachable moves, zero predicted collisions AND zero residual singularity-risk
-    /// moves wins, and the search stops there. A combination that fails any of the three is
-    /// rejected outright: printing an unreachable, colliding, or singular pose faults mid-print,
-    /// which is worse than the overhangs Auto Orient was asked to fix, so "best available" is never
-    /// good enough here.
+    /// Spinning about the vertical and sliding cannot lift any point or change which face is
+    /// down, so a part that is flat, flipped or laid on a side stays exactly that way. The old
+    /// version also tilted parts to reduce overhang; that ignored planar printing rules and could
+    /// land a part a fraction of a degree off flat, so it is gone.
     ///
-    /// Position is part of the search because it has to be. Rotating in place cannot fix a part
-    /// parked somewhere the arm simply cannot cover — every orientation of it is unreachable for the
-    /// same reason — and that is exactly the case a rotation-only search reported as "no orientation
-    /// is feasible". Each combination costs a real re-slice plus a full IK/collision sweep, so the
-    /// list of placements is kept deliberately short and the search is best-first, not exhaustive.
+    /// Speed comes from never re-slicing. The part's current toolpath (or one slice when it has
+    /// none) is checked at every candidate pose through a transform, because a spin and a slide
+    /// move every bead rigidly. Three passes, each on fewer candidates:
+    /// every candidate on a small sample of moves, the best few on a larger sample, then the
+    /// full <see cref="ToolpathFeasibilityEvaluator"/> sweep — the same verdict live validation
+    /// gives — best first, until one passes. Ranking is fewest unreachable samples, then the spot
+    /// closest to the bed centre among those with comfortable room to spare on the joints, so a part
+    /// only moves toward the edge when the middle does not work (<see cref="PlacementSearch.Ranking"/>).
     ///
-    /// Nothing touches the scene until a winner is found; candidate geometry and its toolpaths are
-    /// plain arrays that are discarded after scoring, never attached to the outliner.
+    /// Rail: with E1 motion on, every candidate is planned with the same rail planner export
+    /// uses, inside the rail's limits and travel allowance; with it off, the rail stays home.
     ///
-    /// v1 simplification: the rail (E1) is treated as parked at home for every candidate rather
-    /// than re-planned per orientation, so a cell that depends on rail travel to reach the part may
-    /// reject candidates a rail-aware plan would accept. Conservative in the safe direction.
+    /// The toolpath is re-sliced by the normal pipeline after the part moves. Seam and infill
+    /// placement can depend on world position, so the final path can differ slightly from the
+    /// rigidly moved one that was checked; live validation re-checks it as usual.
     /// </remarks>
     private async Task RunAutoOrientAsync(ViewportViewModel vm)
     {
@@ -74,291 +87,244 @@ public partial class ViewportView
             return;
         }
 
+        var solver = _ikSolver;
+        var robot  = vm.Robot;
+        if (solver is null || robot is null)
+        {
+            SetSliceStatus(vm, "Auto orient: robot kinematics are not loaded.", isError: true);
+            return;
+        }
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
         add.IsAutoOrientRunning = true;
         add.AutoOrientProgressPercent = 0;
-        add.AutoOrientStatusDetail = "Searching orientations…";
-        SetSliceStatus(vm, "Auto orient: searching orientations…");
+        add.AutoOrientStatusDetail = "Preparing…";
+        SetSliceStatus(vm, "Auto orient: preparing…");
         try
         {
-            // ── Stage 1: geometric search over every "which face is down" ──────────
-            var (soup, center) = await Task.Run(() =>
-            {
-                // Same world-space triangle soup the slicer consumes.
-                var flatSoup = new List<NVec3[]>(snapshots.Count);
-                var min = new NVec3(float.MaxValue);
-                var max = new NVec3(float.MinValue);
-                foreach (var (positions, indices, world) in snapshots)
-                {
-                    NVec3[] flat;
-                    if (indices is null)
-                    {
-                        flat = new NVec3[positions.Length];
-                        for (int i = 0; i < positions.Length; i++)
-                            flat[i] = TransformPoint(positions[i], world);
-                    }
-                    else
-                    {
-                        flat = new NVec3[indices.Length];
-                        for (int i = 0; i < indices.Length; i++)
-                            flat[i] = TransformPoint(positions[indices[i]], world);
-                    }
-                    foreach (var p in flat)
-                    {
-                        min = NVec3.Min(min, p);
-                        max = NVec3.Max(max, p);
-                    }
-                    flatSoup.Add(flat);
-                }
-                return (flatSoup, (min + max) * 0.5f);
-            });
+            var node = item.Node;
+            var cell = vm.ActiveCell;
 
-            var bed = vm.ActiveCell?.Bed;
-
-            // Where the placement search is allowed to put the part. This is cell-layout math, so
-            // it uses the cell config's DECLARED robot position — the same convention
-            // ImportSurfaceFrame uses for where fresh imports land — not the live-jogged ROBROOT
-            // capture below, which exists for IK and is a different thing entirely.
-            (float x, float y)? bedCenter = null;
-            if (vm.ActiveCell is { Bed: { } bedCfg } cellCfg)
+            // ── The toolpath to test: the part's own slice, or one slice now ─────────
+            // Always a copy: the full sweep writes rail and nozzle-spin values onto the moves
+            // it tests, and those must never leak into the live toolpath export reads.
+            Toolpath toolpath;
+            NVec3 origin;
+            TkMatrix4 wt;
+            if (_toolpathByNode.TryGetValue(node, out var live) && live.Layers.Count > 0)
             {
-                var bc = bedCfg.ImportSurfaceCenter(cellCfg.Robot.WorldPosition);
-                bedCenter = (bc.X, bc.Y);
+                toolpath = await Task.Run(() => CloneToolpath(live));
+                _toolpathOriginByNode.TryGetValue(node, out origin);
+                wt = node.WorldTransform;
             }
-
-            var candidates = await Task.Run(
-                () => OrientationOptimizer.FindCandidates(soup, bed, maxCandidates: 5));
-
-            if (candidates.Count == 0)
+            else
             {
-                SetSliceStatus(vm,
-                    "Auto orient: no orientation both fits the bed and improves on the current one.",
-                    isError: true);
-                ScheduleClearSliceStatus(vm);
-                return;
+                add.AutoOrientStatusDetail = "Slicing…";
+                var world = await Task.Run(() => WorldSnapshots(snapshots));
+                (toolpath, _, _) = await ComputeToolpathAsync(world, SliceMethod.Planar, BuildSliceSettings(add));
+                origin = NVec3.Zero;
+                wt = TkMatrix4.Identity;
             }
-
             add.AutoOrientProgressPercent = 10;
 
-            // ── Stage 2: robot feasibility, best-first ─────────────────────────────
-            var solver = _ikSolver;
-            var robot  = vm.Robot;
-            if (solver is null || robot is null)
+            int totalMoves = 0;
+            foreach (var layer in toolpath.Layers) totalMoves += layer.Moves.Count;
+            if (totalMoves == 0)
             {
-                SetSliceStatus(vm, "Auto orient: robot kinematics are not loaded.", isError: true);
+                SetSliceStatus(vm, "Auto orient: the part slices to nothing.", isError: true);
                 return;
             }
 
-            // Live captures (UI thread; immutable for the rest of the run). The collision world is
-            // robot + fixture geometry, which no candidate orientation changes — build it once.
+            // Live captures (UI thread; immutable for the rest of the run).
             RefreshIkSceneKinematics();
             var robroot        = GetLiveRobrootWorldPos();
             var collisionWorld = BuildOrGetCollisionWorld();
             var chainRootColl  = _fkController is { } fk
                 ? CollisionModelExtractor.ToNumericsMatrix(fk.LiveChainRootTransform())
                 : NMatrix.Identity;
-            float bedZ   = _renderer.BedZ;
-            float offA   = (float)add.ToolheadA;
-            float offB   = (float)add.ToolheadB;
-            float offC   = (float)add.ToolheadC;
-            float bead   = (float)add.BeadWidth;
-            float printMmS    = (float)add.PrintSpeed;
-            float travelMmS   = (float)add.TravelSpeed;
-            float wipeMmS     = (float)add.WipeSpeed;
-            float apoCvelFrac = (float)(add.ApoCvel / 100.0);
-            float homeE1      = (float)robot.E1;
-            var   homeWorld   = new NVec3(robroot.X, robroot.Y, robroot.Z);
-            var   seed        = new float[]
+            var seed = new float[]
             {
                 (float)robot.A1, (float)robot.A2, (float)robot.A3,
                 (float)robot.A4, (float)robot.A5, (float)robot.A6,
             };
-            // Decorative effects stay as configured: SliceSettings' properties are init-only, so
-            // stripping them would mean duplicating BuildSliceSettings' whole initialiser, and
-            // scoring the settings the operator will actually print with is the truer test anyway.
-            var evalSettings = BuildSliceSettings(add);
-
-            OrientationOptimizer.Candidate? winner = null;
-            (float x, float y)? winPlacement = null;
-            int winReach = 0, winTotal = 0, winSing = 0, winColl = 0;
-
-            // Worst case for the progress bar: every rotation × every placement. Real runs almost
-            // always finish on the first attempt or two, so the bar normally jumps to Done early —
-            // preferable to a bar that claims to be nearly finished and then keeps going.
-            int worstCaseAttempts = candidates.Count * (bedCenter is null ? 1 : MaxAutoOrientPlacements);
-            int attempt = 0;
-
-            for (int ci = 0; ci < candidates.Count && winner is null; ci++)
+            var joints   = cell?.Robot.Joints is { Count: >= 6 } j ? j : null;
+            bool e1Motion = add.E1MotionEnabled && cell?.RobotRail is not null;
+            float homeE1  = (float)robot.E1;
+            var homeWorld = cell is not null
+                ? new NVec3(cell.Robot.WorldPosition.X, cell.Robot.WorldPosition.Y, cell.Robot.WorldPosition.Z)
+                : new NVec3(robroot.X, robroot.Y, robroot.Z);
+            var bed = cell?.Bed;
+            NVec2 bedCenter = default;
+            if (cell is { Bed: { } bedCfg })
             {
-                var cand = candidates[ci];
+                var bc = bedCfg.ImportSurfaceCenter(cell.Robot.WorldPosition);
+                bedCenter = new NVec2(bc.X, bc.Y);
+            }
+            float offA = (float)add.ToolheadA, offB = (float)add.ToolheadB, offC = (float)add.ToolheadC;
 
-                // Placements for THIS rotation — the slack that's left over depends on how big its
-                // own footprint is. Null entry = no cell bed to place against, so rotate in place
-                // exactly as before.
-                var placements = new List<(float x, float y)?>();
-                if (bedCenter is { } bc)
-                    foreach (var p in OrientationOptimizer.SuggestPlacements(
-                                 bc, bed, cand.FootprintExtentX, cand.FootprintExtentY,
-                                 maxPlacements: MaxAutoOrientPlacements))
-                        placements.Add(p);
-                else
-                    placements.Add(null);
+            // ── Samples, footprint and candidates ─────────────────────────────────────
+            var cache = BuildScrubCache(toolpath);
+            var (samples, footprint, pivot) = await Task.Run(
+                () => SamplePart(toolpath, cache, origin, wt, AutoOrientFineSamples));
+            bool checkOnly = AutoOrientCheckOnlyNext;
+            AutoOrientCheckOnlyNext = false;
+            var candidates = checkOnly
+                ? [new PlacementSearch.Candidate(0f, 0f, 0f)]
+                : PlacementSearch.Generate(
+                    footprint, pivot, bed, bedCenter, AutoOrientSpinStepDeg, AutoOrientGridPerAxis);
+            if (checkOnly)
+                LogToConsole($"[orient] check only: {totalMoves:N0} moves, seed " +
+                             $"[{string.Join(", ", seed.Select(v => v.ToString("0.#")))}], E1 {(e1Motion ? $"on, home {homeE1:0.#}" : "off")}");
 
-                for (int pi = 0; pi < placements.Count; pi++)
+            var ctx = new PlacementPrescreen.Context(
+                solver, samples, offA, offB, offC, seed, joints, robroot,
+                e1Motion, cell?.RobotRail, homeWorld, homeE1,
+                (float)add.E1YPlusMm, (float)add.E1YMinusMm);
+
+            // Centre of the bed first: edge clearance is given up only when it has to be.
+            var rank = PlacementSearch.Ranking(pivot, bed is null ? null : bedCenter);
+
+            // ── Pass 1: every candidate, a small sample ───────────────────────────────
+            add.AutoOrientStatusDetail = $"Checking {candidates.Count} spins and spots…";
+            SetSliceStatus(vm, $"Auto orient: checking {candidates.Count} spins and spots…");
+            int coarseStride = Math.Max(1, samples.Length / AutoOrientCoarseSamples);
+            var coarse = await Task.Run(() =>
+            {
+                var scores = new PlacementSearch.Score[candidates.Count];
+                Parallel.For(0, candidates.Count, i => scores[i] = PlacementPrescreen.Evaluate(
+                    ctx, PlacementSearch.Transform(candidates[i], pivot), coarseStride));
+                return candidates.Select((c, i) => (c, s: scores[i])).ToList();
+            });
+            coarse.Sort(rank);
+            add.AutoOrientProgressPercent = 35;
+
+            // ── Pass 2: the best few, a larger sample ─────────────────────────────────
+            var shortlist = coarse.Take(AutoOrientFineKeep).Select(t => t.c).ToList();
+            if (!shortlist.Contains(candidates[0])) shortlist.Add(candidates[0]);   // always weigh "leave it"
+            var fine = await Task.Run(() =>
+            {
+                var scores = new PlacementSearch.Score[shortlist.Count];
+                Parallel.For(0, shortlist.Count, i => scores[i] = PlacementPrescreen.Evaluate(
+                    ctx, PlacementSearch.Transform(shortlist[i], pivot)));
+                return shortlist.Select((c, i) => (c, s: scores[i])).ToList();
+            });
+            fine.Sort(rank);
+            add.AutoOrientProgressPercent = 50;
+            LogToConsole($"[orient] {candidates.Count} candidates, {samples.Length} sample moves; " +
+                         $"best sampled: {Describe(fine[0].c, pivot)} margin {fine[0].s.MarginDeg:0.#}° " +
+                         $"unreachable {fine[0].s.Unreachable} ({elapsed.Elapsed.TotalSeconds:0.0} s)");
+
+            // ── Pass 3: full sweep, best first, until one passes ──────────────────────
+            (PlacementSearch.Candidate c, int total, int fail, int sing, int coll)? winner = null, closest = null;
+            int sweeps = 0;
+            foreach (var (cand, _) in fine.Take(AutoOrientMaxFullSweeps))
+            {
+                sweeps++;
+                add.AutoOrientStatusDetail = $"Full check {sweeps}/{Math.Min(AutoOrientMaxFullSweeps, fine.Count)}…";
+                add.AutoOrientProgressPercent = 50 + 45f * (sweeps - 1) / AutoOrientMaxFullSweeps;
+                var wtCand = wt * CollisionModelExtractor.ToOpenTkMatrix(PlacementSearch.Transform(cand, pivot));
+                var verdict = await Task.Run(() =>
                 {
-                    var placement = placements[pi];
-                    attempt++;
-
-                    string progress = placements.Count > 1
-                        ? $"Evaluating candidate {ci + 1}/{candidates.Count}, " +
-                          $"position {pi + 1}/{placements.Count}…"
-                        : $"Evaluating candidate {ci + 1}/{candidates.Count}…";
-                    SetSliceStatus(vm,
-                        $"Auto orient: {char.ToLowerInvariant(progress[0])}{progress[1..]}");
-                    add.AutoOrientStatusDetail = progress;
-                    add.AutoOrientProgressPercent =
-                        10 + attempt / (float)Math.Max(1, worstCaseAttempts) * 80;
-
-                    var candGeometry = await Task.Run(
-                        () => BuildCandidateGeometry(soup, center, cand.Rotation, bedZ, placement));
-
-                    var (evalToolpath, _, _) = await ComputeToolpathAsync(
-                        candGeometry, SliceMethod.Planar, evalSettings);
-
-                    var verdict = await Task.Run(() =>
-                    {
-                        // Rail parked at home for the whole evaluation (v1) — same bake the live
-                        // validation applies when rail motion is off.
-                        foreach (var layer in evalToolpath.Layers)
+                    if (e1Motion && cell is not null)
+                        PlanRailE1ForExport(toolpath, cell, add, origin, wtCand, homeE1);
+                    else
+                        foreach (var layer in toolpath.Layers)
                             foreach (var mv in layer.Moves)
                                 mv.E1Mm = float.NaN;
 
-                        var input = new ToolpathFeasibilityEvaluator.Input(
-                            Solver:             solver,
-                            Toolpath:           evalToolpath,
-                            Cache:              BuildScrubCache(evalToolpath),
-                            // Candidate geometry was placed in final world coordinates before
-                            // slicing, so its toolpath positions already ARE world positions.
-                            WorldTransform:     TkMatrix4.Identity,
-                            Origin:             NVec3.Zero,
-                            OffsetADeg:         offA,
-                            OffsetBDeg:         offB,
-                            OffsetCDeg:         offC,
-                            SeedKrl:            seed,
-                            E1Motion:           false,
-                            Rail:               null,
-                            HomeWorld:          homeWorld,
-                            HomeE1:             homeE1,
-                            PrintMmS:           printMmS,
-                            TravelMmS:          travelMmS,
-                            WipeMmS:            wipeMmS,
-                            ApoCvelFrac:        apoCvelFrac,
-                            World:              collisionWorld,
-                            ChainRootColl:      chainRootColl,
-                            WorldTransformColl: NMatrix.Identity,
-                            OriginColl:         NVec3.Zero,
-                            BeadWidthColl:      bead,
-                            Robroot:            robroot);
+                    return ToolpathFeasibilityEvaluator.Evaluate(new ToolpathFeasibilityEvaluator.Input(
+                        Solver:             solver,
+                        Toolpath:           toolpath,
+                        Cache:              cache,
+                        WorldTransform:     wtCand,
+                        Origin:             origin,
+                        OffsetADeg:         offA,
+                        OffsetBDeg:         offB,
+                        OffsetCDeg:         offC,
+                        SeedKrl:            seed,
+                        E1Motion:           e1Motion,
+                        Rail:               cell?.RobotRail,
+                        HomeWorld:          homeWorld,
+                        HomeE1:             homeE1,
+                        PrintMmS:           (float)add.PrintSpeed,
+                        TravelMmS:          (float)add.TravelSpeed,
+                        WipeMmS:            (float)add.WipeSpeed,
+                        ApoCvelFrac:        (float)(add.ApoCvel / 100.0),
+                        World:              collisionWorld,
+                        ChainRootColl:      chainRootColl,
+                        WorldTransformColl: CollisionModelExtractor.ToNumericsMatrix(wtCand),
+                        OriginColl:         origin,
+                        BeadWidthColl:      (float)add.BeadWidth,
+                        Robroot:            robroot,
+                        Joints:             joints), CancellationToken.None);
+                });
+                if (verdict is null) continue;
 
-                        return ToolpathFeasibilityEvaluator.Evaluate(input, CancellationToken.None);
-                    });
-
-                    if (verdict is null) continue;   // empty slice — nothing to judge
-
-                    int total = verdict.Reachable.Length;
-                    int fail = 0, sing = 0, coll = 0;
-                    for (int i = 0; i < total; i++)
-                    {
-                        if (!verdict.Reachable[i]) fail++;
-                        if (verdict.Singularity[i]) sing++;
-                        if (verdict.Collision is { } c && c[i]) coll++;
-                    }
-
-                    string posText = placement is { } pl ? $"({pl.x:0}, {pl.y:0})" : "in place";
-                    System.Console.WriteLine(
-                        $"[orient] candidate {ci + 1}/{candidates.Count} pos {pi + 1}/{placements.Count} " +
-                        $"{posText}  risk {cand.RiskAfter * 100:0.##}%  " +
-                        $"unreachable={fail}  singularity={sing}  collisions={coll}  moves={total}");
-
-                    // Hard filter — a pose the robot cannot print cleanly is not a candidate at
-                    // all. Singularity-risk moves join unreachable/collision here rather than
-                    // being report-only: the evaluator already tried to repair them by spinning
-                    // the (rotationally symmetric, so print-neutral) nozzle, so anything still
-                    // flagged survived that repair attempt — a real residual risk, not noise.
-                    if (fail > 0 || coll > 0 || sing > 0) continue;
-
-                    // Rotations are risk-sorted ascending and placements run centre-first, so the
-                    // first combination to pass is the best feasible one. Stop the whole search.
-                    winner       = cand;
-                    winPlacement = placement;
-                    winReach     = total - fail;
-                    winTotal     = total;
-                    winSing      = sing;
-                    winColl      = coll;
-                    break;
+                int total = verdict.Reachable.Length, fail = 0, sing = 0, coll = 0;
+                for (int i = 0; i < total; i++)
+                {
+                    if (!verdict.Reachable[i]) fail++;
+                    if (verdict.Singularity[i]) sing++;
+                    if (verdict.Collision is { } c && c[i]) coll++;
                 }
+                LogToConsole($"[orient] full check {Describe(cand, pivot)}: unreachable={fail} " +
+                             $"singularity={sing} collisions={coll} of {total} ({elapsed.Elapsed.TotalSeconds:0.0} s)");
+
+                var result = (cand, total, fail, sing, coll);
+                if (closest is null || fail + sing + coll < closest.Value.fail + closest.Value.sing + closest.Value.coll)
+                    closest = result;
+                if (fail == 0 && sing == 0 && coll == 0) { winner = result; break; }
             }
 
-            if (winner is null)
+            if (winner is not { } win)
             {
-                SetSliceStatus(vm,
-                    $"Auto orient: {candidates.Count} candidate orientation(s) improve overhang but " +
-                    "no orientation and position combination is fully reachable, collision-free, " +
-                    "and singularity-clear — keeping the current placement.",
-                    isError: true);
+                string near = closest is { } cl
+                    ? $" Closest: {Describe(cl.c, pivot)} — {cl.fail:N0} unreachable, {cl.sing:N0} singularity-risk, " +
+                      $"{cl.coll:N0} predicted collisions of {cl.total:N0} moves."
+                    : $" Closest sampled: {Describe(fine[0].c, pivot)} — {fine[0].s.Unreachable} of {samples.Length} sample moves out of reach.";
+                SetSliceStatus(vm, "Auto orient: no spin and spot on the bed prints every move cleanly — " +
+                                   "keeping the current placement." + near, isError: true);
                 ScheduleClearSliceStatus(vm);
                 return;
             }
 
-            // ── Apply the winner to the live node ─────────────────────────────────
-            var node   = item.Node;
-            var before = node.LocalTransform;
+            if (checkOnly) { }
+            else if (win.c.IsCurrentPose)
             {
-                // Rotate about the part's own centre so it turns in place, then resettle on the bed.
-                var parentWorld = node.Parent?.WorldTransform ?? TkMatrix4.Identity;
-                var c   = new TkVector3(center.X, center.Y, center.Z);
-                var rot = TkMatrix4.CreateTranslation(-c)
-                        * CollisionModelExtractor.ToOpenTkMatrix(winner.Rotation)
-                        * TkMatrix4.CreateTranslation(c);
-                node.LocalTransform = node.WorldTransform * rot * parentWorld.Inverted();
+                SetSliceStatus(vm, $"Auto orient: the current placement is already the best spot — " +
+                                   $"all {win.total:N0} moves reachable, no singularity, no predicted collision.");
+                ScheduleClearSliceStatus(vm);
             }
-            DropNodeToBed(node, _renderer.BedZ);
-
-            // Slide to the winning placement. The pose that was evaluated had its rotated footprint
-            // centred on the target, so the live node has to land on that same reference point —
-            // rotating about the ORIGINAL bbox centre does not move that centre, but it does move
-            // the footprint centre, so the delta is measured from the rotated footprint centre, not
-            // from `center`. Anything else applies a pose that was never the one validated.
-            string movedText = "";
-            if (winPlacement is { } win)
+            else
             {
-                var fp = RotatedFootprintCenter(soup, center, winner.Rotation);
-                float dx = win.x - fp.x, dy = win.y - fp.y;
-                if (MathF.Abs(dx) > AutoOrientMoveEpsMm || MathF.Abs(dy) > AutoOrientMoveEpsMm)
-                {
-                    // Exact world slide: writing a composed matrix onto a placement-bearing node
-                    // re-derives (and slightly rotates) the basis — see TranslateNodeWorld.
-                    TranslateNodeWorld(node, new TkVector3(dx, dy, 0f));
-                    movedText = $" · moved to ({win.x:0}, {win.y:0})";
-                }
+                // ── Apply: spin about the vertical, slide. Z is never touched. ─────────
+                var before = node.LocalTransform;
+                SpinNodeAboutWorldVertical(node, pivot, win.c.SpinDeg);
+                if (win.c.SlideMm > 0f)
+                    TranslateNodeWorld(node, new TkVector3(win.c.Dx, win.c.Dy, 0f));
+                // Same follow-through as a typed move: the part's toolpath goes with it (it is
+                // the exact path just checked, moved rigidly), undo covers both, and the robot
+                // check re-runs at the new spot instead of showing the old spot's verdict.
+                MirrorTypedTransformDelta(vm, node, before);
+                // Live validation treats ANY rail value on a move as program E1 (imported KRL) and
+                // stops re-planning — but it baked those values itself at the old spot. Clear them
+                // so it re-plans the rail for the new spot instead of judging it with the rail
+                // parked where the old spot needed it. Export always re-plans, so it is unaffected.
+                if (e1Motion) ClearPlannedE1(vm, node);
+                RecordTransformUndo(vm, node, before, node.LocalTransform, "Auto Orient");
+                vm.NotifyRenderNeeded();
+                OnTransformApplied(vm);
+
+                SetSliceStatus(vm, $"Auto orient: {Describe(win.c, pivot)} — all {win.total:N0} moves reachable, " +
+                                   "no singularity, no predicted collision.");
+                ScheduleClearSliceStatus(vm);
             }
+            string offCentre = bed is null ? "" :
+                $", {NVec2.Distance(pivot + new NVec2(win.c.Dx, win.c.Dy), bedCenter):0} mm from bed centre";
+            LogToConsole($"[orient] chose {Describe(win.c, pivot)}{offCentre} after {candidates.Count} candidates " +
+                         $"and {sweeps} full check(s)");
 
-            // One undo entry for the whole rotate + drop + slide, not three.
-            RecordTransformUndo(vm, node, before, node.LocalTransform, "Auto Orient");
-            vm.NotifyRenderNeeded();
-            GlCanvas.RequestNextFrameRendering();
-
-            SetSliceStatus(vm,
-                $"Auto orient: overhang risk {winner.RiskBefore * 100:0.#}% → {winner.RiskAfter * 100:0.#}%, " +
-                $"{winReach}/{winTotal} moves reachable, {winSing:N0} singularity-risk, " +
-                $"{winColl:N0} predicted collisions, bed fit {winner.BedFitMarginPct:0}%{movedText}");
-            ScheduleClearSliceStatus(vm);
-            System.Console.WriteLine(
-                $"[orient] applied  risk {winner.RiskBefore * 100:0.##}% -> {winner.RiskAfter * 100:0.##}%  " +
-                $"bedFit={winner.BedFitMarginPct:0.#}%  reachable={winReach}/{winTotal}  " +
-                $"singularity={winSing}  attempts={attempt}{movedText}");
-
-            // Hold the finished bar on screen briefly — otherwise the busy overlay vanishes
-            // the instant IsAutoOrientRunning flips off and "Done" is never actually seen.
+            elapsed.Stop();   // the time reported is the search, not this display hold
             add.AutoOrientProgressPercent = 100;
             add.AutoOrientStatusDetail = "Auto orientation Done";
             await Task.Delay(900);
@@ -371,89 +337,135 @@ public partial class ViewportView
         finally
         {
             add.IsAutoOrientRunning = false;
+            LogToConsole($"[orient] finished in {elapsed.Elapsed.TotalSeconds:0.0} s");
         }
     }
 
     /// <summary>
-    /// Throwaway evaluation geometry for one candidate pose: the part's world-space triangle soup
-    /// rotated about <paramref name="center"/> into the candidate orientation, dropped so its lowest
-    /// point rests on <paramref name="bedZ"/> — the same settling <see cref="DropNodeToBed"/> does
-    /// for a live node, applied to plain point arrays instead — and slid in XY so its footprint sits
-    /// centred on <paramref name="targetXY"/>.
+    /// Forgets the rail positions baked onto <paramref name="node"/>'s live toolpaths (its own and
+    /// its linked toolpath nodes'), so the next validation plans E1 afresh.
     /// </summary>
-    /// <param name="targetXY">
-    /// World XY the rotated footprint's centre should land on, or null to leave the part where it
-    /// is (no cell bed to place against).
-    /// </param>
-    /// <returns>Mesh snapshots in final world coordinates (identity node transform).</returns>
-    private static List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)> BuildCandidateGeometry(
-        IReadOnlyList<NVec3[]> soup, NVec3 center, NMatrix rotation, float bedZ,
-        (float x, float y)? targetXY)
+    private void ClearPlannedE1(ViewportViewModel vm, Viewport.Scene.SceneNode node)
     {
-        var rotated = new NVec3[soup.Count][];
-        float minZ = float.MaxValue;
-        float minX = float.MaxValue, maxX = float.MinValue;
-        float minY = float.MaxValue, maxY = float.MinValue;
-        for (int m = 0; m < soup.Count; m++)
+        foreach (var n in ResolveLinkedNodes(vm, node).Prepend(node))
+            if (_toolpathByNode.TryGetValue(n, out var tp))
+                foreach (var layer in tp.Layers)
+                    foreach (var mv in layer.Moves)
+                        mv.E1Mm = float.NaN;
+    }
+
+    /// <summary>"turned 30°, moved to (x, y)" in plain words for the status line.</summary>
+    private static string Describe(PlacementSearch.Candidate c, NVec2 pivot)
+    {
+        if (c.IsCurrentPose) return "left where it is";
+        float spin = PlacementSearch.Wrap(c.SpinDeg);
+        string turn = spin == 0f ? "" : $"turned {spin:0}°";
+        string move = c.SlideMm < 1f ? "" : $"moved to ({pivot.X + c.Dx:0}, {pivot.Y + c.Dy:0})";
+        return turn.Length > 0 && move.Length > 0 ? $"{turn}, {move}" : turn + move;
+    }
+
+    /// <summary>
+    /// Turns <paramref name="node"/> by <paramref name="spinDeg"/> about the world vertical line
+    /// through <paramref name="pivot"/>. A placement-bearing node gets the turn written straight
+    /// into its stored rotation (<see cref="Viewport.Scene.NodeTransform.RotatedAbout"/>), so no
+    /// decomposition can add a sliver of tilt; a matrix-driven node gets the exact matrix product.
+    /// </summary>
+    internal static void SpinNodeAboutWorldVertical(Viewport.Scene.SceneNode node, NVec2 pivot, float spinDeg)
+    {
+        if (spinDeg == 0f) return;
+        var parent = node.Parent?.WorldTransform ?? TkMatrix4.Identity;
+        var invParent = TkMatrix4.Identity;
+        if (MathF.Abs(parent.Determinant) > 1e-12f)
+            TkMatrix4.Invert(parent, out invParent);
+
+        float rad = spinDeg * MathF.PI / 180f;
+        var pivotWorld = new TkVector3(pivot.X, pivot.Y, 0f);
+
+        if (node.Placement is { } placement)
         {
-            var src = soup[m];
-            var dst = new NVec3[src.Length];
-            for (int i = 0; i < src.Length; i++)
-            {
-                var p = NVec3.Transform(src[i] - center, rotation) + center;
-                dst[i] = p;
-                if (p.Z < minZ) minZ = p.Z;
-                if (p.X < minX) minX = p.X;
-                if (p.X > maxX) maxX = p.X;
-                if (p.Y < minY) minY = p.Y;
-                if (p.Y > maxY) maxY = p.Y;
-            }
-            rotated[m] = dst;
+            var pivotParent = TkVector3.TransformPosition(pivotWorld, invParent);
+            var axisParent  = TkVector3.Normalize(TransformDir(TkVector3.UnitZ, invParent));
+            node.SetPlacement(placement.RotatedAbout(pivotParent, TkQuaternion.FromAxisAngle(axisParent, rad)));
+            return;
         }
 
-        float dz = minZ < float.MaxValue ? bedZ - minZ : 0f;
-        float dx = 0f, dy = 0f;
-        if (targetXY is { } t && minX < float.MaxValue)
+        var spin = TkMatrix4.CreateTranslation(-pivotWorld)
+                 * TkMatrix4.CreateRotationZ(rad)
+                 * TkMatrix4.CreateTranslation(pivotWorld);
+        node.LocalTransform = node.LocalTransform * parent * spin * invParent;
+    }
+
+    /// <summary>
+    /// Sample moves (world space, current pose) for the robot pre-check, the XY outline of the
+    /// whole toolpath, and the spin pivot (the outline's bounding-box centre).
+    /// </summary>
+    /// <remarks>
+    /// The samples are an even stride through the toolpath plus every move that sits on the
+    /// outline — the outermost points are where reach runs out first — and the outline of the
+    /// top layer, where the arm is highest. Kept in toolpath order so each IK solve seeds from
+    /// its predecessor.
+    /// </remarks>
+    private static ((NVec3 pos, NVec3 normal)[] samples, List<NVec2> footprint, NVec2 pivot) SamplePart(
+        Toolpath toolpath, (NVec3 pos, NVec3 normal)[] cache, NVec3 origin, TkMatrix4 wt, int strideTarget)
+    {
+        int total = cache.Length - 1;
+        var world = new NVec3[total];
+        var normal = new NVec3[total];
+        var wtN = CollisionModelExtractor.ToNumericsMatrix(wt);
+        for (int i = 0; i < total; i++)
         {
-            dx = t.x - (minX + maxX) * 0.5f;
-            dy = t.y - (minY + maxY) * 0.5f;
+            var (p, n) = cache[i + 1];
+            world[i] = NVec3.Transform(p - origin, wtN);
+            normal[i] = NVec3.TransformNormal(n, wtN);
         }
 
-        var result = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>(soup.Count);
-        foreach (var verts in rotated)
+        static List<int> HullIndices(NVec3[] pts, int from, int to)
         {
-            var tk = new TkVector3[verts.Length];
-            for (int i = 0; i < verts.Length; i++)
-                tk[i] = new TkVector3(verts[i].X + dx, verts[i].Y + dy, verts[i].Z + dz);
-            result.Add((tk, null, TkMatrix4.Identity));
+            var byPoint = new Dictionary<NVec2, int>();
+            for (int i = from; i < to; i++) byPoint.TryAdd(new NVec2(pts[i].X, pts[i].Y), i);
+            return PlacementSearch.Hull(byPoint.Keys).Select(h => byPoint[h]).ToList();
+        }
+
+        var pick = new SortedSet<int>();
+        int stride = Math.Max(1, total / Math.Max(1, strideTarget));
+        for (int i = 0; i < total; i += stride) pick.Add(i);
+        foreach (int i in HullIndices(world, 0, total)) pick.Add(i);
+        int topStart = total - (toolpath.Layers.Count > 0 ? toolpath.Layers[^1].Moves.Count : 0);
+        foreach (int i in HullIndices(world, Math.Clamp(topStart, 0, total), total)) pick.Add(i);
+
+        var footprint = PlacementSearch.Hull(world.Select(p => new NVec2(p.X, p.Y)));
+        var min = new NVec2(float.MaxValue);
+        var max = new NVec2(float.MinValue);
+        foreach (var p in footprint) { min = NVec2.Min(min, p); max = NVec2.Max(max, p); }
+
+        return (pick.Select(i => (world[i], normal[i])).ToArray(), footprint, (min + max) * 0.5f);
+    }
+
+    /// <summary>Mesh snapshots moved into world space (identity node transform), for slicing.</summary>
+    private static List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)> WorldSnapshots(
+        IReadOnlyList<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)> snapshots)
+    {
+        var result = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>(snapshots.Count);
+        foreach (var (positions, indices, world) in snapshots)
+        {
+            var pts = new TkVector3[positions.Length];
+            for (int i = 0; i < positions.Length; i++)
+                pts[i] = TkVector3.TransformPosition(positions[i], world);
+            result.Add((pts, indices, TkMatrix4.Identity));
         }
         return result;
     }
 
-    /// <summary>
-    /// XY centre of the part's footprint once <paramref name="rotation"/> has been applied about
-    /// <paramref name="center"/> — the same reference point <see cref="BuildCandidateGeometry"/>
-    /// parks on a placement target, so the live node can be slid to exactly the pose that was
-    /// evaluated. Rotating about the original bbox centre leaves that centre where it was but does
-    /// move the footprint centre, so the two are not interchangeable on an asymmetric part.
-    /// </summary>
-    private static (float x, float y) RotatedFootprintCenter(
-        IReadOnlyList<NVec3[]> soup, NVec3 center, NMatrix rotation)
+    /// <summary>Move-by-move copy, so a throwaway check never writes onto the live toolpath.</summary>
+    private static Toolpath CloneToolpath(Toolpath source)
     {
-        float minX = float.MaxValue, maxX = float.MinValue;
-        float minY = float.MaxValue, maxY = float.MinValue;
-        foreach (var src in soup)
-            foreach (var v in src)
-            {
-                var p = NVec3.Transform(v - center, rotation) + center;
-                if (p.X < minX) minX = p.X;
-                if (p.X > maxX) maxX = p.X;
-                if (p.Y < minY) minY = p.Y;
-                if (p.Y > maxY) maxY = p.Y;
-            }
-
-        return minX < float.MaxValue
-            ? ((minX + maxX) * 0.5f, (minY + maxY) * 0.5f)
-            : (center.X, center.Y);
+        var copy = new Toolpath();
+        foreach (var layer in source.Layers)
+        {
+            var l = new ToolpathLayer(layer.Index, layer.Z) { PlaneNormal = layer.PlaneNormal, Height = layer.Height };
+            foreach (var mv in layer.Moves) l.Moves.Add(mv with { });
+            copy.Layers.Add(l);
+        }
+        return copy;
     }
 }
