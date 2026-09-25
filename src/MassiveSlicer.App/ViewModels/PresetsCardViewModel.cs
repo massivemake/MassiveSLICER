@@ -190,6 +190,9 @@ public sealed class PrintPresetSample
     public bool? AdaptiveLayerHeight { get; init; }
     public double? MinLayerHeight { get; init; }
     public double? AdaptiveQuality { get; init; }
+    public bool? SupportDrivenLayerHeight { get; init; }
+    public double? SupportOverlapTargetPercent { get; init; }
+    public double? SupportBridgeToleranceMm { get; init; }
 
     // -- Stock from Maps -------------------------------------------------------
     public bool? UseDisplacedStock { get; init; }
@@ -440,6 +443,9 @@ public sealed class PrintPresetSample
                 B(s, "Adaptive layer height", AdaptiveLayerHeight);
                 D(s, "Min layer height", MinLayerHeight, " mm");
                 D(s, "Adaptive quality", AdaptiveQuality);
+                B(s, "Support-driven layer height", SupportDrivenLayerHeight);
+                D(s, "Bead overlap target", SupportOverlapTargetPercent, " %");
+                D(s, "Bridge tolerance", SupportBridgeToleranceMm, " mm");
             });
 
             Section("Stock from Maps", s =>
@@ -910,6 +916,8 @@ public sealed class PresetsCardViewModel : ViewModelBase
             KrlHeaderText = d.KrlPostProcess.HeaderText, KrlFooterText = d.KrlPostProcess.FooterText,
 
             AdaptiveLayerHeight = d.AdaptiveLayerHeight, MinLayerHeight = d.MinLayerHeight, AdaptiveQuality = d.AdaptiveQuality,
+            SupportDrivenLayerHeight = d.SupportDrivenLayerHeight, SupportOverlapTargetPercent = d.SupportOverlapTargetPercent,
+            SupportBridgeToleranceMm = d.SupportBridgeToleranceMm,
 
             UseDisplacedStock = d.UseDisplacedStock, StockAllowanceMm = d.StockAllowanceMm,
 
@@ -1239,6 +1247,9 @@ public sealed class PresetsCardViewModel : ViewModelBase
         if (p.AdaptiveLayerHeight is { } adaptiveLayerHeight) _additive.AdaptiveLayerHeight = adaptiveLayerHeight;
         if (p.MinLayerHeight is { } minLayerHeight) _additive.MinLayerHeight = minLayerHeight;
         if (p.AdaptiveQuality is { } adaptiveQuality) _additive.AdaptiveQuality = adaptiveQuality;
+        if (p.SupportDrivenLayerHeight is { } supportDriven) _additive.SupportDrivenLayerHeight = supportDriven;
+        if (p.SupportOverlapTargetPercent is { } supportTarget) _additive.SupportOverlapTargetPercent = supportTarget;
+        if (p.SupportBridgeToleranceMm is { } supportBridge) _additive.SupportBridgeToleranceMm = supportBridge;
 
         if (p.UseDisplacedStock is { } useDisplacedStock) _additive.UseDisplacedStock = useDisplacedStock;
         if (p.StockAllowanceMm is { } stockAllowanceMm) _additive.StockAllowanceMm = stockAllowanceMm;
@@ -1494,6 +1505,9 @@ public sealed class PresetsCardViewModel : ViewModelBase
             AdaptiveLayerHeight = adaptH ? a.AdaptiveLayerHeight : null,
             MinLayerHeight = adaptH ? a.MinLayerHeight : null,
             AdaptiveQuality = adaptH ? a.AdaptiveQuality : null,
+            SupportDrivenLayerHeight = adaptH ? a.SupportDrivenLayerHeight : null,
+            SupportOverlapTargetPercent = adaptH ? a.SupportOverlapTargetPercent : null,
+            SupportBridgeToleranceMm = adaptH ? a.SupportBridgeToleranceMm : null,
 
             UseDisplacedStock = stockMaps ? a.UseDisplacedStock : null,
             StockAllowanceMm = stockMaps ? a.StockAllowanceMm : null,
@@ -1652,6 +1666,8 @@ public sealed class PresetsCardViewModel : ViewModelBase
         KrlHeaderText = p.KrlHeaderText, KrlFooterText = p.KrlFooterText,
 
         AdaptiveLayerHeight = p.AdaptiveLayerHeight, MinLayerHeight = p.MinLayerHeight, AdaptiveQuality = p.AdaptiveQuality,
+        SupportDrivenLayerHeight = p.SupportDrivenLayerHeight, SupportOverlapTargetPercent = p.SupportOverlapTargetPercent,
+        SupportBridgeToleranceMm = p.SupportBridgeToleranceMm,
 
         UseDisplacedStock = p.UseDisplacedStock, StockAllowanceMm = p.StockAllowanceMm,
 
@@ -1732,6 +1748,8 @@ public sealed class PresetsCardViewModel : ViewModelBase
         KrlHeaderText = r.KrlHeaderText, KrlFooterText = r.KrlFooterText,
 
         AdaptiveLayerHeight = r.AdaptiveLayerHeight, MinLayerHeight = r.MinLayerHeight, AdaptiveQuality = r.AdaptiveQuality,
+        SupportDrivenLayerHeight = r.SupportDrivenLayerHeight, SupportOverlapTargetPercent = r.SupportOverlapTargetPercent,
+        SupportBridgeToleranceMm = r.SupportBridgeToleranceMm,
 
         UseDisplacedStock = r.UseDisplacedStock, StockAllowanceMm = r.StockAllowanceMm,
 

@@ -187,6 +187,9 @@ public sealed class PrintPresetRecord
     public bool? AdaptiveLayerHeight { get; set; }
     public double? MinLayerHeight { get; set; }
     public double? AdaptiveQuality { get; set; }
+    public bool? SupportDrivenLayerHeight { get; set; }
+    public double? SupportOverlapTargetPercent { get; set; }
+    public double? SupportBridgeToleranceMm { get; set; }
 
     // -- Stock from Maps -------------------------------------------------------
     public bool? UseDisplacedStock { get; set; }

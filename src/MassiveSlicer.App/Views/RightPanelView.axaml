@@ -1417,12 +1417,16 @@
                                               IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
                                               ToolTip.Tip="Vary layer thickness based on surface slope — thin layers on gentle slopes, thick on steep faces. Enables layer preview shading."/>
 
-                                    <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowAdaptiveControls}">
+                                    <!-- Min layer height is the floor for BOTH thickness rules, so it shows
+                                         whenever either is on. Shown with adaptive only, turning adaptive off
+                                         hid the control while it still governed how thin support-driven went. -->
+                                    <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowMinLayerHeight}">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="80"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                        <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="The thinnest layer any rule may choose. Floor for both Adaptive layer height and Support-driven layer height. Set equal to Layer height and neither rule can do anything — there is no room between floor and ceiling."/>
                                         <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.MinLayerHeight, Mode=TwoWay}"/>
                                     </Grid>
 
@@ -1440,6 +1444,37 @@
                                                    ToolTip.Tip="0 = finest detail (thinnest layers on slopes), 1 = fastest (thickest layers allowed)"/>
                                         <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
                                                    VerticalAlignment="Center" Margin="4,0,8,0"/>
+                                    </Grid>
+
+                                    <!-- Support-driven thinning. Deliberately NOT inside the adaptive block:
+                                         it thins whatever ladder came out, uniform or adaptive, so it must stay
+                                         reachable when Adaptive layer height is off. -->
+                                    <CheckBox Margin="8,2,8,4"
+                                              Content="Support-driven layer height"
+                                              FontSize="11"
+                                              IsChecked="{Binding Additive.SupportDrivenLayerHeight, Mode=TwoWay}"
+                                              ToolTip.Tip="Thin a layer when the boundary steps sideways far enough that the bead would not sit on the one below. Measured from the sliced boundary, for ADHESION — Adaptive layer height thins for surface finish, from face angles. Works with Adaptive layer height on or off, and only ever makes a layer thinner than whatever was already chosen."/>
+
+                                    <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.SupportDrivenLayerHeight}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Bead overlap target (%)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                   Text="{Binding Additive.SupportOverlapTargetPercent, Mode=TwoWay}"
+                                                   ToolTip.Tip="How much of each bead must sit on the one below. 60 means it may hang off by 40 % of its width — a sideways step of 0.4 × bead width.&#x0a;&#x0a;50 % is the practical minimum; 60 leaves margin so an under-extruding bead still lands safe. Raising it thins more layers: on a real part, 50→60 took layers thinned from 20 to 99."/>
+                                    </Grid>
+
+                                    <Grid Margin="8,2,8,8" IsVisible="{Binding Additive.SupportDrivenLayerHeight}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Bridge tolerance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox Length"
+                                                   Text="{Binding Additive.SupportBridgeToleranceMm, Mode=TwoWay}"
+                                                   ToolTip.Tip="How far a bead may run unsupported before the layer is thinned. 0 = 2 &#xd7; bead width.&#x0a;&#x0a;A brief off-target speck does not matter — a bead bridges a short gap on its own — so this is how long a CONTINUOUS unsupported run is allowed to get before the layer is worth thinning.&#x0a;&#x0a;An absolute LENGTH, not a share of the layer: 1 % of a long layer and 1 % of a short one are not the same defect. Past roughly 2 &#xd7; bead width you start excusing runs long enough to stack layer on layer, which is the pattern that actually collapses."/>
                                     </Grid>
                                 </StackPanel>
                             </Expander>

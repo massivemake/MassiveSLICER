@@ -2657,6 +2657,192 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "support-height-debug",
+            Description = "What support-driven layer height did: how many layers it thinned for "
+                        + "overlap, by how much, and which are still short at the minimum layer "
+                        + "height (geometry a thickness rule cannot fix)",
+            Usage = "support-height-debug [count]",
+            Execute = (ctx, args) =>
+            {
+                var d = Core.Slicing.SupportDrivenLayerHeights.LastDecisions;
+                if (d.Count == 0)
+                {
+                    ctx.LogError("[support-h] nothing recorded — enable Support-driven layer height "
+                               + "and slice (addset SupportDrivenLayerHeight true).");
+                    return;
+                }
+                int show = int.TryParse(args.Trim(), out var n) && n > 0 ? n : 12;
+                var add  = ctx.Main.RightPanel.Additive;
+
+                int thinned   = d.Count(x => x.Thinned);
+                int unfixable = d.Count(x => x.Unfixable);
+                float target  = (float)(add.BeadWidth * (1.0 - add.SupportOverlapTargetPercent / 100.0));
+                float tol     = add.SupportBridgeToleranceMm > 1e-4
+                                ? (float)add.SupportBridgeToleranceMm : (float)(2.0 * add.BeadWidth);
+
+                ctx.Log($"[support-h] {d.Count} layers · target {add.SupportOverlapTargetPercent:0.#} % "
+                      + $"overlap (step ≤ {target:0.##} mm) · bridges up to {tol:0.#} mm");
+                ctx.Log($"[support-h]   {thinned} thinned for overlap, "
+                      + $"{unfixable} still short at the {add.MinLayerHeight:0.##} mm floor");
+
+                if (thinned > 0)
+                {
+                    var cuts = d.Where(x => x.Thinned)
+                                .Select(x => x.ProposedThicknessMm - x.FinalThicknessMm)
+                                .OrderBy(v => v).ToList();
+                    ctx.Log($"[support-h]   thinning: median {cuts[cuts.Count / 2]:0.###} mm, "
+                          + $"worst {cuts[^1]:0.###} mm");
+                }
+
+                if (unfixable > 0)
+                {
+                    ctx.Log("[support-h]   UNFIXABLE — thinning cannot reach target here; these need a "
+                          + "lower floor, support, or a model change:");
+                    foreach (var x in d.Where(x => x.Unfixable)
+                                       .OrderByDescending(x => x.WorstOffsetMm).Take(show))
+                        ctx.Log($"[support-h]     Z {x.Z,8:0.0}  h {x.FinalThicknessMm:0.000} mm  "
+                              + $"step {x.WorstOffsetMm:0.##} mm over {x.LongestRunMm:0.#} mm  "
+                              + $"(would need h {x.NeededThicknessMm:0.###} mm)");
+                }
+                else
+                    ctx.Log("[support-h]   every off-target stretch was fixable by thinning.");
+            },
+        });
+
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "support-check",
+            Description = "The support-check overlay as text: which bead misses your overlap "
+                        + "target over a stretch long enough that the slicer counted it as a "
+                        + "miss, and where. Judged against the target and the bridge tolerance, "
+                        + "so it matches what the overlay reddens and what support-driven layer "
+                        + "height acted on. Wipes are not bead and are not measured",
+            Usage = "support-check [count] [toolpath name]",
+            Execute = (ctx, args) =>
+            {
+                // Leading integer is the row count; whatever follows filters by name.
+                var parts = args.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                int show  = 12;
+                string want = args.Trim();
+                if (parts.Length > 0 && int.TryParse(parts[0], out var n) && n > 0)
+                {
+                    show = n;
+                    want = parts.Length > 1 ? parts[1].Trim() : "";
+                }
+
+                void Walk(IEnumerable<OutlinerItemViewModel> items, List<OutlinerItemViewModel> into)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.IsToolpath) into.Add(item);
+                        Walk(item.Children, into);
+                    }
+                }
+
+                var toolpaths = new List<OutlinerItemViewModel>();
+                Walk(ctx.Main.Viewport.OutlinerItems, toolpaths);
+                if (want.Length > 0)
+                    toolpaths = toolpaths
+                        .Where(t => t.Name.Contains(want, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                if (toolpaths.Count == 0)
+                {
+                    ctx.LogError(want.Length > 0
+                        ? $"[support-check] no toolpath matching '{want}'."
+                        : "[support-check] no toolpaths in the scene.");
+                    return;
+                }
+
+                var add = ctx.Main.RightPanel.Additive;
+
+                foreach (var tpItem in toolpaths)
+                {
+                    var snap = ctx.Main.Viewport.GetToolpathSnapshot?.Invoke(tpItem.Node);
+                    if (snap is null)
+                    {
+                        ctx.LogError($"[support-check] \"{tpItem.Name}\": no snapshot (not staged yet).");
+                        continue;
+                    }
+
+                    // Target and tolerance derived exactly as SliceSettings derives them, so this
+                    // report cannot drift from the overlay or from the slicer's own decisions.
+                    float bead   = snap.BeadWidth;
+                    float target = bead * (1f - (float)Math.Clamp(add.SupportOverlapTargetPercent, 0.0, 100.0) / 100f);
+                    float tol    = add.SupportBridgeToleranceMm > 1e-4
+                                   ? (float)add.SupportBridgeToleranceMm : 2f * bead;
+
+                    if (target <= 0f)
+                    {
+                        ctx.LogError($"[support-check] \"{tpItem.Name}\": overlap target is 100 %, "
+                                   + "which leaves no allowance to measure against. Set "
+                                   + "SupportOverlapTargetPercent below 100.");
+                        continue;
+                    }
+
+                    var tp = snap.Smoothed.Layers.Count > 0 ? snap.Smoothed : snap.Raw;
+                    var r  = Core.Slicing.BeadSupport.Check(tp, bead, target, tol);
+
+                    if (r.TotalExtrudedMm <= 1e-4f)
+                    {
+                        ctx.LogError($"[support-check] \"{tpItem.Name}\": nothing to measure — "
+                                   + "needs at least two layers of extrusion.");
+                        continue;
+                    }
+
+                    ctx.Log($"[support-check] \"{tpItem.Name}\": {tp.Layers.Count} layers, bead "
+                          + $"{bead:0.##} mm · target {add.SupportOverlapTargetPercent:0.#} % overlap "
+                          + $"(step ≤ {target:0.##} mm) · bridges under {tol:0.##} mm");
+                    ctx.Log($"[support-check]   {r.TotalExtrudedMm / 1000f:0.#} m of bead; "
+                          + $"{r.PastTargetPercent:0.###} % past target, "
+                          + $"{r.FailedPercent:0.###} % in a stretch too long to bridge");
+
+                    if (!r.HasFailures)
+                    {
+                        ctx.Log("[support-check]   ✓ nothing misses the target over more than the "
+                              + "bridge tolerance.");
+                        // Said explicitly: a clean result here with support-driven OFF only means
+                        // the geometry happens to stack, not that anything is guarding it.
+                        if (!add.SupportDrivenLayerHeight)
+                            ctx.Log("[support-check]   note: Support-driven layer height is OFF — "
+                                  + "this part simply stacks well, nothing enforced it.");
+                        continue;
+                    }
+
+                    ctx.Log($"[support-check]   {r.Failures.Count} failing stretch(es), "
+                          + $"{r.ExtrudedMmFailed / 1000f:0.###} m of bead. Worst first:");
+                    foreach (var f in r.Failures.Take(show))
+                        ctx.Log($"[support-check]     L{f.LayerIndex,-5} Z {f.Z,8:0.0}  "
+                              + $"{f.LengthMm,7:0.#} mm of bead  worst step "
+                              + $"{Core.Slicing.BeadSupport.Mm(f.WorstOffsetMm)}");
+
+                    if (r.Failures.Count > show)
+                        ctx.Log($"[support-check]     … {r.Failures.Count - show} more "
+                              + $"(support-check {r.Failures.Count} to list them all)");
+
+                    // Points at the setting that actually governs the floor, since that is the
+                    // usual reason a stretch could not be thinned into target.
+                    if (add.SupportDrivenLayerHeight)
+                    {
+                        if (Math.Abs(add.MinLayerHeight - add.LayerHeight) < 1e-4)
+                            ctx.LogError("[support-check]   ⚠ Min layer height equals nominal layer "
+                                       + "height, so support-driven had NO room to thin anything. "
+                                       + "Lower Min layer height.");
+                        else
+                            ctx.Log($"[support-check]   floor is {add.MinLayerHeight:0.##} mm; "
+                                  + "stretches above could not reach target even there.");
+                    }
+                    else
+                        ctx.Log("[support-check]   Support-driven layer height is OFF — nothing tried "
+                              + "to fix these. Turn it on to have the slicer thin them.");
+                }
+            },
+        });
+
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "align-debug",
             Description = "Diagnostic: compare a piece's mesh world AABB against its toolpath, both as the slice produced it and as it is actually drawn (node transform applied), to catch the two coming apart",
             Usage = "align-debug <name>",

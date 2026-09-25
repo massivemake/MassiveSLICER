@@ -137,12 +137,22 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
                 OnPropertyChanged(nameof(ShowLayerPreview));
+                OnPropertyChanged(nameof(ShowMinLayerHeight));
             }
         }
     }
 
     /// <summary>Visible when adaptive is checked and method is Planar.</summary>
     public bool ShowAdaptiveControls => _adaptiveLayerHeight && _method == SliceMethod.Planar;
+
+    /// <summary>
+    /// Min layer height is the floor for EVERY rule that varies thickness, not just the adaptive
+    /// one — support-driven thinning reads it as its floor too. Shown only with adaptive, turning
+    /// adaptive off hid the one control deciding how thin support-driven could go while it
+    /// silently kept governing the result.
+    /// </summary>
+    public bool ShowMinLayerHeight
+        => (_adaptiveLayerHeight || _supportDrivenLayerHeight) && _method == SliceMethod.Planar;
 
     /// <summary>Visible when method is Planar (for the checkbox itself).</summary>
     public bool ShowAdaptiveLayerHeight => _method == SliceMethod.Planar;
@@ -185,11 +195,54 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     private double _minLayerHeight = 1.0;
 
-    /// <summary>Minimum layer height used by adaptive slicing (mm).</summary>
+    /// <summary>Minimum layer height (mm) — the floor for adaptive AND support-driven layer height.</summary>
     public double MinLayerHeight
     {
         get => _minLayerHeight;
         set => SetField(ref _minLayerHeight, Math.Clamp(value, 0.1, 100.0));
+    }
+
+    // -- Support-driven layer height ------------------------------------------
+
+    private bool   _supportDrivenLayerHeight;
+    private double _supportOverlapTargetPercent = 60.0;
+    private double _supportBridgeToleranceMm;
+
+    /// <summary>
+    /// Thin a layer when the boundary steps sideways far enough that the bead would not sit on the
+    /// one below. Off by default — it changes slice output. Composes with adaptive layer height by
+    /// taking the thinner, so it can only ever make a layer thinner, never thicker.
+    /// </summary>
+    public bool SupportDrivenLayerHeight
+    {
+        get => _supportDrivenLayerHeight;
+        set
+        {
+            if (SetField(ref _supportDrivenLayerHeight, value))
+                OnPropertyChanged(nameof(ShowMinLayerHeight));
+        }
+    }
+
+    /// <summary>
+    /// How much of each bead must sit on the one below (%). 60 means it may hang off by 40 % of its
+    /// width. 50 is the stated minimum; 60 is the overcorrection so an under-extruding bead still
+    /// lands safe.
+    /// </summary>
+    public double SupportOverlapTargetPercent
+    {
+        get => _supportOverlapTargetPercent;
+        set => SetField(ref _supportOverlapTargetPercent, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    /// <summary>
+    /// How long a continuous under-target stretch may be before the layer is thinned (mm).
+    /// 0 = derive as 2 x bead width. An absolute length, not a share of the layer — bridging is a
+    /// local property, and 1 % of a long layer is not the same defect as 1 % of a short one.
+    /// </summary>
+    public double SupportBridgeToleranceMm
+    {
+        get => _supportBridgeToleranceMm;
+        set => SetField(ref _supportBridgeToleranceMm, Math.Clamp(value, 0.0, 1000.0));
     }
 
     // -- Slicing method -------------------------------------------------------
@@ -211,6 +264,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowPlanarSeamExtras));
                 OnPropertyChanged(nameof(ShowAdaptiveLayerHeight));
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
+                OnPropertyChanged(nameof(ShowMinLayerHeight));
                 OnPropertyChanged(nameof(ShowSlicingMode));
                 OnPropertyChanged(nameof(ShowCurvedControls));
                 OnPropertyChanged(nameof(IsCurvedMethod));
