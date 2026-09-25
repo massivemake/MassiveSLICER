@@ -2134,6 +2134,46 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "cut-tool",
+            Aliases = ["cuttool"],
+            Description = "Interactive Cut Tool on the selected model: open it, set the height above the bed, show the plane, perform the cut",
+            Usage = "cut-tool open | cut-tool height <mm above bed> | cut-tool show | cut-tool cut",
+            Execute = (ctx, args) =>
+            {
+                var vp = ctx.Main.Viewport;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                void Show()
+                {
+                    if (vp.CutToolSession is not { } s) { ctx.LogError("[cut-tool] not open — `cut-tool open` first."); return; }
+                    ctx.Log($"[cut-tool] height above bed {s.Height:0.##} mm (plane world Z {s.CenterZ:0.##}, bed Z {s.BedPoint.Z:0.##}); " +
+                            $"model {s.ModelMinZ:0.#}–{s.ModelMaxZ:0.#} mm above the bed");
+                }
+                switch (parts.FirstOrDefault())
+                {
+                    case "open":
+                        if (!vp.CutToolCommand.CanExecute(null)) { ctx.LogError("[cut-tool] select a model first."); break; }
+                        vp.CutToolCommand.Execute(null);
+                        Show();
+                        break;
+                    case "height" when parts.Length >= 2 && double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var h):
+                        if (vp.CutToolSession is not { } session) { ctx.LogError("[cut-tool] not open — `cut-tool open` first."); break; }
+                        session.Height = h;
+                        Show();
+                        break;
+                    case "cut":
+                        if (vp.PerformCutToolCommand is not { } perform || !perform.CanExecute(null)) { ctx.LogError("[cut-tool] not open."); break; }
+                        perform.Execute(null);
+                        ctx.Log("[cut-tool] cut performed");
+                        break;
+                    default:
+                        Show();
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "modifier-debug",
             Description = "Diagnostic: dump the modifier panel/selection chain",
             Execute = (ctx, _) =>
