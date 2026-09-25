@@ -332,6 +332,9 @@ public partial class ViewportView : UserControl
         HookSpindleBitPreview(vm);
         WirePlanarAxisCapture(vm);
 
+        // Seed the overlay snapshot so the first toolpath upload knows which overlays are on.
+        RefreshBeadOverlayInputs(vm);
+
         {
             vm.PropertyChanged += (_, pe) =>
             {
@@ -367,7 +370,14 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.ShowBead)               or
                     nameof(ViewportViewModel.ShowBeadOverhang)       or
                     nameof(ViewportViewModel.ShowOrientationPreview))
+                {
+                    if (pe.PropertyName is nameof(ViewportViewModel.ShowBeadOverhang)
+                                        or nameof(ViewportViewModel.ShowOrientationPreview))
+                        RefreshBeadOverlayInputs(vm);
                     GlCanvas.RequestNextFrameRendering();
+                }
+                else if (pe.PropertyName is nameof(ViewportViewModel.BeadOverhangUseTarget))
+                    RefreshBeadOverlayInputs(vm);
                 else if (pe.PropertyName is nameof(ViewportViewModel.IsLayFlatMode)
                                          or nameof(ViewportViewModel.IsSeamEditorActive)
                                          or nameof(ViewportViewModel.IsBoundaryEditorActive))
@@ -1033,6 +1043,16 @@ public partial class ViewportView : UserControl
                         GlCanvas.RequestNextFrameRendering();
                 }
 
+                // The support check colours against the target, so a change to the target — or to
+                // the bead width it is derived from — changes the picture even when the toolpath
+                // itself does not. Re-snapshot so the GL thread is not still comparing to the
+                // previous target.
+                if (pe.PropertyName is nameof(AdditiveSettingsViewModel.SupportOverlapTargetPercent)
+                                    or nameof(AdditiveSettingsViewModel.SupportBridgeToleranceMm)
+                                    or nameof(AdditiveSettingsViewModel.SupportDrivenLayerHeight)
+                                    or nameof(AdditiveSettingsViewModel.BeadWidth))
+                    RefreshBeadOverlayInputs(vm);
+
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.TiltAngle)
                                     or nameof(AdditiveSettingsViewModel.TiltAngleX)
                                     or nameof(AdditiveSettingsViewModel.Method)
@@ -1655,6 +1675,8 @@ public partial class ViewportView : UserControl
             _renderer.ShowBead          = vm.ShowBead;
             _renderer.ShowBeadOverhang       = vm.ShowBeadOverhang;
             _renderer.ShowOrientationPreview = vm.ShowOrientationPreview;
+            // Fills in overlays that were skipped while their toggle was off.
+            DrainBeadOverlayRefresh();
             // Scrub hides not-yet-printed moves whenever a scrub session is live
             // (selection or sticky timeline), matching what the user can see.
             bool scrubLive = vm.IsToolpathSelected || vm.IsScrubSessionActive;
@@ -5501,6 +5523,143 @@ public partial class ViewportView : UserControl
             meta.MaterialColor);
     }
 
+    // -- Bead overlays: overhang / support check / orientation ------------------------------
+
+    /// <summary>
+    /// The overlay inputs the GL thread is allowed to read. A snapshot, refreshed on the UI
+    /// thread by <see cref="RefreshBeadOverlayInputs"/> — reading the view model from
+    /// <c>OnRender</c> is the crash this codebase has already paid for once.
+    /// </summary>
+    private sealed record BeadOverlayInputs(
+        bool ShowOverhang,
+        bool UseTarget,
+        bool ShowOrientation,
+        float TargetOffsetMm,
+        float BridgeToleranceMm);
+
+    private BeadOverlayInputs _beadOverlay = new(false, true, false, 0f, 0f);
+
+    /// <summary>Set when a toggle or a support setting changes; drained by the next frame.</summary>
+    private bool _beadOverlayDirty;
+
+    /// <summary>
+    /// Re-snapshots the overlay inputs from the view model. UI thread only.
+    /// </summary>
+    private void RefreshBeadOverlayInputs(ViewportViewModel vm)
+    {
+        var s = vm.AdditiveSettings;
+        var settings = s is null ? null : BuildSliceSettings(s);
+        _beadOverlay = new BeadOverlayInputs(
+            vm.ShowBeadOverhang,
+            vm.BeadOverhangUseTarget,
+            vm.ShowOrientationPreview,
+            settings?.SupportTargetOffsetMm ?? 0f,
+            settings?.ResolvedBridgeToleranceMm ?? 0f);
+        _beadOverlayDirty = true;
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Builds whichever bead overlays are actually switched on, for one toolpath node.
+    /// GL thread — reads only <see cref="_beadOverlay"/>, never the view model.
+    /// </summary>
+    private void UploadBeadOverlays(SceneNode node, Toolpath toolpath, float beadWidth)
+    {
+        var inputs = _beadOverlay;
+
+        if (inputs.ShowOverhang)
+        {
+            if (inputs.UseTarget && inputs.TargetOffsetMm > 0f)
+            {
+                SliceLogger.Step("BeadSupport.Check");
+                var check = BeadSupport.Check(
+                    toolpath, beadWidth, inputs.TargetOffsetMm, inputs.BridgeToleranceMm);
+                _renderer.UpdateToolpathSupportCheck(node, BeadSupport.CheckScores(check));
+                PublishSupportCheck(node, check);
+            }
+            else
+            {
+                SliceLogger.Step("BeadSupport.Fractions");
+                // Fractions(), not Analyze() — no statistics on the GL thread.
+                _renderer.UpdateToolpathBeadOverhang(node, BeadSupport.Fractions(toolpath, beadWidth));
+            }
+        }
+
+        if (inputs.ShowOrientation)
+        {
+            SliceLogger.Step("ComputeOrientationRatePerFlatMove");
+            _renderer.UpdateToolpathBeadOrientation(node, ComputeOrientationRatePerFlatMove(toolpath));
+        }
+    }
+
+    /// <summary>
+    /// Hands the check's summary and per-move failure flags to the view model, hopping to the UI
+    /// thread first — this is called from the render path.
+    /// </summary>
+    private void PublishSupportCheck(SceneNode node, BeadSupport.CheckResult check)
+    {
+        var failed = new bool[check.Verdict.Length];
+        for (int i = 0; i < failed.Length; i++)
+            failed[i] = check.Verdict[i] == BeadSupport.SupportVerdict.Failed;
+
+        string summary = BeadSupport.Describe(check);
+        string label   = $"target {check.TargetOffsetMm:0.##} mm  ·  bridges under "
+                       + $"{check.BridgeToleranceMm:0.##} mm";
+        int count = check.Failures.Count;
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            // The node may have been deleted between the render pass and this callback.
+            if (_vm is not { } vm || !_toolpathByNode.ContainsKey(node)) return;
+            vm.SetSupportCheck(summary, label, count, failed);
+        });
+    }
+
+    /// <summary>
+    /// Rebuilds the overlays for every visible toolpath after a toggle or setting change.
+    /// GL thread, called from <c>OnRender</c> when <see cref="_beadOverlayDirty"/> is set.
+    /// </summary>
+    private void DrainBeadOverlayRefresh()
+    {
+        if (!_beadOverlayDirty) return;
+
+        var inputs = _beadOverlay;
+
+        // Drop a stale summary whenever the target reading is not what is on screen — either the
+        // overlay is off, or it is showing the absolute map, which measures a different thing and
+        // publishes nothing. Without this the legend keeps reporting failures for a picture the
+        // user is no longer looking at.
+        if (!inputs.ShowOverhang || !inputs.UseTarget || inputs.TargetOffsetMm <= 0f)
+            Dispatcher.UIThread.Post(() => _vm?.ClearSupportCheck());
+
+        if (!inputs.ShowOverhang && !inputs.ShowOrientation)
+        {
+            _beadOverlayDirty = false;
+            return;
+        }
+
+        int built = 0, skipped = 0;
+        foreach (var (node, toolpath) in _toolpathByNode)
+        {
+            // A hidden toolpath is not drawn, so building its overlay would be pure cost.
+            if (!node.Visible) { skipped++; continue; }
+            _toolpathMetaByNode.TryGetValue(node, out var meta);
+            UploadBeadOverlays(node, toolpath, meta.BeadWidth > 0 ? meta.BeadWidth : 6f);
+            built++;
+        }
+
+        // Stay dirty while there is something we deliberately skipped, so un-hiding a toolpath
+        // fills its overlay in. Deliberately does NOT request another frame — that would spin
+        // every frame for a permanently hidden toolpath. Anything that could change the answer
+        // (visibility, selection, camera) already requests a render of its own, and this is
+        // picked up then.
+        //
+        // Clearing the flag here instead is what made the overlay silently stay blank when the
+        // toggle was flipped at a moment with no visible toolpath: the flag was consumed, and
+        // nothing ever re-armed it.
+        _beadOverlayDirty = built == 0 && skipped > 0;
+    }
+
     private void StageToolpathMaps(PendingToolpathEntry entry)
     {
         _rpmDirty = true;   // new/re-sliced geometry needs its RPM highlight recomputed
@@ -5610,14 +5769,14 @@ public partial class ViewportView : UserControl
                     entry.Node.LocalTransform = lt;
             }
 
-            SliceLogger.Step("ComputeOverhangPerFlatMove");
-            var overhang = ComputeOverhangPerFlatMove(entry.Toolpath, entry.BeadWidth);
-            SliceLogger.Step("UpdateToolpathBeadOverhang");
-            _renderer.UpdateToolpathBeadOverhang(entry.Node, overhang);
-            SliceLogger.Step("ComputeOrientationRatePerFlatMove");
-            var orientationRates = ComputeOrientationRatePerFlatMove(entry.Toolpath);
-            SliceLogger.Step("UpdateToolpathBeadOrientation");
-            _renderer.UpdateToolpathBeadOrientation(entry.Node, orientationRates);
+            // Both of these were unconditional, and each is a full per-move pass — the overhang
+            // one measured 301 ms on a 292k-move part in Release, paid by every user on every
+            // toolpath upload whether or not the overlay was ever opened. ShowBeadOverhang and
+            // ShowOrientationPreview gate DRAWING, so gating the compute here as well is the
+            // same picture for less GL-thread stall, and it narrows the window on the
+            // workspace-restore race. Flipping either toggle marks the overlay dirty and the
+            // next frame fills it in.
+            UploadBeadOverlays(entry.Node, entry.Toolpath, entry.BeadWidth);
 
             // Always the geometry centroid used when building the VBO (points are relative to it).
             _toolpathOriginByNode[entry.Node] = geometryCentroid;
@@ -14777,90 +14936,6 @@ public partial class ViewportView : UserControl
             ApplyToolpathStats(vm, active);
 
         GlCanvas.RequestNextFrameRendering();
-    }
-
-    /// <summary>
-    /// Computes a per-flat-move overhang score in [0,1].
-    /// 0 = move midpoint is within beadWidth of the previous layer (fully supported).
-    /// 1 = move midpoint has no nearby segment in the previous layer (unsupported).
-    /// Travel moves always score 0.
-    /// </summary>
-    private static float[] ComputeOverhangPerFlatMove(Toolpath tp, float beadWidth)
-    {
-        int total = tp.Layers.Sum(l => l.Moves.Count);
-        var result = new float[total];
-        if (total == 0 || beadWidth <= 0f) return result;
-
-        // Spatial hash over the previous layer's cut segments (cell = bead width).
-        // Any segment outside the 3×3 neighbourhood is ≥ one bead away, which already
-        // clamps to score 1 — so the ring query is exact, and the whole pass is O(n).
-        // (The old per-layer pairwise search was O(n×m) and silently bailed above
-        // 600k moves, leaving wave-expanded toolpaths entirely white.)
-        float cell = MathF.Max(beadWidth, 0.5f);
-        Dictionary<(int, int), List<(NVec3 a, NVec3 b)>>? prevGrid = null;
-        int fi = 0;
-        foreach (var layer in tp.Layers)
-        {
-            var curGrid = new Dictionary<(int, int), List<(NVec3 a, NVec3 b)>>();
-            foreach (var move in layer.Moves)
-            {
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
-                {
-                    if (prevGrid is { Count: > 0 })
-                    {
-                        var mid = (move.From + move.To) * 0.5f;
-                        int cx = (int)MathF.Floor(mid.X / cell);
-                        int cy = (int)MathF.Floor(mid.Y / cell);
-                        float minD = float.MaxValue;
-                        for (int gx = cx - 1; gx <= cx + 1; gx++)
-                        for (int gy = cy - 1; gy <= cy + 1; gy++)
-                            if (prevGrid.TryGetValue((gx, gy), out var segs))
-                                foreach (var (a, b) in segs)
-                                {
-                                    float d = SegDist2D(mid, a, b);
-                                    if (d < minD) minD = d;
-                                }
-                        result[fi] = minD == float.MaxValue
-                            ? 1f
-                            : Math.Clamp(minD / beadWidth, 0f, 1f);
-                    }
-                    InsertSegment(curGrid, move.From, move.To, cell);
-                }
-                fi++;
-            }
-            prevGrid = curGrid;
-        }
-        return result;
-
-        static void InsertSegment(
-            Dictionary<(int, int), List<(NVec3 a, NVec3 b)>> grid, NVec3 a, NVec3 b, float cell)
-        {
-            int x0 = (int)MathF.Floor(MathF.Min(a.X, b.X) / cell);
-            int x1 = (int)MathF.Floor(MathF.Max(a.X, b.X) / cell);
-            int y0 = (int)MathF.Floor(MathF.Min(a.Y, b.Y) / cell);
-            int y1 = (int)MathF.Floor(MathF.Max(a.Y, b.Y) / cell);
-            for (int x = x0; x <= x1; x++)
-            for (int y = y0; y <= y1; y++)
-            {
-                if (!grid.TryGetValue((x, y), out var list))
-                    grid[(x, y)] = list = [];
-                list.Add((a, b));
-            }
-        }
-
-        static float SegDist2D(NVec3 p, NVec3 a, NVec3 b)
-        {
-            float dx = b.X - a.X, dy = b.Y - a.Y;
-            float lenSq = dx * dx + dy * dy;
-            if (lenSq < 1e-10f)
-            {
-                float ex = p.X - a.X, ey = p.Y - a.Y;
-                return MathF.Sqrt(ex * ex + ey * ey);
-            }
-            float t = Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy) / lenSq, 0f, 1f);
-            float cx = a.X + t * dx - p.X, cy = a.Y + t * dy - p.Y;
-            return MathF.Sqrt(cx * cx + cy * cy);
-        }
     }
 
     /// <summary>
