@@ -63,7 +63,7 @@ public class LayerHeightFlowPostProcessorTest
     }
 
     [Fact]
-    public void Does_nothing_when_adaptive_layer_height_is_off()
+    public void Does_nothing_when_no_rule_varies_layer_thickness()
     {
         var tp = new Toolpath();
         tp.Layers.Add(MakeLayer(0, 10f, height: 1.5f));
@@ -71,6 +71,85 @@ public class LayerHeightFlowPostProcessorTest
         LayerHeightFlowPostProcessor.Apply(tp, Adaptive(false));
 
         Assert.Equal(1f, HeightScale(tp, 0), 5);
+    }
+
+    /// <summary>
+    /// Support-driven thinning moves slice planes on its own, with adaptive layer height OFF.
+    /// This pass used to be gated on the adaptive flag alone, so it never ran for that case and
+    /// every thinned layer was handed a full nominal layer's worth of material.
+    ///
+    /// Measured live on the Anaconda head before the fix: 205 of 561 layers thinned to 2 mm,
+    /// all of them still at flow x1 — 1.5x over-extrusion on 37 % of the part.
+    /// </summary>
+    [Fact]
+    public void Support_driven_thinning_gets_flow_corrected_with_adaptive_off()
+    {
+        var tp = new Toolpath();
+        tp.Layers.Add(MakeLayer(0, 10f, height: 3.0f));
+        tp.Layers.Add(MakeLayer(1, 12f, height: 2.0f));   // thinned for overlap, not for finish
+
+        LayerHeightFlowPostProcessor.Apply(tp, SupportDrivenOnly());
+
+        Assert.Equal(1.000f, HeightScale(tp, 0), 3);
+        Assert.Equal(0.667f, HeightScale(tp, 1), 3);      // 2 / 3, not 1.0
+    }
+
+    /// <summary>
+    /// The number the exporter actually writes for that case. Without this the fix could be
+    /// correct in the toolpath and still not reach the machine.
+    /// </summary>
+    [Fact]
+    public void Exported_rpm_drops_for_a_support_thinned_layer_with_adaptive_off()
+    {
+        var tp = new Toolpath();
+        tp.Layers.Add(MakeLayer(0, 10f, height: 3.0f));
+        tp.Layers.Add(MakeLayer(1, 12f, height: 2.0f));
+
+        var krl = new KrlExportSettings
+        {
+            ProgramName   = "T",
+            BeadWidthMm   = 6f,
+            LayerHeightMm = 3f,
+            PrintSpeedMps = 0.06f,
+            FlowRate      = 0.5862f,
+        };
+
+        // Before: the thinned layer demands the same RPM as a full one — the over-extrusion.
+        Assert.Equal(37.986f, ToolpathRpm.MovePercent(tp.Layers[1].Moves[0], krl), 2);
+
+        LayerHeightFlowPostProcessor.Apply(tp, SupportDrivenOnly());
+
+        Assert.Equal(37.986f, ToolpathRpm.MovePercent(tp.Layers[0].Moves[0], krl), 2);
+        Assert.Equal(25.324f, ToolpathRpm.MovePercent(tp.Layers[1].Moves[0], krl), 2);
+    }
+
+    /// <summary>Both rules on is the same correction — thickness is thickness, whoever chose it.</summary>
+    [Fact]
+    public void Both_rules_on_corrects_flow_the_same_way()
+    {
+        var tp = new Toolpath();
+        tp.Layers.Add(MakeLayer(0, 10f, height: 2.0f));
+
+        LayerHeightFlowPostProcessor.Apply(tp, new SliceSettings
+        {
+            AdaptiveLayerHeight      = true,
+            SupportDrivenLayerHeight = true,
+            LayerHeight              = Nominal,
+        });
+
+        Assert.Equal(0.667f, HeightScale(tp, 0), 3);
+    }
+
+    /// <summary>
+    /// Guards the reason the gate is one named property rather than a list of flags: anything
+    /// that varies thickness must report it here, or the flow pass silently skips that case.
+    /// </summary>
+    [Fact]
+    public void Varies_layer_thickness_covers_every_rule_that_moves_a_slice_plane()
+    {
+        Assert.False(new SliceSettings().VariesLayerThickness);
+        Assert.True(new SliceSettings { AdaptiveLayerHeight      = true }.VariesLayerThickness);
+        Assert.True(new SliceSettings { SupportDrivenLayerHeight = true }.VariesLayerThickness);
     }
 
     [Fact]
@@ -115,6 +194,14 @@ public class LayerHeightFlowPostProcessorTest
     {
         AdaptiveLayerHeight = on,
         LayerHeight         = Nominal,
+    };
+
+    /// <summary>The standalone case: thickness varies, but the adaptive flag is off.</summary>
+    private static SliceSettings SupportDrivenOnly() => new()
+    {
+        AdaptiveLayerHeight      = false,
+        SupportDrivenLayerHeight = true,
+        LayerHeight              = Nominal,
     };
 
     private static ToolpathLayer MakeLayer(int index, float z, float height)

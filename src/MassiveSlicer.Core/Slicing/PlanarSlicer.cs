@@ -59,6 +59,31 @@ public static class PlanarSlicer
                   settings.LayerHeight, settings.AdaptiveQuality)
             : BuildUniformZPositions(zMin, zMax, settings.FirstLayerHeight, settings.LayerHeight);
 
+        // Support-driven thinning (opt-in). Runs on the boundary before any moves exist, and can
+        // only make a layer thinner than the ladder above already chose — so the finish criterion
+        // keeps its say and turning this off reproduces the previous output exactly. Before the
+        // tree-support bed prepend below, so those foundation layers are not measured as part.
+        if (settings.SupportDrivenLayerHeight && zPositions.Length >= 2)
+        {
+            // Min layer height is the floor for every thickness rule, never above nominal.
+            float minH = settings.MinLayerHeight > 1e-4f
+                ? MathF.Min(settings.MinLayerHeight, settings.LayerHeight)
+                : settings.LayerHeight;
+            zPositions = SupportDrivenLayerHeights.ThinForSupport(
+                zPositions, zMax,
+                atZ => ComputeInsetContours(meshes, atZ, settings).Contours,
+                settings.SupportTargetOffsetMm,
+                settings.ResolvedBridgeToleranceMm,
+                minH, settings.LayerHeight,
+                searchCellMm: settings.BeadWidth);
+        }
+        else
+        {
+            // Feature off: drop last run's decisions so support-height-debug cannot report
+            // thinning from a slice that is no longer on screen.
+            SupportDrivenLayerHeights.ResetDecisions();
+        }
+
         // Tree Support must reach the print bed (Layer 1). If the mesh floats above
         // Z=0, prepend buffer layers so foundation is L1… and the part shifts up —
         // never require "layer −1".

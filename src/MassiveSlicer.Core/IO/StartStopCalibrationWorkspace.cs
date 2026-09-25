@@ -316,6 +316,7 @@ public static class StartStopCalibrationWorkspace
         prefs.ResumeRampEnabled      = false;
         prefs.LayerSpeedAdaptEnabled = false;
         prefs.AdaptiveLayerHeight    = false;
+        prefs.SupportDrivenLayerHeight = false;
 
         float gridW = useCircles
             ? (cols - 1) * pitchX + (diameter * 2f + G)
