@@ -126,8 +126,8 @@
                     <TextBlock Text="CUT PLANE" Classes="SectionHeader" Margin="0,4,0,0"/>
 
                     <Grid ColumnDefinitions="*,90">
-                        <TextBlock Text="Height (mm)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"
-                                   ToolTip.Tip="Offset along the plane normal from world origin"/>
+                        <TextBlock Text="Height above bed (mm)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"
+                                   ToolTip.Tip="Distance of the cut plane from the bed surface — for a horizontal cut, the height above the bed. A tilted cut measures along its tilt from the bed centre."/>
                         <TextBox Grid.Column="1" Classes="PanelTextBox Length" FontSize="11"
                                  Text="{Binding CutToolSession.Height, Mode=TwoWay}"/>
                     </Grid>

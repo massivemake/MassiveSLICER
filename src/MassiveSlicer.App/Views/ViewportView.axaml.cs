@@ -7855,15 +7855,12 @@ public partial class ViewportView : UserControl
         // World AABB of the whole selection for plane size + default center.
         var min = new TkVector3(float.MaxValue);
         var max = new TkVector3(float.MinValue);
-        double modelMinZ = double.MaxValue, modelMaxZ = double.MinValue;
         bool has = false;
         foreach (var n in root.SelfAndDescendants())
         {
             if (n.Mesh?.PickingData is not { } mesh) continue;
             var world = n.WorldTransform;
             var (bMin, bMax) = mesh.LocalBounds;
-            modelMinZ = Math.Min(modelMinZ, bMin.Z);
-            modelMaxZ = Math.Max(modelMaxZ, bMax.Z);
             for (int ci = 0; ci < 8; ci++)
             {
                 var pLocal = new TkVector3(
@@ -7881,11 +7878,16 @@ public partial class ViewportView : UserControl
         var center = (min + max) * 0.5f;
         float size = Math.Max(max.X - min.X, Math.Max(max.Y - min.Y, max.Z - min.Z)) * 1.25f;
 
+        // Heights are shown and typed as mm above the bed surface — the same reference the Cut
+        // modifier uses. The model range used to be the mesh's own file coordinates (not even
+        // world Z), and Height was world Z, so neither matched a tape measure from the bed.
+        var bed = vm.ResolveBedCenterXYZ();
         var session = new CutToolDialogViewModel
         {
             ModelName = root.Name,
-            ModelMinZ = modelMinZ,
-            ModelMaxZ = modelMaxZ,
+            BedPoint  = new System.Numerics.Vector3(bed.X, bed.Y, bed.Z),
+            ModelMinZ = Math.Round(min.Z - bed.Z, 1) + 0.0,   // + 0.0 turns -0 into 0 for display
+            ModelMaxZ = Math.Round(max.Z - bed.Z, 1),
             PlaneSize = size,
         };
         session.SetPose(new System.Numerics.Vector3(center.X, center.Y, center.Z),

@@ -28,8 +28,19 @@ public sealed class CutToolDialogViewModel : ViewModelBase
     private bool _suppressHeightNotify;
 
     public string ModelName { get; set; } = "Model";
+
+    /// <summary>Lowest point of the model, in mm above the bed surface.</summary>
     public double ModelMinZ { get; set; }
+
+    /// <summary>Highest point of the model, in mm above the bed surface.</summary>
     public double ModelMaxZ { get; set; }
+
+    /// <summary>
+    /// World point on the bed surface (its centre) that <see cref="Height"/> is measured from —
+    /// the same reference the Cut modifier uses, so "127" means 127 mm above the bed on every
+    /// cell. Zero leaves Height measured from world origin (no cell loaded).
+    /// </summary>
+    public Vector3 BedPoint { get; set; }
 
     /// <summary>World-space center of the cut plane (gizmo pivot).</summary>
     public double CenterX
@@ -62,19 +73,20 @@ public sealed class CutToolDialogViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Offset of the plane along its normal from world origin (= Dot(center, n)).</summary>
+    /// <summary>
+    /// Distance of the plane from the bed surface along its normal (= Dot(center − BedPoint, n)):
+    /// for a horizontal cut, the height above the bed. Used to be measured from world origin,
+    /// which put a typed height too low by the bed's own world Z (70 mm on LFAM 1, 130 on LFAM 2,
+    /// 916 on LFAM 3 — below the bed entirely).
+    /// </summary>
     public double Height
     {
-        get
-        {
-            var n = UnitNormal();
-            return _centerX * n.X + _centerY * n.Y + _centerZ * n.Z;
-        }
+        get => AlongNormalFromBed();
         set
         {
             if (_suppressHeightNotify) return;
             var n = UnitNormal();
-            double cur = _centerX * n.X + _centerY * n.Y + _centerZ * n.Z;
+            double cur = AlongNormalFromBed();
             double d = value - cur;
             if (Math.Abs(d) < 1e-9) return;
             _centerX += n.X * d;
@@ -203,6 +215,12 @@ public sealed class CutToolDialogViewModel : ViewModelBase
         float len = n.Length();
         if (len < 1e-8f) return Vector3.UnitZ;
         return n / len;
+    }
+
+    private double AlongNormalFromBed()
+    {
+        var n = UnitNormal();
+        return (_centerX - BedPoint.X) * n.X + (_centerY - BedPoint.Y) * n.Y + (_centerZ - BedPoint.Z) * n.Z;
     }
 
     /// <summary>Bulk-set plane pose from gizmo drag without recursive height churn.</summary>

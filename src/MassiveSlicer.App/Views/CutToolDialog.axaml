@@ -58,9 +58,9 @@
 
                     <TextBlock Text="{Binding ModelName}" FontWeight="SemiBold" Margin="0,4,0,0"/>
                     <TextBlock Classes="LabelMuted" FontSize="10"
-                               Text="{Binding ModelMinZ, StringFormat=Z range min: \{0\} mm}"/>
+                               Text="{Binding ModelMinZ, StringFormat=Model bottom: \{0\} mm above the bed}"/>
                     <TextBlock Classes="LabelMuted" FontSize="10" Margin="0,-6,0,0"
-                               Text="{Binding ModelMaxZ, StringFormat=Z range max: \{0\} mm}"/>
+                               Text="{Binding ModelMaxZ, StringFormat=Model top: \{0\} mm above the bed}"/>
 
                     <TextBlock Text="CUT PLANE" Classes="SectionHeader" Margin="0,8,0,0"/>
 
@@ -69,8 +69,8 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="90"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Height (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                   ToolTip.Tip="Offset of the cut plane along its normal from the model origin. For a horizontal cut (normal Z), this is world Z."/>
+                        <TextBlock Grid.Column="0" Text="Height above bed (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                   ToolTip.Tip="Distance of the cut plane from the bed surface. For a horizontal cut this is simply the height above the bed; a tilted cut measures along its tilt from the bed centre."/>
                         <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Height}"/>
                     </Grid>
 
