@@ -931,13 +931,21 @@ public sealed class RobotPanelViewModel : ViewModelBase
             KrlBaseOptions.Add($"{b.Index}: {b.Name}");
         }
 
-        // Prefer the caller's current TOOL # (workspace restore, live picker).
-        // Fall back to the cell default (LFAM 3 Extruder) only when nothing is selected yet.
+        // Prefer the caller's TOOL # (workspace restore, same-cell reload) — but only when this cell
+        // actually has it. A number the cell lacks used to be kept anyway: the dropdown went blank
+        // while the stale number kept exporting (LFAM 2's tool 2 onto LFAM 1). It now falls back to
+        // the cell default, then to the cell's first tool. Callers pass 0 on a switch to a
+        // different cell, so a new robot always starts on its own default.
         int defaultKrlTool = tools.FirstOrDefault(t => t.Default && t.KrlIndex > 0)?.KrlIndex ?? 0;
-        int wantToolIndex  = currentToolIndex > 0 ? currentToolIndex
-                           : defaultKrlTool > 0   ? defaultKrlTool
+        int wantToolIndex  = currentToolIndex > 0 && _krlToolIndices.Contains(currentToolIndex) ? currentToolIndex
+                           : defaultKrlTool > 0 && _krlToolIndices.Contains(defaultKrlTool)     ? defaultKrlTool
+                           : _krlToolIndices.Count > 0                                          ? _krlToolIndices[0]
                            : 0;
-        int wantBaseIndex  = currentBaseIndex > 0 ? currentBaseIndex : 0;
+        // BASE #: same rule for a number the cell has; a cell with exactly one base gets it. Cells
+        // with several (LFAM 3: rotary 1/2, heated bed 6) are never guessed.
+        int wantBaseIndex  = currentBaseIndex > 0 && _krlBaseIndices.Contains(currentBaseIndex) ? currentBaseIndex
+                           : _krlBaseIndices.Count == 1                                         ? _krlBaseIndices[0]
+                           : 0;
 
         // Reset so SelectKrlFrames' SelectedIndex setters always fire (and remount).
         _krlToolSelectedIndex = -1;
