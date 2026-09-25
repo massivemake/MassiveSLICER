@@ -604,7 +604,7 @@ public sealed class KrlExporterTest
     }
 
     [Fact]
-    public void Export_first_approach_is_cartesian_ptp_50mm_above_first_lin()
+    public void Export_first_approach_is_one_lin_straight_to_the_first_point_with_no_status_turn()
     {
         var tp = new Toolpath();
         var layer = new ToolpathLayer(0, 0.5f) { PlaneNormal = new Vector3(0, 0.7071068f, 0.7071068f) };
@@ -628,13 +628,21 @@ public sealed class KrlExporterTest
 
         Assert.Contains(";approach", krl);
         Assert.DoesNotContain("PTP {A1 5.020", krl);
-        Assert.Contains("PTP {X -101.13, Y -451.46, Z 50.50", krl);
-        Assert.Contains("S 4, T 35", krl);
-        Assert.Contains("LIN {X -101.13, Y -451.46, Z 0.50", krl);
+        // Straight from home to the first point, as operators hand-edited it. The old
+        // cartesian PTP to Z+50 forced an S/T that hit "Software limit switch -A2" on
+        // LFAM 1 and 2; a LIN to Z+50 first hit "+A1" on LFAM 1.
+        Assert.DoesNotContain("PTP {X", krl);
+        Assert.DoesNotContain(", S ", krl);
+        Assert.DoesNotContain("X -101.13, Y -451.46, Z 50.50", krl);   // no hover over the start (the retreat still lifts)
+        var lines = krl.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+        int at = lines.IndexOf(";approach");
+        Assert.StartsWith("PTP {A1", lines[at - 2]);     // home, then $VEL.CP, then the approach
+        Assert.StartsWith("LIN {X -101.13, Y -451.46, Z 0.50", lines[at + 1]);
+        Assert.DoesNotContain("C_VEL", lines[at + 1]);   // exact stop at the first point
     }
 
     [Fact]
-    public void Export_first_approach_cartesian_ptp_uses_home_status_turn()
+    public void Export_first_approach_has_no_cartesian_ptp_on_the_default_cell()
     {
         var tp = new Toolpath();
         var layer = new ToolpathLayer(0, 0.5f) { PlaneNormal = Vector3.UnitZ };
@@ -650,9 +658,10 @@ public sealed class KrlExporterTest
             ApproachZMm = 50f,
         });
 
-        Assert.Contains("PTP {X -101.13, Y -451.46, Z 50.50", krl);
-        Assert.Contains("S 4, T 2", krl); // default home A2=-90, A5=15
-        Assert.DoesNotContain("LIN {X -101.13, Y -451.46, Z 50.50", krl);
+        Assert.DoesNotContain("X -101.13, Y -451.46, Z 50.50", krl);   // no hover over the start (the retreat still lifts)
+        Assert.DoesNotContain("PTP {X", krl);
+        // Home is still reached with the joint PTP; only the approach changed.
+        Assert.Contains("PTP {A1", krl);
     }
 
     [Fact]
