@@ -18127,7 +18127,7 @@ public partial class ViewportView : UserControl
     /// <summary>
     /// Per layer: hold one E1 when it covers the layer, otherwise one constant-speed
     /// glide to the next pose the arm needs. Bakes <see cref="ToolpathMove.E1Mm"/>.
-    /// Glide samples are checked for reach and wrist singularity before they are kept.
+    /// Every pose the planner accepts passes the same IK check as robot validation.
     /// </summary>
     private void PlanRailE1ForExport(
         Toolpath toolpath,
@@ -18152,7 +18152,6 @@ public partial class ViewportView : UserControl
         float offA = (float)settings.ToolheadA;
         float offB = (float)settings.ToolheadB;
         float offC = (float)settings.ToolheadC;
-        var bans = new List<(NVec3 World, float E1)>();
         var seed = new float[] { 0f, -90f, 90f, 0f, 0f, 15f };
         if (homeWorld.X != 0f || homeWorld.Y != 0f)
             seed[0] = MathF.Atan2(homeWorld.Y, homeWorld.X) * (180f / MathF.PI);
@@ -18175,89 +18174,64 @@ public partial class ViewportView : UserControl
             return MathF.Abs(e1 - ideal) <= 900f;
         }
 
+        // Same verdict as ToolpathFeasibilityEvaluator: an IK solve with the toolhead
+        // orientation, inside the joint limits, wrist not flat. The envelope alone is a
+        // reach-radius shell with no orientation — holding on it parked the rail where
+        // 3,922 Cow Column points could not be solved.
+        var homeSeed = (float[])seed.Clone();
+        var rotByWorld = new Dictionary<NVec3, (TkVector3, TkVector3, TkVector3)>();
+        var lastRot = solver?.TargetRotFromGlobalOrientation(WorldNormal(NVec3.UnitZ), offA, offB, offC)
+                      ?? default;
+        var verdicts = new Dictionary<(NVec3, int), bool>();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        long solveTicks = 0;
+        int solves = 0, hits = 0, glideLayers = 0;
+
+        TkVector3 WorldNormal(NVec3 n)
+        {
+            var w = new TkVector3(
+                n.X * wt.M11 + n.Y * wt.M21 + n.Z * wt.M31,
+                n.X * wt.M12 + n.Y * wt.M22 + n.Z * wt.M32,
+                n.X * wt.M13 + n.Y * wt.M23 + n.Z * wt.M33);
+            return w.LengthSquared > 1e-12f ? TkVector3.Normalize(w) : TkVector3.UnitZ;
+        }
+
+        bool SolveOk(NVec3 world, float e1)
+        {
+            if (solver is null) return true;
+            var rel = world - RailE1Planner.BaseWorld(homeWorld, rail, e1);
+            var tgt = new TkVector3(rel.X, rel.Y, rel.Z);
+            if (rotByWorld.TryGetValue(world, out var r)) lastRot = r;
+            var sol = solver.Solve(tgt, seed, lastRot, maxIterations: 40)
+                   ?? solver.Solve(tgt, homeSeed, lastRot, maxIterations: 60);
+            if (sol is null) return false;
+            if (joints is not null && !JointLimitEnvelope.JointsInside(sol, joints)) return false;
+            Array.Copy(sol, seed, 6);
+            return MathF.Abs(sol[4]) >= 5f;
+        }
+
         bool PoseOk(NVec3 world, float e1)
         {
             if (!Envelope(world, e1)) return false;
-            foreach (var b in bans)
-            {
-                if (MathF.Abs(b.E1 - e1) < 40f && NVec3.Distance(b.World, world) < 30f)
-                    return false;
-            }
-            return true;
+            var key = (world, (int)MathF.Round(e1 * 2f));
+            if (verdicts.TryGetValue(key, out bool known)) { hits++; return known; }
+            if (verdicts.Count > 4_000_000) verdicts.Clear();
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            bool ok = SolveOk(world, e1);
+            solveTicks += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+            solves++;
+            verdicts[key] = ok;
+            return ok;
         }
 
         float Clamp(float e1) =>
             RailE1Planner.ClampToAllowance(e1, homeE1, yPlus, yMinus, rail.MinMm, rail.MaxMm);
 
-        bool MarkSingularGlideSamples(List<NVec3> worlds, float[] e1)
-        {
-            if (solver is null || worlds.Count < 2 || e1.Length != worlds.Count) return false;
-            var s = new float[worlds.Count];
-            for (int i = 1; i < worlds.Count; i++)
-                s[i] = s[i - 1] + NVec3.Distance(worlds[i], worlds[i - 1]);
-
-            bool added = false;
-            int cursor = 0;
-            while (cursor < worlds.Count - 1)
-            {
-                if (MathF.Abs(e1[cursor + 1] - e1[cursor]) < 1f)
-                {
-                    cursor++;
-                    continue;
-                }
-                int end = cursor;
-                while (end < worlds.Count - 1 && MathF.Abs(e1[end + 1] - e1[end]) >= 1f)
-                    end++;
-                float s0 = s[cursor];
-                float span = s[end] - s0;
-                const int samples = 8;
-                for (int k = 0; k <= samples; k++)
-                {
-                    float u = k / (float)samples;
-                    float dist = s0 + span * u;
-                    var world = WorldAt(worlds, s, dist);
-                    float e = e1[cursor] + (e1[end] - e1[cursor]) * u;
-                    if (!ConfirmedBad(world, e)) continue;
-                    bans.Add((world, e));
-                    added = true;
-                }
-                cursor = Math.Max(end, cursor + 1);
-            }
-            return added;
-        }
-
-        bool ConfirmedBad(NVec3 world, float e1)
-        {
-            if (solver is null) return false;
-            var rel = world - RailE1Planner.BaseWorld(homeWorld, rail, e1);
-            var tgt = new TkVector3(rel.X, rel.Y, rel.Z);
-            if (!solver.IsInWorkspace(tgt)) return true;
-            var rot = solver.TargetRotFromGlobalOrientation(TkVector3.UnitZ, offA, offB, offC);
-            var sol = solver.Solve(tgt, seed, rot, maxIterations: 40);
-            if (sol is null) return false;
-            Array.Copy(sol, seed, 6);
-            if (MathF.Abs(sol[4]) < 5f) return true;
-            return joints is not null && !JointLimitEnvelope.JointsInside(sol, joints);
-        }
-
-        RailE1Planner.LayerRailPlan PlanWithRetry(List<NVec3> worlds, float prevE1)
-        {
-            var plan = RailE1Planner.PlanLayer(
-                worlds, homeWorld, rail, homeE1, yPlus, yMinus, prevE1, PoseOk);
-            if (solver is null) return plan;
-            for (int attempt = 0; attempt < 2; attempt++)
-            {
-                if (!MarkSingularGlideSamples(worlds, plan.E1Mm)) return plan;
-                plan = RailE1Planner.PlanLayer(
-                    worlds, homeWorld, rail, homeE1, yPlus, yMinus, prevE1, PoseOk);
-            }
-            return plan;
-        }
-
         float prev = homeE1;
         List<ToolpathMove>? prevMoves = null;
         float[]? prevPlan = null;
         List<NVec3>? prevWorlds = null;
+        var lastNormal = NVec3.UnitZ; // travel holds the last extrude normal, as validation does
 
         foreach (var layer in toolpath.Layers)
         {
@@ -18266,25 +18240,28 @@ public partial class ViewportView : UserControl
             var layerWorlds = new List<NVec3>(layer.Moves.Count);
             foreach (var move in layer.Moves)
             {
+                var world = ToWorld(move.To.X, move.To.Y, move.To.Z);
                 layerMoves.Add(move);
-                layerWorlds.Add(ToWorld(move.To.X, move.To.Y, move.To.Z));
+                layerWorlds.Add(world);
+                if (move.Kind != MoveKind.Travel && !move.IsLayerStitch)
+                    lastNormal = move.Normal.LengthSquared() > 1e-6f ? move.Normal : NVec3.UnitZ;
+                if (solver is not null)
+                    rotByWorld[world] = solver.TargetRotFromGlobalOrientation(
+                        WorldNormal(lastNormal), offA, offB, offC);
             }
 
-            var plan = PlanWithRetry(layerWorlds, prev);
-            if (prevMoves is not null && prevPlan is not null && prevWorlds is not null && plan.E1Mm.Length > 0)
+            var plan = RailE1Planner.PlanLayer(
+                layerWorlds, homeWorld, rail, homeE1, yPlus, yMinus, prev, PoseOk);
+            if (prevMoves is not null && prevPlan is not null && prevWorlds is not null && plan.E1Mm.Length > 0
+                && RailE1Planner.TryPullGlideBack(prevPlan, prevWorlds, plan.E1Mm[0], PoseOk))
             {
-                var backup = (float[])prevPlan.Clone();
-                if (RailE1Planner.TryPullGlideBack(prevPlan, prevWorlds, plan.E1Mm[0], PoseOk))
-                {
-                    if (MarkSingularGlideSamples(prevWorlds, prevPlan))
-                        Array.Copy(backup, prevPlan, backup.Length);
-                    for (int i = 0; i < prevMoves.Count; i++)
-                        prevMoves[i].E1Mm = Clamp(prevPlan[i]);
-                }
+                for (int i = 0; i < prevMoves.Count; i++)
+                    prevMoves[i].E1Mm = Clamp(prevPlan[i]);
             }
 
             for (int i = 0; i < layerMoves.Count && i < plan.E1Mm.Length; i++)
                 layerMoves[i].E1Mm = Clamp(plan.E1Mm[i]);
+            if (plan.GlideCount > 0) glideLayers++;
 
             if (plan.E1Mm.Length == 0) continue;
             prev = plan.E1Mm[^1];
@@ -18292,19 +18269,14 @@ public partial class ViewportView : UserControl
             prevPlan = plan.E1Mm;
             prevWorlds = layerWorlds;
         }
+        LastE1PlanStats =
+            $"{clock.ElapsedMilliseconds} ms, {solves:N0} IK solves " +
+            $"({solveTicks * 1000 / System.Diagnostics.Stopwatch.Frequency} ms), {hits:N0} cached, " +
+            $"{glideLayers} of {toolpath.Layers.Count} layers glide";
     }
 
-    static NVec3 WorldAt(List<NVec3> pts, float[] s, float dist)
-    {
-        if (pts.Count == 0) return default;
-        if (dist <= 0f || pts.Count == 1) return pts[0];
-        if (dist >= s[^1]) return pts[^1];
-        int i = 1;
-        while (i < pts.Count - 1 && s[i] < dist) i++;
-        float seg = s[i] - s[i - 1];
-        float t = seg < 1e-3f ? 1f : (dist - s[i - 1]) / seg;
-        return NVec3.Lerp(pts[i - 1], pts[i], Math.Clamp(t, 0f, 1f));
-    }
+    /// <summary>Timing of the last <see cref="PlanRailE1ForExport"/> run, for the [E1] export line.</summary>
+    internal static string LastE1PlanStats { get; private set; } = "";
 
     /// <summary>
     /// RPM inputs each toolpath's highlight was last built from. Keyed by node so a re-slice
@@ -18570,7 +18542,7 @@ public partial class ViewportView : UserControl
                 var mvm = TopLevel.GetTopLevel(this)?.DataContext as MainWindowViewModel;
                 mvm?.Console.Log(
                     $"[E1] Reachability plan: {nSet} points, E1 range [{eMin:0.#} … {eMax:0.#}] mm " +
-                    $"(home ± Y+={settings.E1YPlusMm:0}/Y−={settings.E1YMinusMm:0})");
+                    $"(home ± Y+={settings.E1YPlusMm:0}/Y−={settings.E1YMinusMm:0}) — {LastE1PlanStats}");
             }
         }
 

@@ -372,13 +372,27 @@ public static class RailE1Planner
         // Slowest in-layer ramp that still arrives before prev stops reaching.
         if (fail > 0 && fail < n)
         {
+            // Coarse stride down from the layer end, then refine back up. Trying every
+            // (start, end) pair is n² ramps, and each ramp is a run of full IK solves.
             int end = n - 1;
             int start = -1;
-            for (int candidateEnd = end; candidateEnd >= fail && start < 0; candidateEnd--)
+            int stride = Math.Max(1, (n - 1 - fail) / 16);
+            int found = -1;
+            for (int candidateEnd = n - 1; candidateEnd >= fail; candidateEnd -= stride)
             {
-                for (int a = 0; a < fail; a++)
+                int a = EarliestStart(pts, s, 0, fail - 1, candidateEnd, prev, dest, poseOk);
+                if (a < 0) continue;
+                found = candidateEnd;
+                start = a;
+                end = candidateEnd;
+                break;
+            }
+            if (found >= 0)
+            {
+                for (int candidateEnd = Math.Min(n - 1, found + stride - 1); candidateEnd > found; candidateEnd--)
                 {
-                    if (!RampOk(pts, s, a, candidateEnd, prev, dest, poseOk)) continue;
+                    int a = EarliestStart(pts, s, 0, fail - 1, candidateEnd, prev, dest, poseOk);
+                    if (a < 0) continue;
                     start = a;
                     end = candidateEnd;
                     break;
@@ -403,17 +417,9 @@ public static class RailE1Planner
         float homeE1, float yPlus, float yMinus, AllowanceBounds bounds,
         float prev, Func<Vector3, float, bool> poseOk)
     {
-        float best = float.NaN;
-        float bestDist = float.MaxValue;
-        foreach (float sample in Samples(bounds.Lo, bounds.Hi, 25f))
-        {
-            float e = ClampToAllowance(sample, homeE1, yPlus, yMinus, bounds.RailMin, bounds.RailMax);
-            if (!CoversAll(pts, e, poseOk)) continue;
-            float dist = MathF.Abs(e - prev);
-            if (dist < bestDist) { bestDist = dist; best = e; }
-        }
-        if (float.IsNaN(best)) return null;
-        return WalkToward(best, prev, bounds, homeE1, yPlus, yMinus, e => CoversAll(pts, e, poseOk));
+        Func<float, bool> covers = e => CoversAll(pts, e, poseOk);
+        if (NearestPassing(prev, bounds, homeE1, yPlus, yMinus, covers) is not float best) return null;
+        return WalkToward(best, prev, SearchStepMm, bounds, homeE1, yPlus, yMinus, covers);
     }
 
     static bool TryPlaceGlide(
@@ -552,47 +558,70 @@ public static class RailE1Planner
         float homeE1, float yPlus, float yMinus, AllowanceBounds bounds,
         Func<Vector3, float, bool> poseOk)
     {
-        float best = float.NaN;
-        float bestDist = float.MaxValue;
-        foreach (float sample in Samples(bounds.Lo, bounds.Hi, 10f))
-        {
-            float e = ClampToAllowance(sample, homeE1, yPlus, yMinus, bounds.RailMin, bounds.RailMax);
-            if (!poseOk(point, e)) continue;
-            float dist = MathF.Abs(e - current);
-            if (dist < bestDist) { bestDist = dist; best = e; }
-        }
-        if (float.IsNaN(best))
+        Func<float, bool> ok = e => poseOk(point, e);
+        if (NearestPassing(current, bounds, homeE1, yPlus, yMinus, ok) is not float best)
             return IdealE1(point, home, rail, homeE1, yPlus, yMinus);
-        return WalkToward(best, current, bounds, homeE1, yPlus, yMinus, e => poseOk(point, e));
+        return WalkToward(best, current, SearchStepMm, bounds, homeE1, yPlus, yMinus, ok);
     }
 
+    /// <summary>
+    /// Nearest passing E1 to <paramref name="center"/> on a <see cref="SearchStepMm"/> grid,
+    /// searched outward so it stops at the first hit. Scanning the whole allowance and
+    /// keeping the closest gives the same answer at ~100× the IK solves.
+    /// </summary>
+    static float? NearestPassing(
+        float center, AllowanceBounds bounds,
+        float homeE1, float yPlus, float yMinus, Func<float, bool> ok)
+    {
+        float Clamp(float e) => ClampToAllowance(e, homeE1, yPlus, yMinus, bounds.RailMin, bounds.RailMax);
+        float c = Clamp(center);
+        if (ok(c)) return c;
+        bool loDone = false, hiDone = false;
+        for (int k = 1; !(loDone && hiDone); k++)
+        {
+            if (!loDone)
+            {
+                float e = c - k * SearchStepMm;
+                if (e <= bounds.Lo) { e = Clamp(bounds.Lo); loDone = true; }
+                if (e < c && ok(e)) return e;
+            }
+            if (!hiDone)
+            {
+                float e = c + k * SearchStepMm;
+                if (e >= bounds.Hi) { e = Clamp(bounds.Hi); hiDone = true; }
+                if (e > c && ok(e)) return e;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Coarse grid for the rail search. <paramref name="poseOk"/> is a full IK solve in the
+    /// app, so the grid only brackets; <see cref="WalkToward"/> bisects to 1 mm.
+    /// </summary>
+    const float SearchStepMm = 40f;
+
+    /// <summary>
+    /// From a passing E1, move toward <paramref name="toward"/> as far as still passes, to
+    /// 1 mm. The next grid sample that way failed, so the edge is within one
+    /// <paramref name="maxSpan"/>; bisect it rather than stepping 1 mm at a time.
+    /// </summary>
     static float WalkToward(
-        float from, float toward, AllowanceBounds bounds,
+        float from, float toward, float maxSpan, AllowanceBounds bounds,
         float homeE1, float yPlus, float yMinus, Func<float, bool> ok)
     {
         float dir = MathF.Sign(toward - from);
         if (dir == 0f) return from;
-        float refined = from;
-        for (float step = 1f; step <= MathF.Abs(toward - from); step += 1f)
+        float span = MathF.Min(MathF.Abs(toward - from), maxSpan);
+        float far = ClampToAllowance(from + dir * span, homeE1, yPlus, yMinus, bounds.RailMin, bounds.RailMax);
+        if (ok(far)) return far;
+        float good = from, bad = far;
+        while (MathF.Abs(bad - good) > 1f)
         {
-            float e = ClampToAllowance(from + dir * step, homeE1, yPlus, yMinus, bounds.RailMin, bounds.RailMax);
-            if (!ok(e)) break;
-            refined = e;
-            if (MathF.Abs(e - toward) <= 1f) break;
+            float mid = 0.5f * (good + bad);
+            if (ok(mid)) good = mid; else bad = mid;
         }
-        return refined;
-    }
-
-    static IEnumerable<float> Samples(float lo, float hi, float step)
-    {
-        if (hi - lo < 1f)
-        {
-            yield return lo;
-            yield break;
-        }
-        step = MathF.Max(1f, step);
-        for (float e = lo; e <= hi + 0.1f; e += step)
-            yield return MathF.Min(e, hi);
+        return good;
     }
 
     const float RampSampleMm = 20f;
