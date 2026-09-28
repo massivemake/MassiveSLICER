@@ -518,6 +518,12 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 ## Session changelog (reverse chronological)
 
+### 2026-09-28 — E1 rail smoothing (`feature/e1-rail-smoothing`, not on main)
+- Goal: when E1 motion is on, a layer that fits one carriage pose holds. A layer that does not gets one constant-speed glide (path length, not point index) to the next pose the arm needs. No 11-cell hops.
+- Not in the slice. Preview **Analysing…** and KRL export both call `PlanRailE1ForExport`, which now calls `RailE1Planner.PlanLayer`. Glide samples are checked for reach and `|A5| < 5°` before they are kept. Red/purple marks and the export warning are unchanged.
+- No new setting, no cell JSON, no `.mass` change. On `feature/e1-rail-smoothing`, not merged to main.
+- Key files: `RailE1Planner.cs`, `RailE1PlannerTest.cs`, `ViewportView.axaml.cs`.
+
 ### 2026-09-15 — Send-to-Drive writes v2 job dir + pointer (not 1GB JSON)
 - Symptom: LFAM3 curtain Send was ~1GB v1 JSON over HTTP; Drive re-parsed for minutes.
 - Cause: `MassiveDriveJobExporter` + `POST /api/jobs/package` serialized every segment as pretty JSON.

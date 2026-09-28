@@ -18125,9 +18125,9 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// For each move endpoint, sample E1 across the Y+/Y− allowance and pick the
-    /// carriage position that keeps the TCP in the arm workspace (prefer mid-reach).
-    /// Bakes <see cref="ToolpathMove.E1Mm"/> for the KRL exporter.
+    /// Per layer: hold one E1 when it covers the layer, otherwise one constant-speed
+    /// glide to the next pose the arm needs. Bakes <see cref="ToolpathMove.E1Mm"/>.
+    /// Glide samples are checked for reach and wrist singularity before they are kept.
     /// </summary>
     private void PlanRailE1ForExport(
         Toolpath toolpath,
@@ -18147,146 +18147,169 @@ public partial class ViewportView : UserControl
             cell.Robot.WorldPosition.Y,
             cell.Robot.WorldPosition.Z);
 
-        // Collect world-space move endpoints in export order.
-        var worlds = new List<NVec3>(4096);
-        var moves  = new List<ToolpathMove>(4096);
-        foreach (var layer in toolpath.Layers)
-        {
-            foreach (var move in layer.Moves)
-            {
-                float lx = move.To.X - origin.X, ly = move.To.Y - origin.Y, lz = move.To.Z - origin.Z;
-                var world = new NVec3(
-                    lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
-                    lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
-                    lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
-                worlds.Add(world);
-                moves.Add(move);
-            }
-        }
-        if (worlds.Count == 0) return;
-
-        // Prefer mid-reach from the live IK envelope when available; else ~900 mm.
-        float prefReach = 900f;
-        Func<NVec3, bool>? inWs = null;
         var solver = _ikSolver;
-        if (solver is not null)
-        {
-            prefReach = solver.PreferredHorizontalReachMm;
-            // Envelope is translation-invariant for pure rail travel — evaluate TCP
-            // relative to a virtual base at candidate E1 (no UpdateSceneBase needed).
-            inWs = rel => solver.IsInWorkspace(new TkVector3(rel.X, rel.Y, rel.Z));
-        }
-
-        // Subsample dense paths for speed: plan every keyframe, interpolate between.
-        const float KeyMm = 40f;
-        var keyIdx = new List<int> { 0 };
-        float acc = 0f;
-        for (int i = 1; i < worlds.Count; i++)
-        {
-            acc += NVec3.Distance(worlds[i - 1], worlds[i]);
-            if (acc >= KeyMm)
-            {
-                keyIdx.Add(i);
-                acc = 0f;
-            }
-        }
-        if (keyIdx[^1] != worlds.Count - 1)
-            keyIdx.Add(worlds.Count - 1);
-
-        var keyWorlds = new List<NVec3>(keyIdx.Count);
-        foreach (int i in keyIdx)
-            keyWorlds.Add(worlds[i]);
-
-        float[] keyE1 = RailE1Planner.PlanPath(
-            keyWorlds, homeWorld, rail, homeE1, yPlus, yMinus,
-            prefReach, inWs, gridCount: 11, smoothBlend: 0.45f);
-
-        // Interpolate key E1 → every move; sparse full-IK refinement on unreachable keys.
-        if (solver is not null)
-            RefineKeyE1WithIk(keyWorlds, keyE1, homeWorld, rail, homeE1, yPlus, yMinus, solver, settings);
-
-        // Paint onto moves
-        int k = 0;
-        for (int i = 0; i < moves.Count; i++)
-        {
-            while (k + 1 < keyIdx.Count && i > keyIdx[k + 1]) k++;
-            float e1;
-            if (k + 1 < keyIdx.Count && keyIdx[k + 1] != keyIdx[k])
-            {
-                float t = (i - keyIdx[k]) / (float)(keyIdx[k + 1] - keyIdx[k]);
-                e1 = keyE1[k] * (1f - t) + keyE1[k + 1] * t;
-            }
-            else
-                e1 = keyE1[Math.Min(k, keyE1.Length - 1)];
-
-            e1 = RailE1Planner.ClampToAllowance(e1, homeE1, yPlus, yMinus, rail.MinMm, rail.MaxMm);
-            moves[i].E1Mm = e1;
-        }
-    }
-
-    /// <summary>
-    /// For keyframes still outside the workspace envelope at their planned E1, try a few
-    /// more E1 samples with a cheap position-only IK solve (serial — no Parallel.For).
-    /// </summary>
-    private static void RefineKeyE1WithIk(
-        List<NVec3> keyWorlds,
-        float[] keyE1,
-        NVec3 homeWorld,
-        RobotRailCellConfig rail,
-        float homeE1,
-        float yPlus,
-        float yMinus,
-        GltfNumericalIkSolver solver,
-        AdditiveSettingsViewModel settings)
-    {
+        var joints = cell.Robot.Joints is { Count: >= 6 } j ? j : null;
         float offA = (float)settings.ToolheadA;
         float offB = (float)settings.ToolheadB;
         float offC = (float)settings.ToolheadC;
-        var seed = new float[6]; // home-ish zeros; Solve will iterate
+        var bans = new List<(NVec3 World, float E1)>();
+        var seed = new float[] { 0f, -90f, 90f, 0f, 0f, 15f };
+        if (homeWorld.X != 0f || homeWorld.Y != 0f)
+            seed[0] = MathF.Atan2(homeWorld.Y, homeWorld.X) * (180f / MathF.PI);
 
-        for (int i = 0; i < keyWorlds.Count; i++)
+        NVec3 ToWorld(float x, float y, float z)
         {
-            var w = keyWorlds[i];
-            var baseW = RailE1Planner.BaseWorld(homeWorld, rail, keyE1[i]);
-            var rel = w - baseW;
-            if (solver.IsInWorkspace(new TkVector3(rel.X, rel.Y, rel.Z)))
-                continue;
+            float lx = x - origin.X, ly = y - origin.Y, lz = z - origin.Z;
+            return new NVec3(
+                lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
+                lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
+                lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
+        }
 
-            // Failed envelope at planned E1 — re-pick using full sample set + quick Solve.
-            var candidates = RailE1Planner.BuildCandidates(
-                w, homeWorld, rail, homeE1, yPlus, yMinus, gridCount: 11);
-            float best = keyE1[i];
-            float bestScore = float.MaxValue;
-            var normal = TkVector3.UnitZ;
-            var rot = solver.TargetRotFromGlobalOrientation(normal, offA, offB, offC);
+        bool Envelope(NVec3 world, float e1)
+        {
+            var rel = world - RailE1Planner.BaseWorld(homeWorld, rail, e1);
+            if (solver is not null)
+                return solver.IsInWorkspace(new TkVector3(rel.X, rel.Y, rel.Z));
+            float ideal = RailE1Planner.IdealE1(world, homeWorld, rail, homeE1, yPlus, yMinus);
+            return MathF.Abs(e1 - ideal) <= 900f;
+        }
 
-            foreach (float e1 in candidates)
+        bool PoseOk(NVec3 world, float e1)
+        {
+            if (!Envelope(world, e1)) return false;
+            foreach (var b in bans)
             {
-                var b = RailE1Planner.BaseWorld(homeWorld, rail, e1);
-                var r = w - b;
-                var tgt = new TkVector3(r.X, r.Y, r.Z);
-                bool env = solver.IsInWorkspace(tgt);
-                // Position-only solve (faster) as quality check when in envelope
-                float[]? sol = env
-                    ? solver.Solve(tgt, seed, maxIterations: 25, finalTolerance: 15f)
-                    : null;
-                float dxy = MathF.Sqrt(r.X * r.X + r.Y * r.Y);
-                float score = (sol is not null ? 0f : env ? 50_000f : 1_000_000f)
-                    + MathF.Abs(dxy - solver.PreferredHorizontalReachMm)
-                    + 0.1f * MathF.Abs(e1 - homeE1);
-                if (score < bestScore)
+                if (MathF.Abs(b.E1 - e1) < 40f && NVec3.Distance(b.World, world) < 30f)
+                    return false;
+            }
+            return true;
+        }
+
+        float Clamp(float e1) =>
+            RailE1Planner.ClampToAllowance(e1, homeE1, yPlus, yMinus, rail.MinMm, rail.MaxMm);
+
+        bool MarkSingularGlideSamples(List<NVec3> worlds, float[] e1)
+        {
+            if (solver is null || worlds.Count < 2 || e1.Length != worlds.Count) return false;
+            var s = new float[worlds.Count];
+            for (int i = 1; i < worlds.Count; i++)
+                s[i] = s[i - 1] + NVec3.Distance(worlds[i], worlds[i - 1]);
+
+            bool added = false;
+            int cursor = 0;
+            while (cursor < worlds.Count - 1)
+            {
+                if (MathF.Abs(e1[cursor + 1] - e1[cursor]) < 1f)
                 {
-                    bestScore = score;
-                    best = e1;
-                    if (sol is not null) Array.Copy(sol, seed, 6);
+                    cursor++;
+                    continue;
+                }
+                int end = cursor;
+                while (end < worlds.Count - 1 && MathF.Abs(e1[end + 1] - e1[end]) >= 1f)
+                    end++;
+                float s0 = s[cursor];
+                float span = s[end] - s0;
+                const int samples = 8;
+                for (int k = 0; k <= samples; k++)
+                {
+                    float u = k / (float)samples;
+                    float dist = s0 + span * u;
+                    var world = WorldAt(worlds, s, dist);
+                    float e = e1[cursor] + (e1[end] - e1[cursor]) * u;
+                    if (!ConfirmedBad(world, e)) continue;
+                    bans.Add((world, e));
+                    added = true;
+                }
+                cursor = Math.Max(end, cursor + 1);
+            }
+            return added;
+        }
+
+        bool ConfirmedBad(NVec3 world, float e1)
+        {
+            if (solver is null) return false;
+            var rel = world - RailE1Planner.BaseWorld(homeWorld, rail, e1);
+            var tgt = new TkVector3(rel.X, rel.Y, rel.Z);
+            if (!solver.IsInWorkspace(tgt)) return true;
+            var rot = solver.TargetRotFromGlobalOrientation(TkVector3.UnitZ, offA, offB, offC);
+            var sol = solver.Solve(tgt, seed, rot, maxIterations: 40);
+            if (sol is null) return false;
+            Array.Copy(sol, seed, 6);
+            if (MathF.Abs(sol[4]) < 5f) return true;
+            return joints is not null && !JointLimitEnvelope.JointsInside(sol, joints);
+        }
+
+        RailE1Planner.LayerRailPlan PlanWithRetry(List<NVec3> worlds, float prevE1)
+        {
+            var plan = RailE1Planner.PlanLayer(
+                worlds, homeWorld, rail, homeE1, yPlus, yMinus, prevE1, PoseOk);
+            if (solver is null) return plan;
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                if (!MarkSingularGlideSamples(worlds, plan.E1Mm)) return plan;
+                plan = RailE1Planner.PlanLayer(
+                    worlds, homeWorld, rail, homeE1, yPlus, yMinus, prevE1, PoseOk);
+            }
+            return plan;
+        }
+
+        float prev = homeE1;
+        List<ToolpathMove>? prevMoves = null;
+        float[]? prevPlan = null;
+        List<NVec3>? prevWorlds = null;
+
+        foreach (var layer in toolpath.Layers)
+        {
+            if (layer.Moves.Count == 0) continue;
+            var layerMoves = new List<ToolpathMove>(layer.Moves.Count);
+            var layerWorlds = new List<NVec3>(layer.Moves.Count);
+            foreach (var move in layer.Moves)
+            {
+                layerMoves.Add(move);
+                layerWorlds.Add(ToWorld(move.To.X, move.To.Y, move.To.Z));
+            }
+
+            var plan = PlanWithRetry(layerWorlds, prev);
+            if (prevMoves is not null && prevPlan is not null && prevWorlds is not null && plan.E1Mm.Length > 0)
+            {
+                var backup = (float[])prevPlan.Clone();
+                if (RailE1Planner.TryPullGlideBack(prevPlan, prevWorlds, plan.E1Mm[0], PoseOk))
+                {
+                    if (MarkSingularGlideSamples(prevWorlds, prevPlan))
+                        Array.Copy(backup, prevPlan, backup.Length);
+                    for (int i = 0; i < prevMoves.Count; i++)
+                        prevMoves[i].E1Mm = Clamp(prevPlan[i]);
                 }
             }
-            keyE1[i] = best;
+
+            for (int i = 0; i < layerMoves.Count && i < plan.E1Mm.Length; i++)
+                layerMoves[i].E1Mm = Clamp(plan.E1Mm[i]);
+
+            if (plan.E1Mm.Length == 0) continue;
+            prev = plan.E1Mm[^1];
+            prevMoves = layerMoves;
+            prevPlan = plan.E1Mm;
+            prevWorlds = layerWorlds;
         }
     }
 
+    static NVec3 WorldAt(List<NVec3> pts, float[] s, float dist)
+    {
+        if (pts.Count == 0) return default;
+        if (dist <= 0f || pts.Count == 1) return pts[0];
+        if (dist >= s[^1]) return pts[^1];
+        int i = 1;
+        while (i < pts.Count - 1 && s[i] < dist) i++;
+        float seg = s[i] - s[i - 1];
+        float t = seg < 1e-3f ? 1f : (dist - s[i - 1]) / seg;
+        return NVec3.Lerp(pts[i - 1], pts[i], Math.Clamp(t, 0f, 1f));
+    }
+
+    /// <summary>
     /// RPM inputs each toolpath's highlight was last built from. Keyed by node so a re-slice
     /// or a settings edit re-runs exactly the toolpaths that changed, and nothing else.
+    /// </summary>
     private readonly Dictionary<SceneNode, (Toolpath Tp, float Base, float FirstRpm, float FirstSpeed)>
         _rpmApplied = new();
 
