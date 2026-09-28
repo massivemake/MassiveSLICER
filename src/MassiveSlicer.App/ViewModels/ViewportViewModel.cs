@@ -827,6 +827,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// no toolpath is active. Wired by the viewport view.</summary>
     internal Func<string, int, Task<string?>>? ExportKrlToDirectory { get; set; }
 
+    /// <summary>Joint-margin / elbow-stretch summary of the last robot validation (console <c>reach-report</c>).</summary>
+    internal Func<string>? ReachReport { get; set; }
+
     /// <summary>File path of the active cell JSON. Set alongside <see cref="ActiveCell"/>.</summary>
     public string? ActiveCellPath { get; set; }
 

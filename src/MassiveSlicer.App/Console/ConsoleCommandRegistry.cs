@@ -2844,6 +2844,15 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "reach-report",
+            Aliases = ["reach"],
+            Description = "How close the validated toolpath runs the arm to its limits: elbow bend from straight, |A5|, and each joint's margin",
+            Usage = "reach-report",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.ReachReport?.Invoke() ?? "[reach] viewport not ready"),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "export-src",
             Aliases = ["exportsrc", "export-krl"],
             Description = "Write the active toolpath's .src into a folder — same writer as Export KRL, so it uses the active robot's KRL recipe",

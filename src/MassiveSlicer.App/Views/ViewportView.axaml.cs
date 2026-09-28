@@ -410,6 +410,7 @@ public partial class ViewportView : UserControl
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
             vm.OnRpmReportRequested  = () => BuildRpmReport(vm);
             vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
+            vm.ReachReport = () => BuildReachReport(vm);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
             vm.OnSequenceToggleRequested = node => ToggleSequenceSelection(vm, node);
@@ -17759,6 +17760,48 @@ public partial class ViewportView : UserControl
 
     /// <summary>Writes the active toolpath's KRL into <paramref name="dir"/> named after
     /// the source geometry; returns the path or null when no toolpath is active.</summary>
+    /// <summary>
+    /// How close the last validated solutions sit to the arm's limits: elbow bend from
+    /// straight (full stretch), A5 from flat, and each joint's margin to its usable range.
+    /// </summary>
+    private string BuildReachReport(ViewportViewModel vm)
+    {
+        var solver = _ikSolver;
+        var joints = vm.ActiveCell?.Robot.Joints;
+        if (solver is null || joints is not { Count: >= 6 }) return "[reach] no IK solver / cell joints";
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"[reach] straight elbow at A3 {solver.StraightElbowA3Deg:0.##}°");
+        foreach (var (node, sols) in _ikSolutionsByNode)
+        {
+            if (sols.Length == 0) continue;
+            var bend = new float[sols.Length];
+            var a5 = new float[sols.Length];
+            int straightest = 0;
+            var margin = new float[6];
+            var worstAt = new int[6];
+            Array.Fill(margin, float.MaxValue);
+            for (int i = 0; i < sols.Length; i++)
+            {
+                var q = sols[i];
+                bend[i] = solver.ElbowBendDeg(q);
+                if (bend[i] < bend[straightest]) straightest = i;
+                a5[i] = MathF.Abs(q[4]);
+                for (int j = 0; j < 6; j++)
+                {
+                    float m = MathF.Min(q[j] - joints[j].UsableMinDeg, joints[j].UsableMaxDeg - q[j]);
+                    if (m < margin[j]) { margin[j] = m; worstAt[j] = i; }
+                }
+            }
+            float P(float[] v, double f) { var c = (float[])v.Clone(); Array.Sort(c); return c[(int)(f * (c.Length - 1))]; }
+            sb.Append($"\n  {node.Name}: {sols.Length:N0} moves");
+            sb.Append($"\n  elbow bend from straight (deg): min {P(bend, 0):0.0}  p1 {P(bend, .01):0.0}  p5 {P(bend, .05):0.0}  p50 {P(bend, .5):0.0}  (straightest: move {straightest:N0}, A2 {sols[straightest][1]:0.0} A3 {sols[straightest][2]:0.0})");
+            sb.Append($"\n  |A5| (deg): min {P(a5, 0):0.0}  p1 {P(a5, .01):0.0}  p50 {P(a5, .5):0.0}");
+            for (int j = 0; j < 6; j++)
+                sb.Append($"\n  A{j + 1} closest to usable limit: {margin[j]:0.0}° (move {worstAt[j]:N0}, range {joints[j].UsableMinDeg:0.#}..{joints[j].UsableMaxDeg:0.#})");
+        }
+        return sb.ToString();
+    }
+
     private async Task<string?> ExportKrlToDirectoryAsync(ViewportViewModel vm, string dir, int rev)
     {
         var toolpath = vm.ActiveScrubToolpath;
@@ -18196,18 +18239,50 @@ public partial class ViewportView : UserControl
             return w.LengthSquared > 1e-12f ? TkVector3.Normalize(w) : TkVector3.UnitZ;
         }
 
-        bool SolveOk(NVec3 world, float e1)
+        // Stretch padding: a passing pose must keep the elbow MinElbowBendDeg from straight,
+        // unless no rail position in the allowance can give this point that much bend — then
+        // the unpadded pose stands, so padding never turns a reachable layer into a rail hop.
+        var (railLo, railHi) = JointLimitEnvelope.Inset(rail.MinMm, rail.MaxMm);
+        railLo = RailE1Planner.ClampToAllowance(railLo, homeE1, yPlus, yMinus, rail.MinMm, rail.MaxMm);
+        railHi = RailE1Planner.ClampToAllowance(railHi, homeE1, yPlus, yMinus, rail.MinMm, rail.MaxMm);
+        var paddingPossible = new Dictionary<NVec3, bool>();
+        int unpaddable = 0;
+
+        float[]? SolvePose(NVec3 world, float e1)
         {
-            if (solver is null) return true;
             var rel = world - RailE1Planner.BaseWorld(homeWorld, rail, e1);
             var tgt = new TkVector3(rel.X, rel.Y, rel.Z);
             if (rotByWorld.TryGetValue(world, out var r)) lastRot = r;
-            var sol = solver.Solve(tgt, seed, lastRot, maxIterations: 40)
+            var sol = solver!.Solve(tgt, seed, lastRot, maxIterations: 40)
                    ?? solver.Solve(tgt, homeSeed, lastRot, maxIterations: 60);
-            if (sol is null) return false;
-            if (joints is not null && !JointLimitEnvelope.JointsInside(sol, joints)) return false;
+            if (sol is null) return null;
+            if (joints is not null && !JointLimitEnvelope.JointsInside(sol, joints)) return null;
+            if (MathF.Abs(sol[4]) < 5f) return null;
             Array.Copy(sol, seed, 6);
-            return MathF.Abs(sol[4]) >= 5f;
+            return sol;
+        }
+
+        bool PaddingPossible(NVec3 world)
+        {
+            if (paddingPossible.TryGetValue(world, out bool known)) return known;
+            bool any = false;
+            for (float e = railLo; e <= railHi + 0.1f && !any; e += 40f)
+            {
+                float ee = MathF.Min(e, railHi);
+                if (!Envelope(world, ee)) continue;
+                if (SolvePose(world, ee) is { } q && solver!.ElbowBendDeg(q) >= MinElbowBendDeg) any = true;
+            }
+            if (!any) unpaddable++;
+            paddingPossible[world] = any;
+            return any;
+        }
+
+        bool SolveOk(NVec3 world, float e1)
+        {
+            if (solver is null) return true;
+            if (SolvePose(world, e1) is not { } sol) return false;
+            if (solver.ElbowBendDeg(sol) >= MinElbowBendDeg) return true;
+            return !PaddingPossible(world);
         }
 
         bool PoseOk(NVec3 world, float e1)
@@ -18272,8 +18347,16 @@ public partial class ViewportView : UserControl
         LastE1PlanStats =
             $"{clock.ElapsedMilliseconds} ms, {solves:N0} IK solves " +
             $"({solveTicks * 1000 / System.Diagnostics.Stopwatch.Frequency} ms), {hits:N0} cached, " +
-            $"{glideLayers} of {toolpath.Layers.Count} layers glide";
+            $"{glideLayers} of {toolpath.Layers.Count} layers glide, elbow ≥ {MinElbowBendDeg:0}° from straight " +
+            $"({unpaddable:N0} points can't get that anywhere on the rail)";
     }
+
+    /// <summary>
+    /// Stretch padding for the rail plan: how far (deg) the elbow must stay from fully
+    /// straight. Joint limits alone let the planner park the rail and run the arm at full
+    /// extension (large E1 test part: 1% of moves within 0.7° of straight).
+    /// </summary>
+    internal const float MinElbowBendDeg = 10f;
 
     /// <summary>Timing of the last <see cref="PlanRailE1ForExport"/> run, for the [E1] export line.</summary>
     internal static string LastE1PlanStats { get; private set; } = "";
