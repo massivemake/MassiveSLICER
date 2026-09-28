@@ -216,6 +216,32 @@ public sealed class RailE1PlannerTest
     }
 
     [Fact]
+    public void PlanLayer_MovesTheRailOnlyAsFarAsTheFarEndNeeds()
+    {
+        // The corridor plan takes the least rail motion the bands allow. No single E1 covers
+        // both ends: the far end needs E1 >= 2400, the near end on the way back E1 <= 1600.
+        // (Symmetric windows like these did not trigger the old greedy overshoot — that needed
+        // real arm bands; it was confirmed fixed on the LFAM 1 part in the app, not here.)
+        var rail = YRail(min: -5000, max: 5000);
+        var home = new Vector3(0, 0, 0);
+        var pts = new List<Vector3>();
+        for (int y = 0; y <= 4000; y += 50) pts.Add(new Vector3(0, y, 100));
+        for (int y = 4000; y >= 0; y -= 50) pts.Add(new Vector3(100, y, 100));
+        var ok = ReachWindow(home, 1600f);
+
+        var plan = RailE1Planner.PlanLayer(
+            pts, home, rail, homeE1Mm: 0, yPlusMm: 4500, yMinusMm: 4500,
+            prevE1Mm: 800f, poseOk: ok);
+
+        AssertAllReachable(pts, plan.E1Mm, ok);
+        float travel = 0f;
+        for (int i = 1; i < plan.E1Mm.Length; i++) travel += MathF.Abs(plan.E1Mm[i] - plan.E1Mm[i - 1]);
+        // Out 800 -> 2400 and back 2400 -> 1600 is the least the rail can do: 2400 mm.
+        Assert.True(plan.E1Mm.Max() < 2450f, $"rail went to {plan.E1Mm.Max():0}, the far end needs 2400");
+        Assert.True(travel < 2450f, $"rail travelled {travel:0} mm, 2400 is enough");
+    }
+
+    [Fact]
     public void PlanLayer_DoesNotCrossAForbiddenPose()
     {
         var rail = YRail(min: -2000, max: 2000);

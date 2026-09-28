@@ -254,43 +254,16 @@ public static class RailE1Planner
             return new LayerRailPlan(e1, 0);
         }
 
-        if (TryBestSingleCover(worldPoints, s, robotHomeWorld, rail, homeE1Mm, yPlusMm, yMinusMm, bounds, prev, poseOk, e1, out int singleGlides))
-            return new LayerRailPlan(e1, singleGlides);
-
-        float current = prev;
-        int i = 0;
-        int glides = 0;
-        int guard = 0;
-        while (i < n && guard++ < n + 2)
+        e1 = PlanCorridor(worldPoints, s, prev, bounds, homeE1Mm, yPlusMm, yMinusMm, poseOk);
+        // A glide is one run of rail motion in one direction; a hold or a reversal ends it.
+        int glides = 0, dir = 0;
+        for (int i = 1; i < n; i++)
         {
-            int fail = i;
-            while (fail < n && poseOk(worldPoints[fail], current)) fail++;
-            if (fail == n)
-            {
-                Fill(e1, i, n - 1, current);
-                break;
-            }
-
-            if (TryPlaceGlide(
-                    worldPoints, s, robotHomeWorld, rail, homeE1Mm, yPlusMm, yMinusMm, bounds,
-                    i, fail, current, poseOk, e1, out int arrival, out float dest))
-            {
-                current = dest;
-                glides++;
-                i = arrival;
-                if (i < n && !poseOk(worldPoints[i], current))
-                    i = Math.Min(n, arrival + 1);
-                continue;
-            }
-
-            float step = ClosestFeasible(worldPoints[fail], current, robotHomeWorld, rail, homeE1Mm, yPlusMm, yMinusMm, bounds, poseOk);
-            Fill(e1, i, fail - 1, current);
-            e1[fail] = step;
-            current = step;
-            glides++;
-            i = fail + 1;
+            float d = e1[i] - e1[i - 1];
+            int nd = MathF.Abs(d) <= 0.01f ? 0 : MathF.Sign(d);
+            if (nd != 0 && nd != dir) glides++;
+            dir = nd;
         }
-
         return new LayerRailPlan(e1, glides);
     }
 
@@ -348,220 +321,182 @@ public static class RailE1Planner
         return true;
     }
 
-    static void Fill(float[] e1, int from, int to, float value)
+    /// <summary>Path spacing (mm) of the E1 band samples a corridor plan is built on.</summary>
+    const float BandKeyMm = 25f;
+
+    /// <summary>How far (mm) each side of its first passing E1 a band is measured.</summary>
+    const float BandReachMm = 400f;
+
+    /// <summary>
+    /// Rail for a layer one E1 cannot hold. At samples along the path, find the band of E1
+    /// that passes; the rail is then the shortest path through those bands (a taut string).
+    /// It moves only where a band forces it, in straight constant-speed runs, and turns back
+    /// only where a later point needs it. Points between samples are checked afterwards and
+    /// become samples themselves if they fail.
+    /// </summary>
+    /// <remarks>
+    /// Replaces a greedy search that glided to whichever destination stayed passable longest
+    /// â€” usually the carriage straight across from a far point â€” and swung the rail up to
+    /// 2 m per layer on a 4.1 m part where a few hundred mm was enough.
+    /// </remarks>
+    static float[] PlanCorridor(
+        IReadOnlyList<Vector3> pts, float[] s, float start,
+        AllowanceBounds bounds, float homeE1, float yPlus, float yMinus,
+        Func<Vector3, float, bool> poseOk)
     {
-        for (int i = Math.Max(0, from); i <= to && i < e1.Length; i++)
-            e1[i] = value;
+        int n = pts.Count;
+        var keys = new SortedSet<int> { 0, n - 1 };
+        float next = BandKeyMm;
+        for (int i = 1; i < n; i++)
+            if (s[i] >= next) { keys.Add(i); next = s[i] + BandKeyMm; }
+
+        var e1 = new float[n];
+        for (int round = 0; round < 4; round++)
+        {
+            var idx = keys.ToArray();
+            var lo = new float[idx.Length];
+            var hi = new float[idx.Length];
+            var has = new bool[idx.Length];
+            float reference = start;
+            for (int k = 0; k < idx.Length; k++)
+            {
+                if (!Band(pts[idx[k]], reference, bounds, homeE1, yPlus, yMinus, poseOk, out lo[k], out hi[k]))
+                    continue;
+                has[k] = true;
+                reference = Math.Clamp(reference, lo[k], hi[k]);
+            }
+
+            var verts = TautString(idx, s, lo, hi, has, start);
+            int v = 0;
+            for (int i = 0; i < n; i++)
+            {
+                while (v + 1 < verts.Count - 1 && verts[v + 1].S <= s[i]) v++;
+                var (s0, e0) = verts[v];
+                var (s1, e1v) = verts[Math.Min(v + 1, verts.Count - 1)];
+                float t = s1 - s0 < 1e-3f ? 1f : Math.Clamp((s[i] - s0) / (s1 - s0), 0f, 1f);
+                e1[i] = e0 + (e1v - e0) * t;
+            }
+
+            bool added = false;
+            for (int i = 0; i < n; i++)
+                if (!keys.Contains(i) && !poseOk(pts[i], e1[i])) { keys.Add(i); added = true; }
+            if (!added) break;
+        }
+        SmoothSteps(pts, s, e1, poseOk);
+        return e1;
     }
 
-    static bool TryBestSingleCover(
-        IReadOnlyList<Vector3> pts, float[] s,
-        Vector3 home, RobotRailCellConfig rail,
-        float homeE1, float yPlus, float yMinus, AllowanceBounds bounds,
-        float prev, Func<Vector3, float, bool> poseOk,
-        float[] e1, out int glides)
+    /// <summary>Longest stretch of path (mm) each side of a step a smoothing ramp may use.</summary>
+    const float StepRampReachMm = 600f;
+
+    /// <summary>
+    /// Where the rail moves faster than the tool between two points, spread the change over a
+    /// longer straight ramp — widened a band sample at a time until every point on it passes.
+    /// A band edge can be a failed IK start guess rather than a real limit, and the string
+    /// then jumps across it (115 mm inside a 21 mm bead on Cow Mid). A step that no ramp
+    /// within <see cref="StepRampReachMm"/> can replace is left for validation to flag.
+    /// </summary>
+    static void SmoothSteps(IReadOnlyList<Vector3> pts, float[] s, float[] e1, Func<Vector3, float, bool> poseOk)
     {
-        glides = 0;
-        float? cover = BestSingleCover(pts, home, rail, homeE1, yPlus, yMinus, bounds, prev, poseOk);
-        if (cover is not float dest) return false;
-
         int n = pts.Count;
-        int fail = 0;
-        while (fail < n && poseOk(pts[fail], prev)) fail++;
-
-        // Slowest in-layer ramp that still arrives before prev stops reaching.
-        if (fail > 0 && fail < n)
+        for (int i = 1; i < n; i++)
         {
-            // Coarse stride down from the layer end, then refine back up. Trying every
-            // (start, end) pair is n² ramps, and each ramp is a run of full IK solves.
-            int end = n - 1;
-            int start = -1;
-            int stride = Math.Max(1, (n - 1 - fail) / 16);
-            int found = -1;
-            for (int candidateEnd = n - 1; candidateEnd >= fail; candidateEnd -= stride)
+            float ds = s[i] - s[i - 1];
+            if (MathF.Abs(e1[i] - e1[i - 1]) <= MathF.Max(ds, 1f)) continue;
+            for (float reach = BandKeyMm; reach <= StepRampReachMm; reach += BandKeyMm)
             {
-                int a = EarliestStart(pts, s, 0, fail - 1, candidateEnd, prev, dest, poseOk);
-                if (a < 0) continue;
-                found = candidateEnd;
-                start = a;
-                end = candidateEnd;
+                int a = i - 1, b = i;
+                while (a > 0 && s[i - 1] - s[a - 1] <= reach) a--;
+                while (b < n - 1 && s[b + 1] - s[i] <= reach) b++;
+                float span = s[b] - s[a];
+                if (span < 1f || MathF.Abs(e1[b] - e1[a]) > span) continue;   // still faster than the tool
+                bool ok = true;
+                for (int k = a + 1; k < b && ok; k++)
+                    ok = poseOk(pts[k], e1[a] + (e1[b] - e1[a]) * (s[k] - s[a]) / span);
+                if (!ok) continue;
+                for (int k = a + 1; k < b; k++)
+                    e1[k] = e1[a] + (e1[b] - e1[a]) * (s[k] - s[a]) / span;
                 break;
             }
-            if (found >= 0)
-            {
-                for (int candidateEnd = Math.Min(n - 1, found + stride - 1); candidateEnd > found; candidateEnd--)
-                {
-                    int a = EarliestStart(pts, s, 0, fail - 1, candidateEnd, prev, dest, poseOk);
-                    if (a < 0) continue;
-                    start = a;
-                    end = candidateEnd;
-                    break;
-                }
-            }
-            if (start >= 0)
-            {
-                Fill(e1, 0, start - 1, prev);
-                WriteRamp(e1, s, start, end, prev, dest);
-                Fill(e1, end + 1, n - 1, dest);
-                glides = 1;
-                return true;
-            }
         }
-
-        Array.Fill(e1, dest);
-        return true;
     }
 
-    static float? BestSingleCover(
-        IReadOnlyList<Vector3> pts, Vector3 home, RobotRailCellConfig rail,
-        float homeE1, float yPlus, float yMinus, AllowanceBounds bounds,
-        float prev, Func<Vector3, float, bool> poseOk)
-    {
-        Func<float, bool> covers = e => CoversAll(pts, e, poseOk);
-        if (NearestPassing(prev, bounds, homeE1, yPlus, yMinus, covers) is not float best) return null;
-        return WalkToward(best, prev, SearchStepMm, bounds, homeE1, yPlus, yMinus, covers);
-    }
-
-    static bool TryPlaceGlide(
-        IReadOnlyList<Vector3> pts, float[] s,
-        Vector3 home, RobotRailCellConfig rail,
-        float homeE1, float yPlus, float yMinus, AllowanceBounds bounds,
-        int segmentStart, int fail, float current,
-        Func<Vector3, float, bool> poseOk,
-        float[] e1, out int arrival, out float dest)
-    {
-        arrival = fail;
-        dest = current;
-        int n = pts.Count;
-        int furthest = fail;
-        float furthestGap = -1f;
-        int look = Math.Max(1, (n - fail) / 24);
-        for (int i = fail; i < n; i += look)
-        {
-            float feas = ClosestFeasible(pts[i], current, home, rail, homeE1, yPlus, yMinus, bounds, poseOk);
-            float gap = MathF.Abs(feas - current);
-            if (gap > furthestGap) { furthestGap = gap; furthest = i; }
-        }
-        {
-            float feas = ClosestFeasible(pts[^1], current, home, rail, homeE1, yPlus, yMinus, bounds, poseOk);
-            if (MathF.Abs(feas - current) > furthestGap) furthest = n - 1;
-        }
-
-        int stride = n <= 64 ? 1 : Math.Max(1, (furthest - fail) / 16);
-        int bestEnd = -1;
-        int bestStart = -1;
-        float bestDest = current;
-        float bestTravel = float.MaxValue;
-
-        for (int target = furthest; target >= fail; target -= stride)
-        {
-            foreach (float raw in TargetCandidates(pts[target], current, home, rail, homeE1, yPlus, yMinus, bounds, poseOk))
-            {
-                for (int end = target; end >= fail; end -= stride)
-                {
-                    if (!poseOk(pts[end], raw)) continue;
-                    int start = EarliestStart(pts, s, segmentStart, fail, end, current, raw, poseOk);
-                    if (start < 0) continue;
-                    float travel = MathF.Abs(raw - current);
-                    bool better = end > bestEnd || (end == bestEnd && travel < bestTravel);
-                    if (!better) continue;
-                    bestEnd = end;
-                    bestStart = start;
-                    bestDest = raw;
-                    bestTravel = travel;
-                    if (stride == 1 && end == furthest) goto placed;
-                }
-            }
-            if (target == fail) break;
-        }
-
-        if (bestStart < 0) return false;
-
-        placed:
-        // Refine to the latest arrival and earliest departure on this destination.
-        int refinedEnd = bestEnd;
-        for (int end = Math.Min(n - 1, bestEnd + stride); end > bestEnd; end--)
-        {
-            int start = EarliestStart(pts, s, segmentStart, fail, end, current, bestDest, poseOk);
-            if (start < 0) continue;
-            refinedEnd = end;
-            bestStart = start;
-            break;
-        }
-        int refinedStart = bestStart;
-        for (int start = segmentStart; start < bestStart; start++)
-        {
-            if (!RampOk(pts, s, start, refinedEnd, current, bestDest, poseOk)) continue;
-            refinedStart = start;
-            break;
-        }
-
-        Fill(e1, segmentStart, refinedStart - 1, current);
-        WriteRamp(e1, s, refinedStart, refinedEnd, current, bestDest);
-        arrival = refinedEnd;
-        dest = bestDest;
-        return true;
-    }
-
-    static int EarliestStart(
-        IReadOnlyList<Vector3> pts, float[] s,
-        int segmentStart, int fail, int end,
-        float fromE, float toE, Func<Vector3, float, bool> poseOk)
-    {
-        int last = Math.Min(fail, end);
-        int span = last - segmentStart;
-        int step = span <= 24 ? 1 : Math.Max(1, span / 8);
-        int found = -1;
-        for (int start = segmentStart; start <= last; start += step)
-        {
-            if (start == end)
-                return poseOk(pts[end], toE) ? start : -1;
-            if (!RampOk(pts, s, start, end, fromE, toE, poseOk)) continue;
-            found = start;
-            break;
-        }
-        if (found < 0) return -1;
-        int refineFrom = Math.Max(segmentStart, found - step + 1);
-        for (int start = refineFrom; start < found; start++)
-        {
-            if (start == end) break;
-            if (RampOk(pts, s, start, end, fromE, toE, poseOk))
-                return start;
-        }
-        return found;
-    }
-
-    static IEnumerable<float> TargetCandidates(
-        Vector3 point, float current, Vector3 home, RobotRailCellConfig rail,
-        float homeE1, float yPlus, float yMinus, AllowanceBounds bounds,
-        Func<Vector3, float, bool> poseOk)
-    {
-        var yielded = new HashSet<int>();
-        var list = new List<float>(4);
-        void Add(float raw)
-        {
-            float e = ClampToAllowance(raw, homeE1, yPlus, yMinus, bounds.RailMin, bounds.RailMax);
-            if (!poseOk(point, e)) return;
-            int key = (int)MathF.Round(e);
-            if (!yielded.Add(key)) return;
-            list.Add(e);
-        }
-
-        Add(ClosestFeasible(point, current, home, rail, homeE1, yPlus, yMinus, bounds, poseOk));
-        Add(IdealE1(point, home, rail, homeE1, yPlus, yMinus));
-        Add((bounds.Lo + bounds.Hi) * 0.5f);
-        return list;
-    }
-
-    static float ClosestFeasible(
-        Vector3 point, float current, Vector3 home, RobotRailCellConfig rail,
-        float homeE1, float yPlus, float yMinus, AllowanceBounds bounds,
-        Func<Vector3, float, bool> poseOk)
+    /// <summary>
+    /// E1 band that passes at <paramref name="point"/>: the passing E1 nearest
+    /// <paramref name="reference"/>, widened each way up to <see cref="BandReachMm"/> and
+    /// bisected to 1 mm at its edges. False when no E1 in the allowance passes.
+    /// </summary>
+    static bool Band(
+        Vector3 point, float reference, AllowanceBounds bounds,
+        float homeE1, float yPlus, float yMinus,
+        Func<Vector3, float, bool> poseOk, out float lo, out float hi)
     {
         Func<float, bool> ok = e => poseOk(point, e);
-        if (NearestPassing(current, bounds, homeE1, yPlus, yMinus, ok) is not float best)
-            return IdealE1(point, home, rail, homeE1, yPlus, yMinus);
-        return WalkToward(best, current, SearchStepMm, bounds, homeE1, yPlus, yMinus, ok);
+        lo = hi = reference;
+        if (NearestPassing(reference, bounds, homeE1, yPlus, yMinus, ok) is not float c) return false;
+        float Clamp(float e) => ClampToAllowance(e, homeE1, yPlus, yMinus, bounds.RailMin, bounds.RailMax);
+        float Edge(float dir)
+        {
+            float good = c;
+            for (float d = SearchStepMm; d <= BandReachMm + 0.1f; d += SearchStepMm)
+            {
+                float e = Clamp(c + dir * d);
+                if (MathF.Abs(e - good) < 0.01f) return good;   // allowance end
+                if (ok(e)) { good = e; continue; }
+                float bad = e;
+                while (MathF.Abs(bad - good) > 1f)
+                {
+                    float mid = 0.5f * (good + bad);
+                    if (ok(mid)) good = mid; else bad = mid;
+                }
+                return good;
+            }
+            return good;
+        }
+        lo = Edge(-1f);
+        hi = Edge(+1f);
+        return true;
+    }
+
+    /// <summary>
+    /// Shortest path from (0, <paramref name="start"/>) through the bands [lo, hi] at path
+    /// distances s[idx[k]] â€” funnel string-pulling in one dimension. The free end runs as
+    /// flat as the last bands allow. Samples with no band are skipped.
+    /// </summary>
+    static List<(float S, float E)> TautString(
+        int[] idx, float[] s, float[] lo, float[] hi, bool[] has, float start)
+    {
+        int m = idx.Length;
+        float sa = s[idx[0]];
+        float ea = has[0] ? Math.Clamp(start, lo[0], hi[0]) : start;
+        var verts = new List<(float S, float E)> { (sa, ea) };
+        float su = float.PositiveInfinity, sl = float.NegativeInfinity;
+        int iu = -1, il = -1;
+        for (int j = 1; j < m; j++)
+        {
+            if (!has[j]) continue;
+            float ds = s[idx[j]] - sa;
+            if (ds < 1e-3f) continue;
+            float mh = (hi[j] - ea) / ds, ml = (lo[j] - ea) / ds;
+            if (mh < sl)
+            {
+                sa = s[idx[il]]; ea = lo[il]; verts.Add((sa, ea));
+                j = il; su = float.PositiveInfinity; sl = float.NegativeInfinity; iu = il = -1;
+                continue;
+            }
+            if (ml > su)
+            {
+                sa = s[idx[iu]]; ea = hi[iu]; verts.Add((sa, ea));
+                j = iu; su = float.PositiveInfinity; sl = float.NegativeInfinity; iu = il = -1;
+                continue;
+            }
+            if (mh < su) { su = mh; iu = j; }
+            if (ml > sl) { sl = ml; il = j; }
+        }
+        float slope = Math.Clamp(0f, sl, su);
+        float sEnd = s[idx[m - 1]];
+        if (sEnd > sa) verts.Add((sEnd, ea + slope * (sEnd - sa)));
+        return verts;
     }
 
     /// <summary>
@@ -597,32 +532,9 @@ public static class RailE1Planner
 
     /// <summary>
     /// Coarse grid for the rail search. <paramref name="poseOk"/> is a full IK solve in the
-    /// app, so the grid only brackets; <see cref="WalkToward"/> bisects to 1 mm.
+    /// app, so the grid only brackets; <see cref="Band"/> bisects its edges to 1 mm.
     /// </summary>
     const float SearchStepMm = 40f;
-
-    /// <summary>
-    /// From a passing E1, move toward <paramref name="toward"/> as far as still passes, to
-    /// 1 mm. The next grid sample that way failed, so the edge is within one
-    /// <paramref name="maxSpan"/>; bisect it rather than stepping 1 mm at a time.
-    /// </summary>
-    static float WalkToward(
-        float from, float toward, float maxSpan, AllowanceBounds bounds,
-        float homeE1, float yPlus, float yMinus, Func<float, bool> ok)
-    {
-        float dir = MathF.Sign(toward - from);
-        if (dir == 0f) return from;
-        float span = MathF.Min(MathF.Abs(toward - from), maxSpan);
-        float far = ClampToAllowance(from + dir * span, homeE1, yPlus, yMinus, bounds.RailMin, bounds.RailMax);
-        if (ok(far)) return far;
-        float good = from, bad = far;
-        while (MathF.Abs(bad - good) > 1f)
-        {
-            float mid = 0.5f * (good + bad);
-            if (ok(mid)) good = mid; else bad = mid;
-        }
-        return good;
-    }
 
     const float RampSampleMm = 20f;
 
