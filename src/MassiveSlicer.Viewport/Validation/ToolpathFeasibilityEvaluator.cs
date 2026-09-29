@@ -395,9 +395,11 @@ public static class ToolpathFeasibilityEvaluator
         }
 
         // -- TCP auto-rotate repair -------------------------------------------
-        // Print-neutral nozzle spin. Runs for a wrist already under 5° and for
-        // a span whose joint rate would trip an axis speed limit, so the path
-        // is rewritten instead of only flagged.
+        // Print-neutral nozzle spin for spans that are unreachable, singular, or
+        // over an axis speed. A spin is only written if the whole range it
+        // rewrites (ramp included) stays reachable and legal; otherwise the span
+        // keeps its original solve and is reported downstream as a limit
+        // violation. See RepairSpansWithSpin.
         {
             bool anyBad = false;
             for (int i = 0; i < total && !anyBad; i++)
@@ -413,79 +415,31 @@ public static class ToolpathFeasibilityEvaluator
                         { if (fi < total) flatMoves[fi] = mv; fi++; }
                 }
 
-                const int   Ramp  = 60;   // moves over which yaw ramps in/out
-                const float MinA5 = 6f;   // deg of wrist margin required
                 var yawByMove = new float[total];
-                bool Bad(int i) => !result[i] || singularity[i] || speedRisk[i];
 
-                int s0 = 0;
-                while (s0 < total)
+                // Same solve the main pass trusted: position-first, then oriented,
+                // joint envelope, and the print fallback seeds when the walk seed fails.
+                float[]? SpinSolveAt(int i, float yawDeg, float[] walkSeed)
                 {
-                    if (ct.IsCancellationRequested) return null;
-                    if (!Bad(s0)) { s0++; continue; }
-                    int s1 = s0;
-                    while (s1 + 1 < total && Bad(s1 + 1)) s1++;
-
-                    // Smallest nozzle spin that clears the span's start/middle/end.
-                    float chosen = 0f;
-                    foreach (float mag in new[] { 20f, 40f, 60f, 90f, 120f, 150f, 180f })
-                    {
-                        foreach (float sgn in new[] { 1f, -1f })
-                        {
-                            float y = mag * sgn;
-                            bool ok = true;
-                            foreach (int ti in new[] { s0, (s0 + s1) / 2, s1 })
-                            {
-                                var rot = millPath
-                                    ? solver.TargetRotFromMillNormal(normals[ti], y)
-                                    : solver.TargetRotFromGlobalOrientation(
-                                        normals[ti], offA, offB, offC + y);
-                                var prev = solutions[Math.Max(0, ti - 1)];
-                                var sol = solver.Solve(targets[ti],
-                                    prev, rot, maxIterations: 60);
-                                if (sol is null || MathF.Abs(sol[4]) < MinA5) { ok = false; break; }
-                                float stepDt = MathF.Max(moveTimes[ti] / 1000f, 1e-4f);
-                                var a4 = AxisMotionLimits.CheckJointRate(
-                                    sol[3] - prev[3], stepDt,
-                                    AxisMotionLimits.Kr120R3900DegPerSec[3], 3);
-                                if (a4.Exceeded) { ok = false; break; }
-                            }
-                            if (ok) { chosen = y; break; }
-                        }
-                        if (chosen != 0f) break;
-                    }
-
-                    if (chosen != 0f)
-                    {
-                        int rIn  = Math.Max(0, s0 - Ramp);
-                        int rOut = Math.Min(total - 1, s1 + Ramp);
-                        for (int i = rIn; i <= rOut; i++)
-                        {
-                            float w = i < s0 ? (i - rIn)  / (float)Math.Max(1, s0 - rIn)
-                                    : i > s1 ? (rOut - i) / (float)Math.Max(1, rOut - s1)
-                                    : 1f;
-                            float y = chosen * w;
-                            if (MathF.Abs(y) > MathF.Abs(yawByMove[i])) yawByMove[i] = y;
-                        }
-
-                        // Re-solve the affected range with the yawed orientation.
-                        var chunkSeed = solutions[Math.Max(0, rIn - 1)];
-                        for (int i = rIn; i <= rOut; i++)
-                        {
-                            var rot = millPath
-                                ? solver.TargetRotFromMillNormal(normals[i], yawByMove[i])
-                                : solver.TargetRotFromGlobalOrientation(
-                                    normals[i], offA, offB, offC + yawByMove[i]);
-                            var sol = solver.Solve(targets[i], chunkSeed, rot, maxIterations: 40);
-                            bool inEnv = sol is not null &&
-                                (cellJoints is null || JointLimitEnvelope.JointsInside(sol, cellJoints));
-                            result[i] = inEnv;
-                            if (inEnv) { solutions[i] = sol!; chunkSeed = sol!; }
-                            singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
-                        }
-                    }
-                    s0 = s1 + 1;
+                    var rot = millPath
+                        ? solver.TargetRotFromMillNormal(normals[i], yawDeg)
+                        : solver.TargetRotFromGlobalOrientation(
+                            normals[i], offA, offB, offC + yawDeg);
+                    var fast = SolveReach(targets[i], walkSeed, rot, 40);
+                    if (fast is not null) return fast;
+                    if (millPath) return SolveReach(targets[i], walkSeed, rot, 80);
+                    return SolveWithPrintFallback(
+                        walkSeed,
+                        w => SolveReach(targets[i], w, rot, 80),
+                        PrintIkFallbackSeeds(targets[i].X, targets[i].Y));
                 }
+
+                try
+                {
+                    RepairSpansWithSpin(result, singularity, speedRisk, solutions,
+                        moveTimes, cosAngles, yawByMove, SpinSolveAt, ct);
+                }
+                catch (OperationCanceledException) { return null; }
 
                 // Bake the repair into the toolpath so KRL export writes the
                 // rotated orientations.
@@ -569,6 +523,171 @@ public static class ToolpathFeasibilityEvaluator
             FirstCollisionHit: firstCollHit,
             UnrepairableLimits: limitCount,
             AxisLimit: limitFlags);
+    }
+
+    /// <summary>Moves over which a repair spin ramps in and out.</summary>
+    public const int SpinRamp = 60;
+
+    /// <summary>Wrist margin a repaired span must hold (deg of |A5|).</summary>
+    public const float SpinMinA5 = 6f;
+
+    /// <summary>|A5| below this is a wrist singularity.</summary>
+    public const float SingularA5 = 5f;
+
+    /// <summary>At or below this cos, a corner is blended by C_VEL and its joint step is not rated.</summary>
+    public const float BlendCornerCos = 0.3f;
+
+    /// <summary>Nozzle spins tried, smallest first. Each is tried +/-.</summary>
+    public static readonly float[] SpinMagnitudesDeg = [20f, 40f, 60f, 90f, 120f, 150f, 180f];
+
+    /// <summary>
+    /// Ramp weight of the spin at move <paramref name="i"/>: 1 across the span,
+    /// linear to 0 at <paramref name="rIn"/> and <paramref name="rOut"/>.
+    /// </summary>
+    public static float SpinRampWeight(int i, int s0, int s1, int rIn, int rOut)
+        => i < s0 ? (i - rIn) / (float)Math.Max(1, s0 - rIn)
+         : i > s1 ? (rOut - i) / (float)Math.Max(1, rOut - s1)
+         : 1f;
+
+    /// <summary>
+    /// Print-neutral nozzle-spin repair. For each bad span (unreachable,
+    /// singular, or over an axis speed) try spins smallest first. A spin is
+    /// accepted only if every move it rewrites — the span and its ramp — solves,
+    /// holds the wrist clear, and keeps every axis under its rated speed at the
+    /// planned move times, including the step back onto the untouched path.
+    /// If no spin passes, nothing is written: the span keeps its original solve
+    /// and flags. A repair can only turn moves reachable, never unreachable.
+    /// </summary>
+    /// <param name="solveAt">Solve move i at a nozzle spin (deg) from a walk seed.
+    /// Null means unreachable.</param>
+    /// <returns>Number of spans repaired.</returns>
+    public static int RepairSpansWithSpin(
+        bool[] reachable,
+        bool[] singularity,
+        bool[] speedRisk,
+        float[][] solutions,
+        float[] moveTimesMs,
+        float[] cosAngles,
+        float[] yawByMove,
+        Func<int, float, float[], float[]?> solveAt,
+        CancellationToken ct = default)
+    {
+        int total = solutions.Length;
+        int reachableBefore = 0;
+        foreach (var r in reachable) if (r) reachableBefore++;
+
+        bool Bad(int i) => !reachable[i] || singularity[i] || speedRisk[i];
+
+        int repaired = 0;
+        int s0 = 0;
+        while (s0 < total)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!Bad(s0)) { s0++; continue; }
+            int s1 = s0;
+            while (s1 + 1 < total && Bad(s1 + 1)) s1++;
+
+            int rIn  = Math.Max(0, s0 - SpinRamp);
+            int rOut = Math.Min(total - 1, s1 + SpinRamp);
+            int len  = rOut - rIn + 1;
+            var trialSol = new float[len][];
+            var trialYaw = new float[len];
+            bool accepted = false;
+
+            foreach (float mag in SpinMagnitudesDeg)
+            {
+                foreach (float sgn in new[] { 1f, -1f })
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (TrySpin(mag * sgn))
+                    {
+                        for (int k = 0; k < len; k++)
+                        {
+                            int i = rIn + k;
+                            solutions[i]   = trialSol[k];
+                            yawByMove[i]   = trialYaw[k];
+                            reachable[i]   = true;
+                            singularity[i] = MathF.Abs(trialSol[k][4]) < SingularA5;
+                            speedRisk[i]   = false;
+                        }
+                        repaired++;
+                        accepted = true;
+                        break;
+                    }
+                }
+                if (accepted) break;
+            }
+            // No spin passed: leave rIn..rOut exactly as solved. The span stays
+            // flagged and the limit scan blocks export.
+            s0 = s1 + 1;
+
+            bool TrySpin(float spin)
+            {
+                float[]? walk = rIn > 0 ? solutions[rIn - 1] : solutions[rIn];
+                for (int k = 0; k < len; k++)
+                {
+                    int i = rIn + k;
+                    float y = spin * SpinRampWeight(i, s0, s1, rIn, rOut);
+                    // An earlier span's ramp may already spin this move; keep the larger.
+                    if (MathF.Abs(yawByMove[i]) > MathF.Abs(y)) y = yawByMove[i];
+
+                    var sol = solveAt(i, y, walk);
+                    if (sol is null) return false;
+                    sol = (float[])sol.Clone();
+                    // Same ±360 continuity the main pass applies.
+                    for (int j = 0; j < Math.Min(6, sol.Length); j++)
+                    {
+                        float d = sol[j] - walk[j];
+                        if (d > 180f) sol[j] -= 360f;
+                        else if (d < -180f) sol[j] += 360f;
+                    }
+
+                    bool inSpan = i >= s0 && i <= s1;
+                    float a5 = MathF.Abs(sol[4]);
+                    if (inSpan ? a5 < SpinMinA5 : a5 < SingularA5) return false;
+
+                    // Inside the span every step must be legal. On the ramp a step
+                    // may only stay over if it was already over before the spin —
+                    // that violation belongs to a neighbouring span, and the final
+                    // limit scan still reports it.
+                    if (i > 0 && StepOverLimit(i, walk, sol)
+                        && (inSpan || !StepOverLimit(i, solutions[i - 1], solutions[i])))
+                        return false;
+
+                    trialSol[k] = sol;
+                    trialYaw[k] = y;
+                    walk = sol;
+                }
+                // The move after the ramp now starts from a new pose.
+                if (rOut + 1 < total
+                    && StepOverLimit(rOut + 1, walk, solutions[rOut + 1])
+                    && !StepOverLimit(rOut + 1, solutions[rOut], solutions[rOut + 1]))
+                    return false;
+                return true;
+            }
+        }
+
+        int reachableAfter = 0;
+        foreach (var r in reachable) if (r) reachableAfter++;
+        // Accepting a spin only ever sets reachable = true, so this cannot fire.
+        // It is here so a future edit that breaks that is caught in tests.
+        System.Diagnostics.Debug.Assert(reachableAfter >= reachableBefore,
+            $"Spin repair lost reach: {reachableBefore} -> {reachableAfter}.");
+        return repaired;
+
+        bool StepOverLimit(int i, float[] from, float[] to)
+        {
+            if (i < cosAngles.Length && cosAngles[i] < BlendCornerCos) return false;
+            float dt = MathF.Max(moveTimesMs[i] / 1000f, 1e-4f);
+            int axes = Math.Min(6, Math.Min(from.Length, to.Length));
+            for (int j = 0; j < axes; j++)
+            {
+                if (AxisMotionLimits.CheckJointRate(
+                        to[j] - from[j], dt, AxisMotionLimits.Kr120R3900DegPerSec[j], j).Exceeded)
+                    return true;
+            }
+            return false;
+        }
     }
 
     /// <summary>
