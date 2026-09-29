@@ -349,7 +349,7 @@ public static class ToolpathFeasibilityEvaluator
         }
 
         // Velocity profile: time (ms) per move accounting for C_VEL corner blending.
-        var (moveTimes, peakVelocities) = BuildMoveProfile(
+        var (moveTimes, peakVelocities, junctionSpeeds, cosAngles) = BuildMoveProfile(
             toolpath, input.PrintMmS, input.TravelMmS, input.WipeMmS, input.ApoCvelFrac);
 
         // Singularity detection: flag moves where |A5| < 5° (wrist singularity).
@@ -359,18 +359,37 @@ public static class ToolpathFeasibilityEvaluator
         {
             singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
             if (i == 0) continue;
-            float dt = MathF.Max(moveTimes[i] / 1000f, 1e-4f);
-            for (int j = 0; j < 6; j++)
+
+            // Skip per-joint rate check when KUKA's C_VEL blending is actively managing
+            // this corner. The IK solver returns endpoint poses; at a sharp direction change
+            // the robot never snaps between those poses — it blends continuously across the
+            // corner arc. The joint-rate computed from consecutive endpoint solutions over
+            // the short segment duration is therefore an overestimate. The real axis speed
+            // limit that matters is on straight extrudes (as in Rev142) where there is no
+            // blending to distribute the joint motion.
+            //
+            // A corner is "blend-managed" when cosA < 0 (>90° direction change) or when
+            // the junction factor is well below 1 (blend speed much less than cruise speed).
+            // The threshold 0.3 corresponds to ~73° — a sharp corner by any measure.
+            // Straight segments (cosA≈1) still get the full joint rate check.
+            float cornerCosA = i < cosAngles.Length ? cosAngles[i] : 1f;
+            bool blendManaged = cornerCosA < 0.3f;
+
+            if (!blendManaged)
             {
-                var rate = AxisMotionLimits.CheckJointRate(
-                    solutions[i][j] - solutions[i - 1][j],
-                    dt,
-                    AxisMotionLimits.Kr120R3900DegPerSec[j],
-                    j);
-                if (rate.Exceeded)
+                float dt = MathF.Max(moveTimes[i] / 1000f, 1e-4f);
+                for (int j = 0; j < 6; j++)
                 {
-                    speedRisk[i] = true;
-                    break;
+                    var rate = AxisMotionLimits.CheckJointRate(
+                        solutions[i][j] - solutions[i - 1][j],
+                        dt,
+                        AxisMotionLimits.Kr120R3900DegPerSec[j],
+                        j);
+                    if (rate.Exceeded)
+                    {
+                        speedRisk[i] = true;
+                        break;
+                    }
                 }
             }
         }
@@ -536,7 +555,7 @@ public static class ToolpathFeasibilityEvaluator
         }
 
         var (limitCount, limitFlags) = ApplyAxisSpeedRepairs(
-            toolpath, solutions, moveTimes, seed, normals, offA, offB, offC, cellJoints);
+            toolpath, solutions, moveTimes, cosAngles, seed, normals, offA, offB, offC, cellJoints);
 
         return new Result(
             Reachable: result,
@@ -560,6 +579,7 @@ public static class ToolpathFeasibilityEvaluator
         Toolpath toolpath,
         float[][] solutions,
         float[] moveTimesMs,
+        float[] cosAngles,
         float[] seed,
         TkVector3[] normals,
         float offA,
@@ -584,7 +604,14 @@ public static class ToolpathFeasibilityEvaluator
             {
                 if (fi >= total) break;
                 poses[fi + 1] = solutions[fi] ?? seed;
-                dt[fi] = MathF.Max(moveTimesMs[fi] / 1000f, 1e-4f);
+                // For blend-managed corners (sharp direction changes that KUKA smooths
+                // via C_VEL), set dt to a large value so Scan() skips the joint-rate
+                // check for that step. The real constraint is still checked on the
+                // straight segments where blending does not apply.
+                bool blendManaged = fi < cosAngles.Length && cosAngles[fi] < 0.3f;
+                dt[fi] = blendManaged
+                    ? float.MaxValue / 2f
+                    : MathF.Max(moveTimesMs[fi] / 1000f, 1e-4f);
                 var n = fi < normals.Length ? normals[fi] : TkVector3.UnitZ;
                 if (n.LengthSquared < 1e-8f) n = TkVector3.UnitZ;
                 var abc = KukaOrientation.AbcFromNormal(
@@ -665,7 +692,7 @@ public static class ToolpathFeasibilityEvaluator
     /// constraints so short segments between close corners also show realistic slowdowns.
     /// </para>
     /// </summary>
-    public static (float[] timesMs, float[] peakVelocities) BuildMoveProfile(
+    public static (float[] timesMs, float[] peakVelocities, float[] junctionSpeeds, float[] cosAngles) BuildMoveProfile(
         Toolpath tp, float printMmS, float travelMmS, float wipeMmS,
         float apoCvelFraction = 0.5f, float accelMmS2 = 2000f)
     {
@@ -673,7 +700,7 @@ public static class ToolpathFeasibilityEvaluator
         foreach (var layer in tp.Layers) moves.AddRange(layer.Moves);
 
         int n = moves.Count;
-        if (n == 0) return ([], []);
+        if (n == 0) return ([], [], [], []);
 
         var vProg = new float[n];
         var dist  = new float[n];
@@ -696,16 +723,17 @@ public static class ToolpathFeasibilityEvaluator
         // Junction speeds: the robot must not exceed this speed at waypoint i.
         // At each junction the factor blends linearly between apoCvel (sharp reversal)
         // and 1.0 (perfectly straight) based on the cosine of the direction change.
-        var jV = new float[n + 1]; // jV[0]=0 (start at rest), jV[n]=0 (end at rest)
+        var jV    = new float[n + 1]; // jV[0]=0 (start at rest), jV[n]=0 (end at rest)
+        var cosA  = new float[n + 1]; // cosA[i] = cos(direction change at waypoint i); 1=straight
         for (int i = 1; i < n; i++)
         {
             var d1 = moves[i - 1].To - moves[i - 1].From;
             var d2 = moves[i].To     - moves[i].From;
             float l1 = d1.Length(), l2 = d2.Length();
-            float cosA = l1 > 1e-6f && l2 > 1e-6f
+            cosA[i] = l1 > 1e-6f && l2 > 1e-6f
                 ? NVec3.Dot(d1 / l1, d2 / l2)
                 : 1f;
-            float factor = apoCvelFraction + (1f - apoCvelFraction) * 0.5f * (cosA + 1f);
+            float factor = apoCvelFraction + (1f - apoCvelFraction) * 0.5f * (cosA[i] + 1f);
             jV[i] = factor * MathF.Min(vProg[i - 1], vProg[i]);
         }
 
@@ -753,6 +781,6 @@ public static class ToolpathFeasibilityEvaluator
             timesMs[i] = MathF.Max(t * 1000f, 0.1f);
         }
 
-        return (timesMs, vPeak);
+        return (timesMs, vPeak, jV, cosA);
     }
 }
