@@ -10,15 +10,15 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-29** (axis-speed wrist repath on top of main)
+Last updated: **2026-09-29** (axis-speed repair must not lose reach; merged main Drive HTTP upload)
 
 LFAM 1 barrel still cooling: plant setpoint is 240, heater output stays off until robot output 7.
 
 ## Axis speed path — `feature/axis-speed-limits`
 
-Shop `Z:\Research\LFAM\MassiveSLICER` does not have this. It is this folder only, and it is not pushed.
+Not on main. Branch only. **Not print-verified.**
 
-A span whose joint rate would trip a rated axis speed is rewritten with a print-neutral nozzle spin on the same bead. A spin that still commands A4 over the limit is rejected. If none stay legal at the requested print speed, export is refused. There is no Export anyway, and print speed is not lowered. The rail is not replanned.
+A span whose joint rate would trip a rated axis speed is rewritten with a print-neutral nozzle spin on the same bead. A spin is kept only if every move it touches (ramp included) stays reachable and A4/A6 stay under the limit. Otherwise the original solve is kept and the span is reported as a limit violation, which blocks export. Print speed is never lowered. The rail is not replanned.
 
 LFAM 1 Rev142 toolhead X was 0 (A 0, B 90, C 0) on almost every line. E1 stayed −1503.45. The stop was a short A walk near Z 1448, not the global X slider.
 
@@ -531,6 +531,13 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-29 — Send to MassiveDRIVE does not ask for a Samba password
+
+- Symptom: a new Windows login (`jhala`) got "The user name or password is incorrect" on `\\192.168.0.189\MassiveDRIVE-LFAM1\var\jobs`. The job landed in that user's AppData. Drive never saw it.
+- Cause: Windows offered the logged-in account. The share only accepts `massive`.
+- Fix: large jobs upload over HTTP to `POST /api/jobs/package/upload` with a machine token. Drive writes `var/jobs` itself. The token is not in git. Shop PCs install it once with `scripts\Install-DriveUploadToken.ps1`. Send does not start the robot.
+- Key files: `MassiveDriveClient.cs`, `MassiveDriveUploadToken.cs`, Drive `job_upload.py`, `web/app.py`.
 
 ### 2026-09-29 — LFAM 1 extruder speed accepts a decimal
 
