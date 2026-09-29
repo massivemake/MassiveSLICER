@@ -846,7 +846,28 @@ public sealed class ErpClient : IDisposable
             name  = GetString(user, "name", "displayName", "fullName");
         }
 
-        return new ErpLoginResult(token, email, name, expires);
+        return new ErpLoginResult(token, email, name, expires, ParseDriveTokens(root));
+    }
+
+    private static IReadOnlyDictionary<string, string>? ParseDriveTokens(JsonElement root)
+    {
+        foreach (var name in new[] { "driveTokens", "drive_tokens", "driveToken" })
+        {
+            if (!TryGetPropertyCi(root, name, out var prop) || prop.ValueKind != JsonValueKind.Object)
+                continue;
+            var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in prop.EnumerateObject())
+            {
+                if (kv.Value.ValueKind == JsonValueKind.String)
+                {
+                    var v = kv.Value.GetString() ?? "";
+                    if (v.Length > 0)
+                        dict[kv.Name.ToLowerInvariant()] = v;
+                }
+            }
+            return dict.Count > 0 ? dict : null;
+        }
+        return null;
     }
 
     /// <summary>Case-insensitive multi-name string lookup; numbers stringify.</summary>

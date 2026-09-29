@@ -16,25 +16,61 @@ public readonly record struct MassiveDriveUploadCaps(bool Endpoint, bool AuthIns
 
 /// <summary>
 /// Shop-PC token for <c>POST /api/jobs/package/upload</c>.
-/// Windows: DPAPI LocalMachine blob in ProgramData, so every login can read it.
-/// macOS: <c>~/.config/MassiveSlicer/drive-upload.json</c>.
+/// Priority order: (1) Lab login response <c>driveTokens</c> cached in memory,
+/// (2) env var <c>MASSIVESLICER_DRIVE_TOKEN</c>,
+/// (3) <c>%ProgramData%\MassiveSlicer\drive-upload.bin</c> (DPAPI LocalMachine, Windows only),
+/// (4) <c>~/.config/MassiveSlicer/drive-upload.json</c> (macOS / fallback JSON).
 /// Not stored in the repo or the cell JSON.
 /// </summary>
 public static class MassiveDriveUploadToken
 {
-    public const string TokenHint =
-        "Drive upload token is not on this PC. An admin runs scripts\\Install-DriveUploadToken.ps1 once. "
-        + "Users do not type a password.";
+    /// <summary>
+    /// Tokens received from Lab login (<c>driveTokens</c> in the 200 response).
+    /// Set by <see cref="CacheFromLogin"/> on Connect; cleared on disconnect.
+    /// Keyed by lower-case cell id (e.g. "lfam1").
+    /// </summary>
+    static IReadOnlyDictionary<string, string>? _loginCache;
 
+    /// <summary>
+    /// Called by ErpViewModel after a successful login. Caches the Drive tokens
+    /// for the lifetime of this session — no file write needed.
+    /// </summary>
+    public static void CacheFromLogin(IReadOnlyDictionary<string, string>? tokens)
+        => _loginCache = tokens is { Count: > 0 } ? tokens : null;
+
+    /// <summary>Clear cached tokens on ERP disconnect.</summary>
+    public static void ClearLoginCache() => _loginCache = null;
+    public const string TokenHint =
+        "Drive upload token not available. Log in to MassiveLAB in Slicer (email + password) — "
+        + "Drive tokens arrive automatically. If Lab login is not available, an admin runs "
+        + "scripts\\Install-DriveUploadToken.ps1 once per shop PC.";
+
+    /// <summary>
+    /// Returns true when Send should use HTTP upload.
+    /// Drive must have the endpoint. The token must be non-empty — it can come from
+    /// a Lab login (no installer required) or an on-disk store.
+    /// <paramref name="authInstalled"/> (Drive health <c>upload_auth</c>) is still
+    /// checked so we don't send to a Drive that hasn't been restarted with a token file yet.
+    /// </summary>
     public static bool PreferUpload(bool endpoint, bool authInstalled, string? token)
         => endpoint && authInstalled && !string.IsNullOrWhiteSpace(token);
 
     public static string? ForCell(string? cellId, string? filePath = null)
     {
+        // 1. Lab login response (driveTokens) — no file or installer needed
+        if (_loginCache is not null)
+        {
+            string key = (cellId ?? "").Trim().ToLowerInvariant();
+            if (key.Length > 0 && _loginCache.TryGetValue(key, out var cached) && !string.IsNullOrWhiteSpace(cached))
+                return cached;
+        }
+
+        // 2. Env override
         var env = Environment.GetEnvironmentVariable("MASSIVESLICER_DRIVE_TOKEN");
         if (!string.IsNullOrWhiteSpace(env))
             return env.Trim();
 
+        // 3. On-disk store (DPAPI on Windows, JSON elsewhere)
         foreach (var path in CandidatePaths(filePath))
         {
             if (!File.Exists(path))
