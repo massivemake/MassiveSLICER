@@ -18493,7 +18493,6 @@ public partial class ViewportView : UserControl
         // orientation, inside the joint limits, wrist not flat. The envelope alone is a
         // reach-radius shell with no orientation — holding on it parked the rail where
         // 3,922 Cow Column points could not be solved.
-        var homeSeed = (float[])seed.Clone();
         var rotByWorld = new Dictionary<NVec3, (TkVector3, TkVector3, TkVector3)>();
         var lastRot = solver?.TargetRotFromGlobalOrientation(WorldNormal(NVec3.UnitZ), offA, offB, offC)
                       ?? default;
@@ -18520,15 +18519,20 @@ public partial class ViewportView : UserControl
         var paddingPossible = new Dictionary<NVec3, bool>();
         int unpaddable = 0;
 
+        // Reachable means what validation says it means: ToolpathFeasibilityEvaluator.SolvePose
+        // (print tool orientation must match, joint envelope) from the last good pose, then the
+        // same fallback seeds validation retries with. A copy of the solve drifted once already.
         float[]? SolvePose(NVec3 world, float e1)
         {
             var rel = world - RailE1Planner.BaseWorld(homeWorld, rail, e1);
             var tgt = new TkVector3(rel.X, rel.Y, rel.Z);
             if (rotByWorld.TryGetValue(world, out var r)) lastRot = r;
-            var sol = solver!.Solve(tgt, seed, lastRot, maxIterations: 40)
-                   ?? solver.Solve(tgt, homeSeed, lastRot, maxIterations: 60);
+            var rot = lastRot;
+            var sol = ToolpathFeasibilityEvaluator.SolveWithPrintFallback(
+                seed,
+                w => ToolpathFeasibilityEvaluator.SolvePose(solver!, tgt, w, rot, joints, millPath: false, maxIterations: 80),
+                ToolpathFeasibilityEvaluator.PrintIkFallbackSeeds(tgt.X, tgt.Y));
             if (sol is null) return null;
-            if (joints is not null && !JointLimitEnvelope.JointsInside(sol, joints)) return null;
             if (MathF.Abs(sol[4]) < 5f) return null;
             Array.Copy(sol, seed, 6);
             return sol;
