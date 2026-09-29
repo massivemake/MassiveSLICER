@@ -522,6 +522,12 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 ## Session changelog (reverse chronological)
 
+### 2026-09-28 — 2D edit: click keeps the hovered line or vertex
+
+- Hover was finding the span. The click did not stay in the selection panel.
+- A left click in 2D edit now commits that hovered span (live pick, or the highlight if the second pick misses) and the release does not scene-pick it away.
+- Mill Face/Box/Lasso/Brush no longer eats those clicks while 2D edit is open.
+
 ### 2026-09-28 — 2D edit: hide TCP helpers, pick still on the drawn line
 
 - TCP triad, axis labels, and timeline keyframe buttons hide while 2D slice edit is open. They come back when you leave 2D.

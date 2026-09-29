@@ -305,6 +305,13 @@ public partial class ViewportView : UserControl
         PointerPressed      += OnPointerPressed;
         PointerMoved        += OnPointerMoved;
         PointerReleased     += OnPointerReleased;
+        // Tunnel + handledEventsToo: a child can mark the press handled (mill paint,
+        // a transparent overlay) and the bubble handler never sees it. Hover still
+        // arrives on move. 2D edit must commit that hovered span on the press anyway.
+        AddHandler(PointerPressedEvent, OnSliceEditPointerPressed,
+            Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
+        AddHandler(PointerReleasedEvent, OnSliceEditPointerReleased,
+            Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
         PointerWheelChanged += OnPointerWheelChanged;
         PointerMoved += (_, e) => _lastPointerPos = e.GetPosition(this);
         KeyDown             += OnKeyDown;
@@ -3872,6 +3879,74 @@ public partial class ViewportView : UserControl
         };
     }
 
+    private void OnSliceEditPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (IsOverlayChrome(e.Source)) return;
+        var pt = e.GetCurrentPoint(this);
+        if (pt.Properties.PointerUpdateKind != PointerUpdateKind.LeftButtonPressed) return;
+        if (_spaceHeld) return;
+        if (DataContext is not ViewportViewModel vm) return;
+        if (!TryCommitSliceEditClick(vm, pt.Position, e.KeyModifiers)) return;
+        e.Handled = true;
+    }
+
+    private void OnSliceEditPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (IsOverlayChrome(e.Source)) return;
+        var pt = e.GetCurrentPoint(this);
+        if (pt.Properties.PointerUpdateKind != PointerUpdateKind.LeftButtonReleased) return;
+        if (DataContext is not ViewportViewModel vm) return;
+        if (!_paintPressConsumed && !TryCommitSliceEditClick(vm, pt.Position, e.KeyModifiers))
+            return;
+        // Press already kept the span, or this release just did. Do not let the
+        // bubble release scene-pick wipe it.
+        _paintPressConsumed = false;
+        _leftPressSeen = false;
+        _leftDragged = false;
+        e.Handled = true;
+    }
+
+    private static bool IsOverlayChrome(object? source)
+        => source is Visual vis && vis.FindAncestorOfType<ViewportOverlayView>() is not null;
+
+    /// <summary>
+    /// Keep the line or vertex under the cursor. Uses the live pick, or the span
+    /// hover already found if the click lands on that highlight.
+    /// </summary>
+    private bool TryCommitSliceEditClick(ViewportViewModel vm, Avalonia.Point pos, KeyModifiers mods)
+    {
+        if (_paintPressConsumed && (DateTime.UtcNow - _paintPressAt).TotalMilliseconds < 150)
+            return true;
+        bool lineSelect = vm.PaintLineToolActive || !vm.PaintBrushActive;
+        if (!ViewportPointerPolicy.SliceEditClickSelects(
+                vm.IsSlicePlaneViewerActive && vm.IsPaintEditOpen && vm.ViewMode == "Preview",
+                vm.PaintHandActive,
+                vm.PaintBoxSelectActive,
+                lineSelect))
+            return false;
+        if (PickSpanUnderCursor(pos) is null && !HasFreshHoverPick(pos))
+            return false;
+
+        TryPaintLineAt(vm, pos, erase: mods.HasFlag(KeyModifiers.Alt),
+            applyMarks: vm.PaintLineToolActive,
+            additive: mods.HasFlag(KeyModifiers.Shift));
+        if (_paintSelection.Count == 0)
+            return false;
+        _paintPressConsumed = true;
+        _paintPressAt = DateTime.UtcNow;
+        GlCanvas.RequestNextFrameRendering();
+        return true;
+    }
+
+    private bool HasFreshHoverPick(Avalonia.Point pos)
+    {
+        if (_paintHoverPick is null) return false;
+        if ((DateTime.UtcNow - _paintHoverPickAt).TotalMilliseconds > 600) return false;
+        double dx = pos.X - _paintHoverPickPos.X;
+        double dy = pos.Y - _paintHoverPickPos.Y;
+        return dx * dx + dy * dy <= 48.0 * 48.0;
+    }
+
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         // Taking focus here is what makes the viewport's keyboard shortcuts work, but it must not
@@ -3913,7 +3988,10 @@ public partial class ViewportView : UserControl
         // Mill SELECT AREA — Face / Brush / Box / Lasso on workpiece meshes only
         // (imports & scans). Robot, bed, and cell environment never receive hits.
         if (DataContext is ViewportViewModel millPtrVm
-            && millPtrVm.IsMillAreaSelectActive
+            && ViewportPointerPolicy.MillPaintCapturesPointer(
+                millPtrVm.IsMillAreaSelectActive,
+                millPtrVm.IsMillStepActive,
+                millPtrVm.IsSlicePlaneViewerActive && millPtrVm.IsPaintEditOpen)
             && !_spaceHeld)
         {
             if (kind == PointerUpdateKind.LeftButtonPressed)
@@ -4032,6 +4110,14 @@ public partial class ViewportView : UserControl
             }
             if (kind == PointerUpdateKind.LeftButtonPressed)
             {
+                // 2D slice edit: keep the span the hover already found. Do this before
+                // gizmo / support / marquee so a click on a drawn line or vertex sticks.
+                if (TryCommitSliceEditClick(pbVm, pos, mods))
+                {
+                    e.Handled = true;
+                    return;
+                }
+
                 // Hand tool: leave the click alone so orbit/pan/select mesh still work.
                 if (pbVm.PaintHandActive)
                     return;
@@ -4496,6 +4582,11 @@ public partial class ViewportView : UserControl
                         Math.Abs(pt.Position.Y - _paintBoxStart.Y));
                     if (rect.Width > 4 && rect.Height > 4)
                         SelectSpansInRect(boxVm, rect, additive);
+                    else if (boxVm.IsSlicePlaneViewerActive && boxVm.IsPaintEditOpen)
+                        TryPaintLineAt(boxVm, pt.Position,
+                            erase: e.KeyModifiers.HasFlag(KeyModifiers.Alt),
+                            applyMarks: boxVm.PaintLineToolActive,
+                            additive: e.KeyModifiers.HasFlag(KeyModifiers.Shift));
                 }
             }
             e.Handled = true;
@@ -4675,6 +4766,18 @@ public partial class ViewportView : UserControl
                 }
                 GlCanvas.RequestNextFrameRendering();
                 RevalidateSelectedToolpath();
+            }
+            else if (_paintPressConsumed
+                || (DataContext is ViewportViewModel sliceRelVm
+                    && TryCommitSliceEditClick(sliceRelVm, pt.Position, e.KeyModifiers)))
+            {
+                // 2D edit kept the hovered line or vertex on press (or on this release
+                // if the press was eaten). Scene-pick on release must not run — it
+                // was the click that never stuck in the selection panel.
+                _paintPressConsumed = false;
+                _leftDragged = false;
+                GlCanvas.RequestNextFrameRendering();
+                return;
             }
             else if (ViewportPointerPolicy.IsClickSelectRelease(sawLeftPress, _leftDragged))
             {
@@ -9531,6 +9634,11 @@ public partial class ViewportView : UserControl
     private Avalonia.Point _lastPaintPx;
     private TkVector3? _paintHoverWorld;        // bead under cursor (brush circle)
     private List<TkVector3>? _paintHoverLine;   // contour a line tool would pick
+    private (ToolpathLayer Layer, ContourSpan Span, System.Numerics.Vector3 Origin, TkMatrix4 Wt)? _paintHoverPick;
+    private Avalonia.Point _paintHoverPickPos;
+    private DateTime _paintHoverPickAt = DateTime.MinValue;
+    private bool _paintPressConsumed;
+    private DateTime _paintPressAt = DateTime.MinValue;
     private List<TkVector3>? _paintSelectedLine; // last clicked contour (sticky highlight)
     private TkVector3 _paintSelectedColor = new(1f, 0.55f, 0.08f); // amber = selected
     // Shift+click accumulates: previous selections stay lit so multiple lines can
@@ -9982,9 +10090,18 @@ public partial class ViewportView : UserControl
         if (vm.PaintLineToolActive || !vm.PaintBrushActive)
         {
             _paintHoverWorld = null;
-            _paintHoverLine = PickSpanUnderCursor(pos) is { } pick
-                ? SpanWorldHighlight(pick, pointMode: vm.PaintPointGranularityActive)
-                : null;
+            if (PickSpanUnderCursor(pos) is { } pick)
+            {
+                _paintHoverLine = SpanWorldHighlight(pick, pointMode: vm.PaintPointGranularityActive);
+                _paintHoverPick = (pick.Layer, pick.Span, pick.Origin, pick.Wt);
+                _paintHoverPickPos = pos;
+                _paintHoverPickAt = DateTime.UtcNow;
+            }
+            else
+            {
+                _paintHoverLine = null;
+                _paintHoverPick = null;
+            }
         }
         else
         {
@@ -10091,12 +10208,18 @@ public partial class ViewportView : UserControl
             for (int si = 0; si < _paintSelection.Count; si++)
             {
                 var sel = _paintSelection[si];
+                bool sticky = si == _paintSelection.Count - 1;
                 if (!TryClipSpanToScrubWindow(sel.Layer, sel.Span, scrubStart, scrubLimit,
                         out var clipped))
+                {
+                    // Click landed on a drawn line. If the scrub window then rejects
+                    // that span, still draw what was clicked so the selection holds.
+                    if (sel.World is { Count: > 0 } held)
+                        DrawSelectionHighlight(held, fallbackCol, sticky);
                     continue;
+                }
                 var poly = SpanWorldHighlight(
                     (sel.Layer, clipped, sel.Origin, sel.Wt), pointMode);
-                bool sticky = si == _paintSelection.Count - 1;
                 DrawSelectionHighlight(poly, fallbackCol, sticky);
             }
         }
@@ -12753,7 +12876,10 @@ public partial class ViewportView : UserControl
         bool applyMarks = true, bool additive = false, bool fullConnectedPath = false)
     {
         // Selection highlight works even without AdditiveSettings; marks need it.
-        if (PickSpanUnderCursor(pos, fullConnectedPath) is not { } pickHit)
+        var pickHit = PickSpanUnderCursor(pos, fullConnectedPath);
+        if (pickHit is null && !fullConnectedPath && HasFreshHoverPick(pos))
+            pickHit = _paintHoverPick;
+        if (pickHit is not { } picked)
         {
             _paintHoverLine = null;
             // Quiet miss is confusing — nudge when the pick filter is likely the cause.
@@ -12772,9 +12898,9 @@ public partial class ViewportView : UserControl
         // Bridge-target pick: attach this span as the second anchor of a Support mod.
         if (vm.PaintBridgePickModificationId is Guid bridgeModId)
         {
-            var bridgePoly = SpanWorldHighlight(pickHit, pointMode: vm.PaintPointGranularityActive);
-            AttachBridgeTarget(vm, bridgeModId, pickHit.Layer, pickHit.Span,
-                pickHit.Origin, pickHit.Wt, bridgePoly);
+            var bridgePoly = SpanWorldHighlight(picked, pointMode: vm.PaintPointGranularityActive);
+            AttachBridgeTarget(vm, bridgeModId, picked.Layer, picked.Span,
+                picked.Origin, picked.Wt, bridgePoly);
             return;
         }
 
@@ -12784,9 +12910,9 @@ public partial class ViewportView : UserControl
                 ? "erase-marks"
                 : vm.PaintLineBridgeActive ? "line-bridge" : "line-remove";
 
-        var id = BuildPaintLineId(pickHit, action);
+        var id = BuildPaintLineId(picked, action);
         // Point mode → single midpoint sphere; path mode → polyline section.
-        var poly = SpanWorldHighlight(pickHit, pointMode: vm.PaintPointGranularityActive);
+        var poly = SpanWorldHighlight(picked, pointMode: vm.PaintPointGranularityActive);
         var newColor = !applyMarks
             ? new TkVector3(1f, 0.55f, 0.08f)   // amber = select-only
             : erase
@@ -12809,20 +12935,20 @@ public partial class ViewportView : UserControl
         if (pointMode && additive
             && _paintPointAnchorLayer is not null
             && _paintPointAnchorMove >= 0
-            && ReferenceEquals(_paintPointAnchorLayer, pickHit.Layer)
+            && ReferenceEquals(_paintPointAnchorLayer, picked.Layer)
             && Core.Slicing.ContourPointPath.ShortestPath(
-                    pickHit.Layer, _paintPointAnchorMove, pickHit.Span.Start, beadForPath)
+                    picked.Layer, _paintPointAnchorMove, picked.Span.Start, beadForPath)
                 is { Count: > 0 } pathSpans)
         {
             // Drop prior entries on the same contour (the range replaces them).
             if (Core.Slicing.ContourPointPath.TryResolveSharedContour(
-                    pickHit.Layer, _paintPointAnchorMove, pickHit.Span.Start, beadForPath,
+                    picked.Layer, _paintPointAnchorMove, picked.Span.Start, beadForPath,
                     out var sharedContour))
             {
                 int c0 = sharedContour.Start;
                 int c1 = sharedContour.Start + Math.Max(0, sharedContour.Count) - 1;
                 _paintSelection.RemoveAll(sel =>
-                    ReferenceEquals(sel.Layer, pickHit.Layer)
+                    ReferenceEquals(sel.Layer, picked.Layer)
                     && sel.Span.Start >= c0
                     && sel.Span.Start + Math.Max(0, sel.Span.Count) - 1 <= c1);
             }
@@ -12833,14 +12959,14 @@ public partial class ViewportView : UserControl
                 if (span.Count <= 0) continue;
                 totalPts += span.Count;
                 var pathPoly = SpanWorldHighlight(
-                    (pickHit.Layer, span, pickHit.Origin, pickHit.Wt), pointMode: true);
+                    (picked.Layer, span, picked.Origin, picked.Wt), pointMode: true);
                 bool already = _paintSelection.Any(sel =>
-                    ReferenceEquals(sel.Layer, pickHit.Layer)
+                    ReferenceEquals(sel.Layer, picked.Layer)
                     && sel.Span.Start == span.Start
                     && sel.Span.Count == span.Count);
                 if (!already)
                     _paintSelection.Add(
-                        (pickHit.Layer, span, pickHit.Origin, pickHit.Wt, pathPoly));
+                        (picked.Layer, span, picked.Origin, picked.Wt, pathPoly));
             }
 
             RebuildPaintSelectionHighlights(newColor);
@@ -12849,14 +12975,14 @@ public partial class ViewportView : UserControl
             SyncPaintSelectionUi(vm);
             LogPaintConsole(
                 $"[edit] shift-range · {totalPts} point(s) on shortest path "
-                + $"(m{_paintPointAnchorMove} → m{pickHit.Span.Start})");
+                + $"(m{_paintPointAnchorMove} → m{picked.Span.Start})");
 
             int markDeltaRange = 0;
             if (applyMarks && vm.AdditiveSettings is { } addRange)
             {
                 foreach (var sel in _paintSelection)
                 {
-                    if (!ReferenceEquals(sel.Layer, pickHit.Layer)) continue;
+                    if (!ReferenceEquals(sel.Layer, picked.Layer)) continue;
                     markDeltaRange += ApplyPaintMarksAlongSpan(
                         vm, addRange, sel.Layer, sel.Span, erase);
                 }
@@ -12886,14 +13012,14 @@ public partial class ViewportView : UserControl
         // Actionable selection list: replace on plain click, accumulate on shift.
         if (!additive) _paintSelection.Clear();
         bool dupPick = _paintSelection.Any(sel =>
-            ReferenceEquals(sel.Layer, pickHit.Layer) && sel.Span.Start == pickHit.Span.Start
-            && sel.Span.Count == pickHit.Span.Count);
+            ReferenceEquals(sel.Layer, picked.Layer) && sel.Span.Start == picked.Span.Start
+            && sel.Span.Count == picked.Span.Count);
         if (!dupPick)
-            _paintSelection.Add((pickHit.Layer, pickHit.Span, pickHit.Origin, pickHit.Wt, poly));
+            _paintSelection.Add((picked.Layer, picked.Span, picked.Origin, picked.Wt, poly));
 
         // Point-mode anchor: plain click (or non-path shift add) becomes the range start.
         if (pointMode)
-            SetPaintPointAnchor(pickHit.Layer, pickHit.Span.Start, pickHit.Origin, pickHit.Wt);
+            SetPaintPointAnchor(picked.Layer, picked.Span.Start, picked.Origin, picked.Wt);
         else
             ClearPaintPointAnchor();
 
@@ -12901,7 +13027,7 @@ public partial class ViewportView : UserControl
 
         int markDelta = 0;
         if (applyMarks && vm.AdditiveSettings is { } add)
-            markDelta = ApplyPaintMarksAlongSpan(vm, add, pickHit.Layer, pickHit.Span, erase);
+            markDelta = ApplyPaintMarksAlongSpan(vm, add, picked.Layer, picked.Span, erase);
 
         BroadcastPaintLineSelection(id, markDelta);
         PushPaintLineSelectionUndo(vm, prevPoly, prevColor, prevId, poly, newColor, id);

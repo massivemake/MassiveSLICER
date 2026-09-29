@@ -21,4 +21,21 @@ public static class ViewportPointerPolicy
     /// </summary>
     public static bool ConsumeOrbitPanRelease(bool isOrbitOrPanButton, bool leftDragged)
         => isOrbitOrPanButton && leftDragged;
+
+    /// <summary>
+    /// 2D slice edit owns a left click when the user is selecting lines or points.
+    /// Hand navigates. Region-select starts a marquee. A brush (not the line tool)
+    /// paints. Otherwise the click must keep the span under the cursor.
+    /// </summary>
+    public static bool SliceEditClickSelects(
+        bool sliceEdit, bool hand, bool regionSelect, bool lineSelectArmed)
+        => sliceEdit && !hand && !regionSelect && lineSelectArmed;
+
+    /// <summary>
+    /// Mill Face/Box/Lasso/Brush must not eat print-edit clicks. Only while the
+    /// mill step is the active workflow, and never while 2D slice edit is open.
+    /// </summary>
+    public static bool MillPaintCapturesPointer(
+        bool areaToolArmed, bool millStepActive, bool sliceEditOpen)
+        => areaToolArmed && millStepActive && !sliceEditOpen;
 }
