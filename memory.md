@@ -532,6 +532,21 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 ## Session changelog (reverse chronological)
 
+### 2026-09-29 — Axis-speed spin repair no longer loses reach (`feature/axis-speed-limits`)
+
+**Symptom:** COW MID REPRINT 2.mass is all 375,210 reachable on main 659. On this branch (`e47cbb4`) it showed 155 unreachable between Z 1002 and 1622. Jeff's COW MIDDLE STL placement showed about 10,800.
+
+**Cause:** the nozzle-spin repair picked a spin by testing 3 points (s0, mid, s1). It then wrote that spin across the ±60-move ramp and re-solved the range in one shot, with no position-first pass and no fallback seeds. A ramp move that failed was marked unreachable and the spin was kept anyway. Only A4 was rate-checked.
+
+**Fix:** new `ToolpathFeasibilityEvaluator.RepairSpansWithSpin`. Each spin is solved across the whole range it writes, using the main pass's solve (`SolveReach` + `PrintIkFallbackSeeds`). It is kept only if every move solves, |A5| holds, and every axis stays under its rated speed, including the step back onto the path. If no spin passes, nothing is written, and the span stays a limit violation. The e3afca4 blended-corner skip is unchanged.
+
+**Tests:** `SpinRepairTest` (7). The old 3-point pick accepts a spin that breaks a ramp move, and the new pass skips it. Also covers A6, the return step, and no-spin-leaves-it-untouched.
+
+**Not verified yet:** the COW MID REPRINT 2 / Rev142 / Jeff placement acceptance runs in the app. The Mac suite on unmodified main 09e01f5 fails 37 tests, so `docs/KNOWN-TEST-FAILURES.md` (15) is stale. The branch adds `HeatedBedConfigTest.Every_checked_in_lfam3_json_has_heatedBed_and_base_6`, which reads `Research/LFAM/assets/cells/LFAM3/lfam3.json` outside the repo. The branch folder is a sibling, so it picks up that copy. Main's checkout does not.
+
+- `src/MassiveSlicer.Viewport/Validation/ToolpathFeasibilityEvaluator.cs`
+- `src/MassiveSlicer.Tests/SpinRepairTest.cs`
+
 ### 2026-09-29 — Send to MassiveDRIVE does not ask for a Samba password
 
 - Symptom: a new Windows login (`jhala`) got "The user name or password is incorrect" on `\\192.168.0.189\MassiveDRIVE-LFAM1\var\jobs`. The job landed in that user's AppData. Drive never saw it.
