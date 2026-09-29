@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-28** (2D edit sidebar + line/point select)
+Last updated: **2026-09-29** (LFAM 1 barrel still cooling: plant setpoint is 240, heater output stays off until robot output 7)
 
 ---
 
@@ -521,6 +521,129 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-29 — LFAM 1 extruder speed accepts a decimal
+
+- Symptom: a speed percent with a fraction could be rejected or, from the page, turned into an empty value and sent as 0.
+- Cause: the screw register is a whole percent. Drive and the cabinet MQTT bridge already round a decimal (`12.6` becomes `13`) and do not throw. The speed box was `step=1`, and a value that was not a number was posted as null, which the API treats as 0.
+- Fix: the speed box accepts any decimal and the page sends the nearest whole percent (`12.5` becomes `13`). A value that is not a number is not posted. Reload `http://192.168.0.189:8080/`. Drive was not restarted. No screw speed was sent.
+- Key file: `M:\src\massivedrive\web\static\app.js`.
+
+### 2026-09-29 — LFAM 1 shows a setpoint while the barrel cools
+
+- Symptom: zones kept falling while the LFAM 1 page showed the set temperature at 250.
+- Cause: two different numbers. The robot analog is still about 3.23 V, which is 250 °C, and those volts are present on the cabinet temp inputs. Manual mode does not use them. The plant override and the working setpoint are 240/240/240, and the plant acknowledged that. Heater output is a separate step. `Main_Dev.py` calls `EnablePID` only after the start-print input (`DI_05_startPrinting_req`, robot `$OUT[7]`) is on. That input is off, so the Gefran stays in the standby written at boot (registers 12–14 = 128). The heating-elements coil 10403 is only the status of that flag, and it is off. Both contactors are in, the orange lamp is on, extruder-ready is off. Develop mode is on, so the white acknowledge button is not required. Actuals at the read were 88/113/101. Screw speed is 0, so the screw stays stopped.
+- Fix: none applied. Output 7 was not turned on, and no screw speed was sent. On the Drive I/O list that output is labeled "Kuka Comms".
+- Key files: Pi `/home/pi/Desktop/CARACOL_control/Ver3.20.11/Main_Dev.py`, `safetyBox.py`, `PIDcycle.py`, `settings.py`.
+
+### 2026-09-29 — LFAM 1 extruder is MQTT, and the idle Drive was restarted
+
+- Symptom: the LFAM 1 dashboard still said ClearCore. Set temps could not put the extruder in Manual and hold the barrel, and extrusion was not on that same panel.
+- Cause: Drive was logged into the cabinet page at `192.168.0.195:8091`. That page is a second front-end. The plant is `lfam1` on the broker (`lfam1-mqtt`). ClearCore USB was already disabled; the label and a fallback branch were what remained. A zone hold also wrote KUKA `T1`–`T3`, which this cabinet does not use.
+- Fix: Drive now uses the MQTT client (`prefix: lfam1`). HTTP and ClearCore are not started when MQTT is on. Set temps enters Manual, then holds `lfam1/t1/set`, `t2/set`, and `t3/set`. It does not write KUKA `T*`. Speed % sits with those controls and still stops at the heat gate when the barrel is cold. The page no longer says ClearCore. The executor was idle (`active` false, phase done), so `massivedrive` was restarted. A read after that showed heat source `lfam1-mqtt`, port `mqtt://192.168.0.126:1883/lfam1`, manual on, speed 0. The same restart loaded the mq_stream start from the earlier Run fix. No screw speed was sent. The saved hold was already 250/250/250, which the plant already had, so the restart did not publish a new setpoint. Reload the dashboard.
+- Key files: `M:\src\massivedrive\extruder\lfam1_mqtt.py`, `M:\src\massivedrive\__main__.py`, `M:\configs\cells\lfam1.yaml`, `M:\src\massivedrive\sync\temp_override.py`, `M:\src\massivedrive\web\templates\index.html`, `M:\src\massivedrive\web\static\app.js`.
+
+### 2026-09-29 — LFAM 1 live Run starts the loaded file on mq_stream
+
+- Symptom: Run on the loaded Cow Column resume faulted with `print approach T1 B1 failed: RSI stream not live — Play LFAM3_RSI_BulkPTP`. `mq_stream` was already running and idle.
+- Cause: `begin()` still applied the LFAM 3 EX_BASE check and a BulkPTP approach before the Animaquina tick. That approach returns before any move when RSI is off. The program start fold is tool 2; the file is tool 1, base 1.
+- Fix: when `lin_pipe` is `mq`, start skips the mill BulkPTP, the EX_BASE gate, and the RSI lead-in. The first move is `MQ_ACTION` 3 to the file's first point, then `MQ_ACTION` 10 through the LIN ring. Before that PTP, Drive writes `FDAT_ACT` to the file's tool and base so `BAS(#PTP_PARAMS)` uses them. `mq_stream.src` was not edited. The Drive process was not restarted at that point. A later restart the same day, for the MQTT extruder, loaded this start. `mq_stream` was left running (`MQ_ACTION` 0).
+- Key files: `M:\src\massivedrive\sync\path_executor.py`, `M:\src\massivedrive\robot\mq_path.py`.
+
+### 2026-09-29 — LFAM 1 output KRL is on the controller, waiting for a cold start
+
+- Symptom: LFAM 1 `$config.dat` and `sps.sub` did not have the `MD_DO_*` lines that LFAM 2 is running.
+- Cause: LFAM 1's submit is the EKI telemetry program. It has no DO3 or DO8 forcing. Drive was still sending `MS_CMD=96`, which that submit does not handle.
+- Fix: `\\192.168.0.151\KRC\ROBOTER\KRC\R1\System\$config.dat` now declares `MD_DO_CH`, `MD_DO_VAL`, `MD_DO_SEQ`, and `MD_DO_ACK`. `sps.sub` copies that one output and sets `MD_DO_ACK`. The EKI block and the Animaquina `MQ_*` lines were left in place. DO3/DO8 forcing was not added. Drive `io_status.py` now uses the same submit request. The controller was not restarted. Backup: `M:\var\krl-backup-20260929`.
+- Key files: controller `R1\System\$config.dat`, `R1\System\sps.sub`; Drive `src\massivedrive\robot\io_status.py` on `\\192.168.0.189\MassiveDRIVE-LFAM1`.
+
+### 2026-09-29 — LFAM 2 WorkVisual deploy of the output KRL succeeded
+
+- The operator deployed project `0(PCRC-4NUE3TEMLM)` and confirmed it worked. `MD_DO_CH`, `MD_DO_VAL`, `MD_DO_SEQ`, and `MD_DO_ACK` are in the running controller. Output buttons 1–17 on LFAM 2 Drive go through `sps.sub`. DO3 and DO8 keep their existing rules until that channel is set from the page. LFAM 3 was not changed.
+
+### 2026-09-29 — LFAM 2 output KRL is in the WorkVisual project
+
+- Symptom: digital outputs 1–17 are on the controller disk, and the running submit does not know `MD_DO_CH` until a restart. The operator wants to send that through WorkVisual instead of a pendant cold start.
+- Cause: only `R1\System\$config.dat` and `R1\System\sps.sub` changed. The WorkVisual project `0(PCRC-4NUE3TEMLM)` (controller 192.168.0.152) did not have those lines, and its `$config.dat` was also missing the Animaquina `MQ_*` block the robot is using. Base 1 Z in the project was -870; the controller file is -890.
+- Fix: the project copies now have the Animaquina block, base 1 Z -890, the four `MD_DO_*` globals, and the submit hold logic. `STEU\$config.dat` and `mq_stream.src` were not edited. Nothing was deployed. A project activation that adds `$config.dat` variables still restarts the controller, so it waits until the print is finished. Do not delete controller files that are not in the project; `mq_stream.src` is one of them.
+- Key files: `C:\Users\MassiveMAKE\Documents\WorkVisual 6.0\Repositories\0(PCRC-4NUE3TEMLM)\KRC\R1\System\$config.dat`, `sps.sub`.
+
+### 2026-09-29 — LFAM 2 camera pane matches the picture
+
+- Symptom: the live camera sat in a tall pane with black bands above and below, and Cell 3D was stuck at half the column.
+- Cause: the feed is 16:9 (stream 1920×1080, snapshot 1280×720) and the pane was `flex: 1 1 50%` with `object-fit: contain`.
+- Fix: the camera pane is 16:9 at the column width, and Cell 3D takes the remaining height. The camera label sits on the bottom edge of the picture so it does not cover the clock burned into the frame. Drive was not restarted. Reload the page.
+- Key files: Drive `src/massivedrive/web/static/style.css`.
+
+### 2026-09-29 — LFAM 2 header bar waits for the camera and Cell 3D
+
+- Symptom: the green bar under the header dropped as soon as a job preview or intake finished, while the live camera and Cell 3D were still loading.
+- Cause: `#intake-bar` only watched path preview and `/api/jobs/intake`.
+- Fix: the same bar stays up until the camera image has decoded a frame and Cell 3D has finished the robot, bed, coupler, and tools. Job intake and toolpath preview still hold it. A camera that never answers releases that part after 20 seconds; a Cell 3D load that never finishes releases after 2 minutes. Drive was not restarted. Reload the page. LFAM 3 was not changed.
+- Key files: Drive `src/massivedrive/web/static/app.js`, `src/massivedrive/web/static/cell-view.js`.
+
+### 2026-09-29 — LFAM 2 live camera where the thermal pane was
+
+- Symptom: LFAM 2 Cell 3D had no picture in the thermal slot, and a print had no camera frames for a later timelapse.
+- Cause: the thermal pane was hidden because this cell has no P3. The cell camera is the MassiveBOARD relay used by robots.html (`/api/camera/LFAM2/stream` and `snapshot`).
+- Fix: the thermal slot shows that live feed. While a run is active, a grabber on the LFAM 2 PC saves one JPEG every 5 seconds to `var/cam/<job_id>/frames/`. The current vase is job `32c7a9e04ff5`. Drive was not restarted. The service starts the same grabber on the next idle restart and the standalone process yields. LFAM 3 was not changed. Reload the page to see the picture.
+- Key files: Drive `src/massivedrive/cam/recorder.py`, `configs/cells/lfam2.yaml`, `web/static/app.js`, `web/static/style.css`, `web/templates/index.html`.
+
+### 2026-09-29 — LFAM 2 Travel start popup
+
+- Symptom: LFAM 2 Robot → Extruder had Reverse/Rush, and no Pre-Travel / Post-Travel popup like LFAM 3.
+- Cause: the three-column Travel start dialog and `pre_inject_*` / `post_inject_*` / `pre_travel_mm` / `post_travel_mm` lived on LFAM 3. LFAM 2 Run on `mq_stream` also never fires those pulses.
+- Fix: LFAM 2 gained a Travel row and the Travel start dialog (magnitude, time, injection offset). It fills from this cell's `/api/reverse`. Pre and Post default to 0 ms, which sends no pulse. Apply still posts reverse duration, percent, and offset through the running API. The six new fields are stored by the Python on disk and load on the next idle restart; the running process drops them. The mq screw path was not taught to pulse, so this print does not suck back. Test Reverse, Test Rush, and Reverse/Rush stay. Drive was not restarted. LFAM 3 was not changed. A reload of the page installs the dialog. The template cache buster `travels1` waits for the next idle restart; the served HTML still references `app.js?v=dout1`.
+- Key files: Drive `web/static/app.js`, `web/static/style.css`, `web/templates/index.html`, `sync/reverse_settings.py`.
+
+### 2026-09-29 — LFAM 2 Live run uses the tabbed view
+
+- Symptom: LFAM 2 Live run was the older commands fold. LFAM 3 shows Commands, Actual, and Wire, with the speed hint beside the slider.
+- Cause: that tabbed view existed only on the LFAM 3 page.
+- Fix: LFAM 2 gained the same three tabs. Commands adds one PRINTING row per layer. Actual shows the live C3 pose, tool, base, and the mq_stream line. Wire shows the planned lines against the screw injects. The speed hint reads “× robot + flow”. The pendant Speed link, the heat gate, and the mq_stream Run path were left as they are. Reset is hidden. Wipe/travel exclude stays under the slider. Drive was not restarted; a reload reshapes the card the process is already serving. The template cache buster `liverun1` waits for the next idle restart. LFAM 3 was not changed. The print was still running after the files were saved.
+- Key files: Drive `web/static/app.js`, `web/static/style.css`, `web/templates/index.html`.
+
+### 2026-09-29 — LFAM 2 digital outputs go through the submit
+
+- Symptom: the LFAM 2 output buttons were locked, and a click could not change a pendant output.
+- Cause: the page refused to write on LFAM 2, and the controller rejects a direct `$OUT` write. The submit program is what sets `$OUT`.
+- Fix: buttons 1–17 post one request (`MD_DO_CH`, `MD_DO_VAL`, then `MD_DO_SEQ` in `R1\System\$config.dat`). `sps.sub` copies that single output and answers in `MD_DO_ACK`. It does not mirror the other outputs. DO3 and DO8 keep their existing rules until the operator sets that channel. A Drive restart while idle loaded the page (`app.js?v=dout1`). A DO4-off request returned "not loaded" and left `$OUT` unchanged (DO1, DO3, and DO7 still on). The new lines are not in the running controller until a cold start. The submit was not cancelled. LFAM 3 was not changed.
+- Key files: KUKA `R1\System\$config.dat`, `R1\System\sps.sub` (backup `\\192.168.0.173\MassiveDRIVE-LFAM2\var\krl-backup-20260929`). Drive `robot/io_status.py`, `web/app.py`, `web/static/app.js`, `web/templates/index.html`.
+
+### 2026-09-29 — LFAM 2 Speed % follows the pendant override
+
+- Symptom: the pendant program override and the Drive Speed slider were separate, and a pendant slowdown did not scale extrusion.
+- Cause: Drive scaled `$VEL.CP` from its own percent. The pendant percent is `$OV_PRO`, which the controller already applies on top of `$VEL.CP`. Extrusion did not read `$OV_PRO`.
+- Fix: the Live run Speed slider and `$OV_PRO` are the same 0–100 number. A pendant change updates the slider. A slider change writes `$OV_PRO`. A running job's screw command is the programmed percent times that number (travels stay 0, and the move to the first point stays 0). The line speed stays the programmed `$VEL.CP`, so 50% is half speed rather than a quarter. LFAM 3 was not changed. The manual extruder Speed % field is not this control. Reload the page (`app.js?v=ovpro1`).
+- Key files: Drive `robot/ov_link.py`, `robot/c3_status.py`, `sync/path_executor.py`, `web/app.py`, `web/static/app.js`, `web/templates/index.html`.
+
+### 2026-09-28 — LFAM 2 Run uses the mq_stream toolpath
+
+- Symptom: Run still sent one-point line commands on the vertex program, so the arm did not move the way Animaquina runs a file.
+- Cause: path follow was `lin_pipe: c3` (`MS_CMD=88` on `LFAM2_C3_VertexLIN`).
+- Fix: Run checks that `mq_stream` is already running, PTP-moves to the first point (action 3, 15%), then streams the file as blended lines (action 10, six-point ring, 1 mm blend). A speed change ends that queue and starts the next. It does not select or start the program. Slicer Send still does not start motion. Run was not pressed.
+- Key files: Drive `robot/mq_path.py`, `sync/path_executor.py`, `configs/cells/lfam2.yaml`.
+
+### 2026-09-28 — LFAM 2 Home follows mq_stream; Sim and path validation are off
+
+- Symptom: Home was a MassiveMOVE line move, which this cell cannot run, and Run waited on an IK pass over the whole vase.
+- Cause: `/api/motion/home` called the RSI lift-and-park path. `validation_blocks_run` stamped the path before Run or Sim.
+- Fix: Home is a joint PTP on the already-running `mq_stream` program (`MQ_E6AXIS`, `MQ_APO -1`, `MQ_CMD_ID`, `MQ_ACTION 1`) to controller XHOME `0, -90, 90, 0, 0, 0`. It does not select or start the program. Sim, the V column, and the Run validation gate are gone. Slicer Send still does not start motion. Home was not pressed.
+- Key files: Drive `robot/mq_home.py`, `configs/cells/lfam2.yaml`, `web/app.py`, `web/static/app.js`, `web/templates/index.html`.
+
+### 2026-09-28 — LFAM 2 Send showed an empty Jobs list
+
+- Symptom: Send to MassiveDRIVE wrote `var/jobs/32c7a9e04ff5` (vaseLFAM2.mass, 573074 segments, tool 2 base 1) and the Jobs list stayed empty.
+- Cause: the pointer expanded `segments.bin` and ran path checks inside the request, so it never wrote the `.mdrive.json` the list reads.
+- Fix: the pointer now indexes `summary.json`. Arm draws `preview.json` shifted by `bed_origin`. Run still loads the bin and does not start from Slicer Send. On this cell tool 2 stays the extruder for the heat gate.
+- Key files: Drive `job_v2.py`, `job_package.py`, `web/app.py`, `sync/job.py`.
+
+### 2026-09-28 — LFAM 2 Send to MassiveDRIVE
+
+- LFAM 2 had no `massiveDriveUrl`, so the Send menu only offered the robot.
+- Cell file now points at `http://192.168.0.173:8080`, cell id `lfam2`, jobs share `\\192.168.0.173\MassiveDRIVE-LFAM2\var\jobs`.
+- LFAM 2 Drive accepts `POST /api/jobs/package/pointer` and lists the job. Slicer Send still does not start the arm.
+- Key files: `assets/cells/LFAM2/lfam2.json`, Drive `job_v2.py`, `web/app.py`.
 
 ### 2026-09-28 — 2D edit: click keeps the hovered line or vertex
 

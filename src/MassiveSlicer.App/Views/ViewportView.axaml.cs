@@ -18478,14 +18478,14 @@ public partial class ViewportView : UserControl
             }
 
             mvm?.Console.Log(
-                $"[drive] Sent package {packageId} to {cell.Name} — path executor started.");
+                $"[drive] Sent package {packageId} to {cell.Name} — loaded, not started. Press Run on Drive.");
             if (mvm is not null)
             {
                 mvm.StatusBar.OperationFeedback =
-                    $"✓ Sent to MassiveDRIVE ({cell.Name}): {packageId} — {segCount} segments";
+                    $"✓ Sent to MassiveDRIVE ({cell.Name}): {packageId} — {segCount} segments. Press Run on Drive.";
             }
             SetSliceStatus(vm,
-                $"✓ Sent to MassiveDRIVE — {packageId} ({segCount} segs). Robot needs RSI runtime armed.",
+                $"✓ Sent to MassiveDRIVE — {packageId} ({segCount} segs). Press Run on Drive. The robot was not started.",
                 isError: false);
         }
         catch (MassiveDriveClientException ex)

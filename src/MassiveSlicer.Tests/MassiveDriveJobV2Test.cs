@@ -289,6 +289,26 @@ public sealed class MassiveDriveJobV2Test
     }
 
     [Fact]
+    public void Lfam2_cell_json_points_at_lfam2_drive()
+    {
+        var candidates = new[]
+        {
+            Path.GetFullPath(Path.Combine("assets", "cells", "LFAM2", "lfam2.json")),
+            Path.GetFullPath(Path.Combine("src", "assets", "cells", "LFAM2", "lfam2.json")),
+        };
+        var path = candidates.FirstOrDefault(File.Exists);
+        if (path is null)
+            return;
+
+        var cell = CellLoader.Load(path);
+        Assert.Equal("http://192.168.0.173:8080", cell.MassiveDriveUrl);
+        Assert.Equal("lfam2", cell.MassiveDriveCellId);
+        Assert.Contains("192.168.0.173", cell.MassiveDriveJobsRoot, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("MassiveDRIVE-LFAM2", cell.MassiveDriveJobsRoot, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("jobs", cell.MassiveDriveJobsRoot, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Lfam3_cell_json_documents_drive_jobs_share()
     {
         var candidates = new[]
