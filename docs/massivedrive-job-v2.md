@@ -32,10 +32,12 @@ Cell JSON (`massiveDriveJobsRoot`), overridable per machine in prefs
 | Shop Windows PC | `\\192.168.0.201\MassiveDRIVE\var\jobs` or a mapped letter |
 | macOS mount | `/Volumes/MassiveDRIVE/var/jobs` |
 
-The Samba share currently allows user **`massive`**. If write is denied, Slicer
-copies the job to local staging (`%LOCALAPPDATA%\MassiveSlicer\drive-jobs` or
-`MassiveDriveJobsStaging`) and **surfaces an error** — Drive cannot see the
-staging folder. Do not Send a curtain job until the share is writable.
+The Samba share currently allows user **massive**. Shop Send does not use
+that login when the Drive host has `var/slicer_upload.token` and this PC has
+the token from `scripts/Install-DriveUploadToken.ps1`. Slicer POSTs the four
+files to `/api/jobs/package/upload`. Drive writes them under its jobs folder
+and arms the job. The robot is not started. If the token is missing, a denied
+share is an error. A local `drive-jobs` copy is not a sent job.
 
 ## Pointer POST
 

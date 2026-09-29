@@ -8,6 +8,7 @@ public static class MassiveDriveJobV2
 {
     public const string Format = "massivedrive.job/v2";
     public const string PointerApiPath = "api/jobs/package/pointer";
+    public const string UploadApiPath = "api/jobs/package/upload";
     public const string SegmentsFileName = "segments.bin";
     public const string ManifestFileName = "manifest.json";
     public const string PreviewFileName = "preview.json";

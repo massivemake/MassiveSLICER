@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-29** (LFAM 1 barrel still cooling: plant setpoint is 240, heater output stays off until robot output 7)
+Last updated: **2026-09-29** (Drive job upload over HTTP, no Samba login)
 
 ---
 
@@ -521,6 +521,13 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-29 — Send to MassiveDRIVE does not ask for a Samba password
+
+- Symptom: a new Windows login (`jhala`) got "The user name or password is incorrect" on `\\192.168.0.189\MassiveDRIVE-LFAM1\var\jobs`. The job landed in that user's AppData. Drive never saw it.
+- Cause: Windows offered the logged-in account. The share only accepts `massive`.
+- Fix: large jobs upload over HTTP to `POST /api/jobs/package/upload` with a machine token. Drive writes `var/jobs` itself. The token is not in git. Shop PCs install it once with `scripts\Install-DriveUploadToken.ps1`. Send does not start the robot.
+- Key files: `MassiveDriveClient.cs`, `MassiveDriveUploadToken.cs`, Drive `job_upload.py`, `web/app.py`.
 
 ### 2026-09-29 — LFAM 1 extruder speed accepts a decimal
 

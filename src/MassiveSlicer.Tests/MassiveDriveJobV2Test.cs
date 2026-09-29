@@ -289,6 +289,110 @@ public sealed class MassiveDriveJobV2Test
     }
 
     [Fact]
+    public void Upload_is_preferred_only_when_drive_and_this_pc_both_have_the_token()
+    {
+        Assert.True(MassiveDriveUploadToken.PreferUpload(endpoint: true, authInstalled: true, token: "abc"));
+        Assert.False(MassiveDriveUploadToken.PreferUpload(endpoint: true, authInstalled: true, token: null));
+        Assert.False(MassiveDriveUploadToken.PreferUpload(endpoint: true, authInstalled: false, token: "abc"));
+        Assert.False(MassiveDriveUploadToken.PreferUpload(endpoint: false, authInstalled: true, token: "abc"));
+    }
+
+    [Fact]
+    public void Health_flags_say_whether_upload_auth_is_installed()
+    {
+        using var doc = JsonDocument.Parse("""{"upload":true,"upload_auth":true}""");
+        var caps = MassiveDriveUploadCaps.FromHealth(doc.RootElement);
+        Assert.True(caps.Endpoint);
+        Assert.True(caps.AuthInstalled);
+        using var old = JsonDocument.Parse("""{"ok":true}""");
+        var missing = MassiveDriveUploadCaps.FromHealth(old.RootElement);
+        Assert.False(missing.Endpoint);
+        Assert.False(missing.AuthInstalled);
+    }
+
+    [Fact]
+    public void Token_file_picks_the_cell_and_ignores_the_others()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "ms-drive-token-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, """{"lfam1":"one","lfam2":"two"}""");
+        try
+        {
+            Assert.Equal("two", MassiveDriveUploadToken.ForCell("LFAM2", path));
+            Assert.Equal("one", MassiveDriveUploadToken.ForCell("lfam1", path));
+            Assert.Null(MassiveDriveUploadToken.ForCell("lfam3", path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Client_uploads_v2_directory_with_bearer_and_no_token_in_the_url()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ms-drive-up-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var handler = new HeaderRecordingHandler();
+        using var http = new HttpClient(handler);
+        using var client = new MassiveDriveClient("http://192.168.0.189:8080", http: http);
+        try
+        {
+            foreach (var name in new[] { "manifest.json", "segments.bin", "preview.json", "summary.json" })
+                File.WriteAllText(Path.Combine(dir, name), name);
+            var written = new MassiveDriveJobV2WriteResult
+            {
+                JobId = "abc123",
+                JobDirectory = dir,
+                RelativeRoot = "abc123",
+                ManifestPath = Path.Combine(dir, "manifest.json"),
+                SegmentsPath = Path.Combine(dir, "segments.bin"),
+                PreviewPath = Path.Combine(dir, "preview.json"),
+                SummaryPath = Path.Combine(dir, "summary.json"),
+                Sha256 = new string('c', 64),
+                SegmentCount = 1,
+                PreviewPoints = 2,
+                SegmentsBytes = 4,
+                UsedStaging = false,
+            };
+            using var doc = await client.UploadJobDirectoryAsync(written, "Cow", "secret-token");
+            Assert.Equal("pkg-test", doc.RootElement.GetProperty("package_id").GetString());
+            Assert.Equal("Bearer", handler.AuthScheme);
+            Assert.Equal("secret-token", handler.AuthParameter);
+            Assert.Contains("/api/jobs/package/upload", handler.Uri, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret-token", handler.Uri, StringComparison.Ordinal);
+            Assert.Contains("segments.bin", handler.Body, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret-token", handler.Body, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    sealed class HeaderRecordingHandler : HttpMessageHandler
+    {
+        public string? AuthScheme { get; private set; }
+        public string? AuthParameter { get; private set; }
+        public string Uri { get; private set; } = "";
+        public string Body { get; private set; } = "";
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            AuthScheme = request.Headers.Authorization?.Scheme;
+            AuthParameter = request.Headers.Authorization?.Parameter;
+            Uri = request.RequestUri!.ToString();
+            Body = request.Content is null
+                ? ""
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"package_id":"pkg-test"}""", Encoding.UTF8, "application/json"),
+            };
+        }
+    }
+
+    [Fact]
     public void Lfam2_cell_json_points_at_lfam2_drive()
     {
         var candidates = new[]

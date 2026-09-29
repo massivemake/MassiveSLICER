@@ -18261,9 +18261,60 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Send the active toolpath to MassiveDRIVE. Large jobs write massivedrive.job/v2
-    /// on the shared jobs disk and POST a tiny pointer; small jobs keep the v1 JSON POST.
-    /// Does not upload KRL to the robot.
+    /// Write the v2 job to a temp folder and stream it to Drive. Returns null
+    /// after the status line is already an error. Does not start the robot.
+    /// </summary>
+    private async Task<string?> UploadDriveJobAsync(
+        ViewportViewModel vm,
+        MainWindowViewModel? mvm,
+        MassiveDriveClient client,
+        MassiveDriveJobBuild build,
+        string token,
+        int segCount,
+        string url)
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "MassiveSlicer", "drive-upload", build.JobId);
+        var progress = new Progress<MassiveDriveWriteProgress>(p =>
+            SetSliceStatus(vm, $"Sending to Drive: {p}"));
+        try
+        {
+            var written = await Task.Run(() =>
+                MassiveDriveJobV2Writer.Write(
+                    build, tempDir, build.JobId, usedStaging: false, shareWarning: null, progress));
+            SetSliceStatus(vm, "Sending to Drive: uploading job…");
+            using var up = await client.UploadJobDirectoryAsync(written, build.Name, token);
+            var packageId = MassiveDriveClient.ReadPackageId(up, written.JobId)
+                ?? throw new MassiveDriveClientException(
+                    0, "upload did not return package_id: " + up.RootElement.GetRawText());
+            mvm?.Console.Log(
+                $"[drive] Uploaded v2 job {packageId} ({segCount:N0} segs) to {url}");
+            return packageId;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or MassiveDriveClientException)
+        {
+            mvm?.Console.LogError($"[drive] Job upload failed: {ex.Message}");
+            SetSliceStatus(vm, $"⚠ Drive upload failed: {ex.Message}", isError: true);
+            return null;
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+                // A leftover temp folder is not a sent job.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Send the active toolpath to MassiveDRIVE. Large jobs upload the v2
+    /// directory over HTTP when this PC has the cell token. Otherwise they
+    /// write the share and POST a pointer. Small jobs stay v1 JSON.
+    /// Does not start the robot.
     /// </summary>
     private async Task SendToMassiveDriveAsync(ViewportViewModel vm)
     {
@@ -18362,11 +18413,11 @@ public partial class ViewportView : UserControl
         bool useLegacy = MassiveDriveSendPolicy.UseLegacyJson(segCount, forceLegacy);
         mvm?.Console.Log(
             $"[drive] Sending \"{exportSettings.Name}\" ({segCount} segs) T{exportSettings.Tool} B{exportSettings.Base} BASE "
-            + $"{(useLegacy ? "v1 JSON" : "v2 pointer")} → {target.Url} …");
+            + $"{(useLegacy ? "v1 JSON" : "v2")} → {target.Url} …");
 
         try
         {
-            using var client = new MassiveDriveClient(target.Url!);
+            using var client = new MassiveDriveClient(target.Url!, TimeSpan.FromMinutes(30));
             try
             {
                 using var health = await client.HealthAsync();
@@ -18399,14 +18450,28 @@ public partial class ViewportView : UserControl
                 }
                 else
                 {
-                    var result = await client.SendAndStartAsync(package);
-                    packageId = result.PackageId;
+                    using var up = await client.UploadPackageAsync(package);
+                    packageId = MassiveDriveClient.ReadPackageId(up)
+                        ?? throw new MassiveDriveClientException(0, "upload did not return package_id: " + up.RootElement.GetRawText());
                 }
             }
             else
             {
                 string? jobsRoot = FirstNonEmpty(prefs?.MassiveDriveJobsRoot, cell.MassiveDriveJobsRoot);
                 string? staging = FirstNonEmpty(prefs?.MassiveDriveJobsStaging, cell.MassiveDriveJobsStaging);
+                var caps = await client.UploadCapsAsync();
+                string? token = MassiveDriveUploadToken.ForCell(exportSettings.CellId);
+                if (MassiveDriveUploadToken.PreferUpload(caps.Endpoint, caps.AuthInstalled, token))
+                {
+                    var uploaded = await UploadDriveJobAsync(vm, mvm, client, build, token!, segCount, target.Url!);
+                    if (uploaded is null)
+                        return;
+                    packageId = uploaded;
+                }
+                else
+                {
+                if (caps.AuthInstalled && string.IsNullOrWhiteSpace(token))
+                    mvm?.Console.Log("[drive] " + MassiveDriveUploadToken.TokenHint);
                 if (string.IsNullOrWhiteSpace(jobsRoot))
                 {
                     mvm?.Console.LogError(
@@ -18439,8 +18504,10 @@ public partial class ViewportView : UserControl
                 {
                     mvm?.Console.LogError($"[drive] {written.ShareWarning}");
                     SetSliceStatus(vm,
-                        "⚠ Drive jobs share write denied — files are only on this PC. "
-                        + MassiveDriveJobShare.ShareCredentialHint,
+                        "⚠ Drive did not take this job. "
+                        + (caps.AuthInstalled
+                            ? MassiveDriveUploadToken.TokenHint
+                            : "Files are only on this PC. " + MassiveDriveJobShare.ShareCredentialHint),
                         isError: true);
                     return;
                 }
@@ -18449,16 +18516,11 @@ public partial class ViewportView : UserControl
                     $"[drive] Wrote v2 job {written.JobId} ({written.SegmentCount:N0} segs, "
                     + $"{written.SegmentsBytes:N0} bytes) at {written.JobDirectory}");
                 var pointer = written.Pointer(build.Name);
-                if (millJob)
+                using (var up = await client.UploadPackagePointerAsync(pointer))
                 {
-                    using var up = await client.UploadPackagePointerAsync(pointer);
                     packageId = MassiveDriveClient.ReadPackageId(up, pointer.JobId)
                         ?? throw new MassiveDriveClientException(0, "pointer upload did not return package_id: " + up.RootElement.GetRawText());
                 }
-                else
-                {
-                    var result = await client.SendPointerAndStartAsync(pointer);
-                    packageId = result.PackageId;
                 }
             }
 
