@@ -147,21 +147,52 @@ public sealed class RightPanelViewModel : ViewModelBase
         set => SetField(ref _stepCreateModificationExpanded, value);
     }
 
+    private bool _isPaintEditOpen;
     /// <summary>
-    /// Entering paint edit collapses workflow cards 1–4 and expands the modification cards.
-    /// Leaving edit hides the modification cards (visibility is bound to IsPaintEditOpen).
+    /// Paint-edit / 2D slice is open. Bound on this VM — do not walk
+    /// <c>$parent[Window].DataContext.Viewport</c>. That walk does not always
+    /// refresh, so the workflow cards hide and never come back.
+    /// </summary>
+    public bool IsPaintEditOpen
+    {
+        get => _isPaintEditOpen;
+        private set
+        {
+            if (!SetField(ref _isPaintEditOpen, value)) return;
+            OnPropertyChanged(nameof(ShowWorkflowCards));
+        }
+    }
+
+    /// <summary>MODEL / SLICE / PATTERN / TOOLPATH. Hidden while edit is open, not collapsed.</summary>
+    public bool ShowWorkflowCards => !IsPaintEditOpen;
+
+    /// <summary>Reset the column scroll after edit opens or closes (pad would otherwise sit in blank space).</summary>
+    internal Action? OnPaintEditLayoutReset { get; set; }
+
+    /// <summary>
+    /// Entering paint edit shows EXIT EDIT / MODIFICATIONS and hides the workflow cards.
+    /// Do not set <c>Step*Expanded = false</c> — PersistExpander saves that and Exit
+    /// leaves an empty column. A previous session may already have saved them collapsed;
+    /// Exit reopens them so the sidebar is not a stack of shut headers in blank scroll.
     /// </summary>
     public void ApplyPaintEditMode(bool editOpen)
     {
+        IsPaintEditOpen = editOpen;
         if (editOpen)
         {
-            StepModelExpanded = false;
-            StepSliceExpanded = false;
-            StepPatternExpanded = false;
-            StepToolpathExpanded = false;
             StepModificationsExpanded = true;
             StepCreateModificationExpanded = true;
         }
+        else if (!StepModelExpanded && !StepSliceExpanded
+                 && !StepPatternExpanded && !StepToolpathExpanded)
+        {
+            StepModelExpanded = true;
+            StepSliceExpanded = true;
+            StepPatternExpanded = true;
+            StepToolpathExpanded = true;
+        }
+
+        OnPaintEditLayoutReset?.Invoke();
     }
 
     private bool _globalSectionExpanded;

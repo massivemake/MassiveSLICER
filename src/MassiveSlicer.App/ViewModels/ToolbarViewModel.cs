@@ -112,6 +112,9 @@ public sealed class ToolbarViewModel : ViewModelBase
     /// <summary>Opens a file-picker dialog to import a KRL .src program.</summary>
     public ICommand ImportKrlCommand { get; }
 
+    /// <summary>Saves the active toolpath as a Blender OBJ polyline.</summary>
+    public ICommand ExportPolylineCommand { get; }
+
 /// <summary>Opens the application preferences dialog.</summary>
     public ICommand OpenPreferencesCommand { get; }
 
@@ -159,6 +162,7 @@ public sealed class ToolbarViewModel : ViewModelBase
         SaveWorkspaceCommand    = new RelayCommand(SaveWorkspace);
         SaveWorkspaceAsCommand  = new RelayCommand(SaveWorkspaceAs);
         ImportKrlCommand        = new RelayCommand(ImportKrl);
+        ExportPolylineCommand   = new RelayCommand(ExportPolyline);
 OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
         SetPrepareModeCommand   = new RelayCommand(() => ActiveMode = AppMode.Prepare);
         SetPreviewModeCommand   = new RelayCommand(() => ActiveMode = AppMode.Preview);
@@ -240,6 +244,9 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
     /// <summary>Raised when the user triggers Import KRL.</summary>
     public event EventHandler? ImportKrlRequested;
 
+    /// <summary>Raised when the user triggers Export Polyline (Blender OBJ).</summary>
+    public event EventHandler? ExportPolylineRequested;
+
     // ── Private handlers (wired up to real logic incrementally) ──────────────
 
     private void OpenModel() => ModelLoadRequested?.Invoke(this, EventArgs.Empty);
@@ -248,6 +255,7 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
     private void SaveWorkspace()   => SaveWorkspaceRequested?.Invoke(this, EventArgs.Empty);
     private void SaveWorkspaceAs() => SaveWorkspaceAsRequested?.Invoke(this, EventArgs.Empty);
     private void ImportKrl() => ImportKrlRequested?.Invoke(this, EventArgs.Empty);
+    private void ExportPolyline() => ExportPolylineRequested?.Invoke(this, EventArgs.Empty);
     private void Undo()      => _undoRedo?.Undo();
     private void Redo()      => _undoRedo?.Redo();
     private void OpenPreferences() => PreferencesRequested?.Invoke(this, EventArgs.Empty);

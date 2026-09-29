@@ -80,4 +80,55 @@ public sealed class DragClassifierTest
 
         Assert.False(DragClassifier.ChangedUpAxis(before, after));
     }
+
+    [Fact]
+    public void World_pose_unchanged_by_rotary_reparent_is_not_a_tilt()
+    {
+        // LFAM 3: user CAD hangs off the rotary pivot (baseAbc C ≈ -90°). Cell-swap /
+        // BASE #6 reparent rewrites LocalTransform so World = Local * Parent stays put.
+        // Comparing LOCALs looks like a 90° tilt and used to auto-slice on a plain move.
+        var rotary = Matrix4.CreateRotationX(MathHelper.DegreesToRadians(-90f))
+                     * Matrix4.CreateTranslation(2134.44f, -52.88f, 893.67f);
+        var localOnRotary = Matrix4.CreateTranslation(120f, -40f, 15f);
+        var worldBefore = localOnRotary * rotary;
+        var localOnHeated = worldBefore; // identity parent after BASE #6 rehome
+        var worldAfter = localOnHeated;
+
+        Assert.True(DragClassifier.ChangedUpAxis(localOnRotary, localOnHeated),
+            "locals diverge — callers must not pass these");
+        Assert.False(DragClassifier.ChangedUpAxis(worldBefore, worldAfter));
+    }
+
+    [Fact]
+    public void World_translation_under_rotary_parent_is_not_a_tilt()
+    {
+        var parent = Matrix4.CreateRotationX(MathHelper.DegreesToRadians(-90f))
+                     * Matrix4.CreateTranslation(2134.44f, -52.88f, 893.67f);
+        var local0 = Matrix4.CreateTranslation(10f, 20f, 30f);
+        var world0 = local0 * parent;
+        var world1 = Matrix4.CreateTranslation(400f, -200f, 0f) * world0;
+
+        Assert.False(DragClassifier.ChangedUpAxis(world0, world1));
+    }
+
+    [Fact]
+    public void Paused_realtime_never_reslices_on_release_even_if_tilted()
+    {
+        var before = Matrix4.Identity;
+        var after  = Matrix4.CreateRotationX(MathHelper.DegreesToRadians(90f));
+        Assert.True(DragClassifier.ChangedUpAxis(before, after));
+        Assert.False(DragClassifier.ShouldResliceOnRelease(
+            realtimePaused: true, before, after, scaled: false));
+        Assert.False(DragClassifier.ShouldResliceOnRelease(
+            realtimePaused: true, before, after, scaled: true));
+    }
+
+    [Fact]
+    public void Unpaused_move_does_not_reslice()
+    {
+        var before = Matrix4.CreateTranslation(10f, 20f, 30f);
+        var after  = Matrix4.CreateTranslation(400f, -100f, 30f);
+        Assert.False(DragClassifier.ShouldResliceOnRelease(
+            realtimePaused: false, before, after, scaled: false));
+    }
 }

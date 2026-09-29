@@ -14,6 +14,12 @@ namespace MassiveSlicer.Viewport.FK;
 /// </summary>
 public sealed class GltfNumericalIkSolver
 {
+    /// <summary>
+    /// Print 6D: reject a position hit whose rotation-vector error is still this
+    /// large (~15°+). Mill keeps the looser position-only accept.
+    /// </summary>
+    public const float PrintOrientErrMax = 0.25f;
+
     private readonly Matrix4[] _restPose;
     private Matrix4   _chainRoot;      // WorldTransform of joint_1's parent (exact scene FK base)
     private readonly Matrix4   _tcpLocal;       // TCP offset as a local transform in GLTF space
@@ -570,6 +576,18 @@ public sealed class GltfNumericalIkSolver
     }
 
     /// <summary>
+    /// Rotation-vector length between the live tool frame and
+    /// <paramref name="targetRot"/>. ~0 = matched; ~1 ≈ 90° off. Print planar
+    /// preview must not accept a 10 mm position hit that leaves this large
+    /// (HV hanging sideways from Heated Bed Home).
+    /// </summary>
+    public float OrientationError(float[] krl, (Vector3 r0, Vector3 r1, Vector3 r2) targetRot)
+    {
+        var (_, c0, c1, c2) = ComputeTcpAndRot(krl);
+        return RotErr(targetRot.r0, targetRot.r1, targetRot.r2, c0, c1, c2).Length;
+    }
+
+    /// <summary>
     /// Position + orientation constrained IK. Solves for a TCP target in ROBROOT
     /// frame (mm) while holding the <b>tool</b> orientation (T12 ABC when set,
     /// otherwise flange) to <paramref name="targetRot"/>.
@@ -577,10 +595,15 @@ public sealed class GltfNumericalIkSolver
     /// space -- obtain it by calling <see cref="ComputeFlangeRotNorm"/> at the seed
     /// angles before solving.
     /// Returns 6 KRL angles or <c>null</c> if position convergence fails within 10 mm.
+    /// When <paramref name="requireOrientation"/> is set (print), also returns null
+    /// unless the tool frame is within <see cref="PrintOrientErrMax"/> of the target
+    /// — otherwise a folded home already on the bead is accepted with the extruder
+    /// on its side.
     /// </summary>
     public float[]? Solve(Vector3 targetRobroot, float[] seed,
                           (Vector3 r0, Vector3 r1, Vector3 r2) targetRot,
-                          int maxIterations = 300)
+                          int maxIterations = 300,
+                          bool requireOrientation = false)
     {
         if (!IsWorkspaceReachable(targetRobroot)) return null;
 
@@ -619,7 +642,9 @@ public sealed class GltfNumericalIkSolver
             float err     = ePos.Length + OW * eRot.Length;
             float improve = bestErr - err;
             if (err < bestErr) bestErr = err;
-            if (improve >= StagnantMinMm)
+            if (requireOrientation && eRot.LengthSquared >= RotTol * RotTol)
+                stagnant = 0;
+            else if (improve >= StagnantMinMm)
                 stagnant = 0;
             else if (++stagnant >= StagnantMax)
                 break;
@@ -667,7 +692,11 @@ public sealed class GltfNumericalIkSolver
             }
         }
 
-        return (ComputeTcpPosScene(θ) - targetScene).Length <= 10f ? θ : null;
+        float posErr = (ComputeTcpPosScene(θ) - targetScene).Length;
+        if (posErr > 10f) return null;
+        if (requireOrientation && OrientationError(θ, targetRot) > PrintOrientErrMax)
+            return null;
+        return θ;
     }
 
     // -- Helpers ---------------------------------------------------------------

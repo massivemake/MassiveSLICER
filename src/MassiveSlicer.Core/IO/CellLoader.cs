@@ -82,57 +82,119 @@ public static class CellLoader
 
     /// <summary>
     /// Reads the named home positions and selected default from the cell JSON at
-    /// <paramref name="cellPath"/>.
+    /// <paramref name="cellPath"/>, then overlays <c>*.homes.json</c> if present.
+    /// User-saved homes live in the sidecar so a rebuild / PreserveNewest copy of
+    /// the cell JSON cannot wipe them.
     /// </summary>
     public static CellPositionData LoadPositionData(string cellPath)
     {
+        CellPositionData data;
         try
         {
             var cell = Load(cellPath);
-            return new CellPositionData
+            data = new CellPositionData
             {
                 Default   = cell.Robot.DefaultHomePosition,
                 Positions = [.. cell.Robot.HomePositions],
             };
         }
-        catch { return new CellPositionData(); }
+        catch { data = new CellPositionData(); }
+
+        MergeHomesSidecar(cellPath, data);
+        return data;
     }
 
     /// <summary>
-    /// Writes updated home positions and selected default back into the cell JSON at
-    /// <paramref name="cellPath"/>, preserving all other cell settings.
-    /// Also mirrors the default entry into <c>robot.homePosition</c> (A1–A6 fallback array).
+    /// Writes updated home positions and selected default. The sidecar is the
+    /// durable copy (survives cell-JSON overwrite). The cell JSON is updated
+    /// atomically when possible so <c>robot.homePosition</c> stays in sync.
     /// </summary>
     public static void SavePositionData(string cellPath, CellPositionData data)
     {
         try
         {
-            var cell = Load(cellPath);
-            float[]? primary = null;
-            if (!string.IsNullOrWhiteSpace(data.Default))
-            {
-                primary = data.Positions
-                    .FirstOrDefault(p => p.Name.Equals(data.Default, StringComparison.OrdinalIgnoreCase))
-                    ?.Angles;
-            }
-            primary ??= data.Positions.FirstOrDefault()?.Angles;
-            if (primary is not { Length: >= 6 })
-                primary = cell.Robot.HomePosition;
+            WriteHomesSidecar(cellPath, data);
+        }
+        catch (Exception ex)
+        {
+            System.Console.Error.WriteLine($"[cell] failed to write homes sidecar: {ex.Message}");
+        }
 
-            var updated = cell with
+        float[]? primary = null;
+        if (!string.IsNullOrWhiteSpace(data.Default))
+        {
+            primary = data.Positions
+                .FirstOrDefault(p => p.Name.Equals(data.Default, StringComparison.OrdinalIgnoreCase))
+                ?.Angles;
+        }
+        primary ??= data.Positions.FirstOrDefault()?.Angles;
+
+        if (!TryWrite(cellPath, cell =>
+        {
+            var fallback = primary is { Length: >= 6 }
+                ? primary
+                : cell.Robot.HomePosition;
+            return cell with
             {
                 Robot = cell.Robot with
                 {
                     HomePositions       = data.Positions,
                     DefaultHomePosition = data.Default,
-                    HomePosition        = primary.Length >= 6
-                        ? [primary[0], primary[1], primary[2], primary[3], primary[4], primary[5]]
+                    HomePosition        = fallback.Length >= 6
+                        ? [fallback[0], fallback[1], fallback[2], fallback[3], fallback[4], fallback[5]]
                         : cell.Robot.HomePosition,
                 },
             };
-            File.WriteAllText(cellPath, JsonSerializer.Serialize(updated, WriteOptions));
+        }, out var error))
+        {
+            System.Console.Error.WriteLine(
+                $"[cell] homes sidecar saved; cell JSON not updated: {error}");
         }
-        catch { /* non-fatal */ }
+    }
+
+    internal static string HomesSidecarPath(string cellPath)
+        => Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(cellPath)) ?? ".",
+            Path.GetFileNameWithoutExtension(cellPath) + ".homes.json");
+
+    static void WriteHomesSidecar(string cellPath, CellPositionData data)
+    {
+        var path = HomesSidecarPath(cellPath);
+        string json = JsonSerializer.Serialize(data, WriteOptions);
+        if (string.IsNullOrWhiteSpace(json))
+            throw new InvalidDataException($"Refusing to write empty homes sidecar: {path}");
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+        string temp = path + ".tmp";
+        File.WriteAllText(temp, json);
+        File.Move(temp, path, overwrite: true);
+    }
+
+    static void MergeHomesSidecar(string cellPath, CellPositionData data)
+    {
+        var path = HomesSidecarPath(cellPath);
+        if (!File.Exists(path)) return;
+        try
+        {
+            var json = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(json)) return;
+            var extra = JsonSerializer.Deserialize<CellPositionData>(json, Options);
+            if (extra is null) return;
+            foreach (var pos in extra.Positions)
+            {
+                int idx = data.Positions.FindIndex(p =>
+                    p.Name.Equals(pos.Name, StringComparison.OrdinalIgnoreCase));
+                if (idx >= 0) data.Positions[idx] = pos;
+                else data.Positions.Add(pos);
+            }
+            if (!string.IsNullOrWhiteSpace(extra.Default))
+                data.Default = extra.Default;
+        }
+        catch (Exception ex)
+        {
+            System.Console.Error.WriteLine($"[cell] homes sidecar ignored ({path}): {ex.Message}");
+        }
     }
 
     /// <summary>

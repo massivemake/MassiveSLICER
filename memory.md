@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-15** (Send-to-Drive v2 pointer for large jobs)
+Last updated: **2026-09-28** (2D edit sidebar + line/point select)
 
 ---
 
@@ -202,6 +202,10 @@ Start-Process -FilePath 'Z:\Research\LFAM\MassiveSLICER\src\MassiveSlicer.App\bi
 ---
 
 ## Completed features
+
+### T1 TCP outer hull in viewport (2026-09-17)
+
+VIEWPORT → VISIBILITY → **T1 TCP outer**. LFAM 3 Tool #1 HV kinematic envelope (`t1_hv_tcp_envelope.glb`, ROBROOT) at **5% ghost**. Default off. Visualization only — not collision / mill / IK. `viewset ShowT1TcpEnvelope true`. Three `lfam3.json` copies + tests copy. Do not treat as pad `$WORKSPACE`.
 
 ### SPSM / Mill sidebar (`feature/spsm`, 2026-07-31)
 
@@ -518,17 +522,163 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 ## Session changelog (reverse chronological)
 
-### 2026-09-28 — E1 rail smoothing (`feature/e1-rail-smoothing`, not on main)
-- Goal: when E1 motion is on, a layer that fits one carriage pose holds. A layer that does not gets one constant-speed glide (path length, not point index) to the next pose the arm needs. No 11-cell hops.
-- Not in the slice. Preview **Analysing…** and KRL export both call `PlanRailE1ForExport`, which now calls `RailE1Planner.PlanLayer`. Glide samples are checked for reach and `|A5| < 5°` before they are kept. Red/purple marks and the export warning are unchanged.
-- No new setting, no cell JSON, no `.mass` change. On `feature/e1-rail-smoothing`, not merged to main.
-- Key files: `RailE1Planner.cs`, `RailE1PlannerTest.cs`, `ViewportView.axaml.cs`.
+### 2026-09-29 — E1 rail smoothing (`feature/e1-rail-smoothing`, not on main)
+- Rail plan per layer: hold one E1 when it covers the layer; otherwise the shortest rail path through the band of passing E1 at each point (`RailE1Planner.PlanCorridor`), steps faster than the tool spread into ramps.
+- A pose passes only with a full IK solve (toolhead orientation, joint envelope, |A5| >= 5) and the elbow 10° from straight where the rail allows (`MinElbowBendDeg`).
+- KRL approach / layer-change gap / retreat hold the planned E1 instead of re-picking it (was up to 909 mm of rail inside the first bead).
+- Console: `reach-report` (elbow bend, |A5|, joint margins of the last validation). `[E1]` export line prints plan timing.
+- Key files: `RailE1Planner.cs`, `RailE1PlannerTest.cs`, `ViewportView.axaml.cs`, `KrlExporter.cs`, `GltfNumericalIkSolver.cs`.
+
+### 2026-09-28 — 2D edit: hide TCP helpers, pick still on the drawn line
+
+- TCP triad, axis labels, and timeline keyframe buttons hide while 2D slice edit is open. They come back when you leave 2D.
+- Pick uses the live toolpath layer ends (same window the 2D draw uses) and a wider screen radius. The Mac process that was running did not have the previous pick fix in its DLL.
+
+### 2026-09-28 — 2D edit: sidebar returns, lines and points select
+
+- Symptom: enter 2D slice (pencil, layers-triple on by default), Exit, right column gone. In 2D, clicks on lines and points select nothing.
+- Sidebar: `ApplyPaintEditMode` set `Step*Expanded = false` (PersistExpander saved it) and `$parent[Window]` visibility did not refresh. Expand-to-top also pinned the hidden MODIFICATIONS card, leaving Offset in blank space.
+- Pick: 2D skipped point sprites. A midpoint reject dropped clicks on the ends of a long top-down wall before the segment test. Ghost layers under the active line were drawn but not pickable.
+- Fix: hide workflow cards, do not collapse them; bind visibility on `RightPanelViewModel`; reset column scroll; draw points in 2D; pick the active layer plus the ghost band; skip the midpoint/ray reject in 2D.
+- Key files: `RightPanelViewModel.cs`, `RightPanelView.axaml`, `SidebarExpandScroll.cs`, `ViewportView.axaml.cs`, `SceneRenderer.cs`, `SlicePlanePick.cs`.
+
+### 2026-09-24 — Export Polyline (Blender OBJ)
+
+- Ask: import a KRL, export the whole path as a curve Blender opens.
+- Format: Wavefront OBJ line elements (`v` / `l`, no faces). Millimeters, Z up, drawn pose (LocalTransform × (point − origin), parent ignored). Travels included. A gap starts a new chain.
+- UI: File → Export Polyline (Blender)… and outliner right-click. Console: `export-polyline [path.obj]`.
+- Blender: File → Import → Wavefront. Scale 0.001 if the scene is meters. Object → Convert → Curve for a curve object.
+- Does not change KRL export or Drive Send. Not committed.
+- Key files: `PolylineObjExporter.cs`, `ViewportView.PolylineExport.cs`, `ToolbarView.axaml`.
+
+### 2026-09-17 — BASE 1 ↔ heated: path stayed put, came back tipped
+
+- Symptom: switch ROBOT CELL BASE # (rotary 1/2 vs HEATED-BED 6, or
+  LFAM 1 ↔ LFAM 3). Toolpath does not jump to the new plate. Switch
+  back: wrong orientation, off the bed.
+- Cause: SceneRenderer draws toolpaths with `LocalTransform * mvp`
+  (parent ignored). Rehome parented them under the rotary (`C≈-90`)
+  and baked `world * bed.Inv` into Local — first switch looks like
+  "didn't move"; the inverse rotation shows up on the way back.
+  Cell-swap also `OffsetInPlace`d vertices then reparented (compound).
+- Fix: never parent toolpaths under a bed. Slide `LocalTransform`
+  by print-surface centre delta (`ToolpathScenePose`), translation
+  only. CAD still reparents for E1. Cell-swap uses the same override,
+  no vertex mutate.
+- Tests: `ToolpathScenePoseTest`, `PrintSurfaceTest` rotary↔heated
+  round-trip. 36 passed with KRL outliner / drag classifier.
+- Restart Slicer. Path on BASE 1, switch to HEATED-BED (or LFAM 1) —
+  should sit on that plate, upright, and survive switching back.
+  Not committed.
+
+### 2026-09-17 — Toolpath vanished switching LFAM 3 → LFAM 1
+
+- Symptom: toolpath open on LFAM 3. Switch cell to LFAM 1. Gone from
+  scene and outliner. Needed on LFAM 1 print bed.
+- Cause: `SetRotaryBedGroup(null)` dropped the rotary outliner group
+  and every child (KRL import lives there when there is no mesh).
+  `SnapshotToolpathsForCellSwap` only walked *children of* user models,
+  so a standalone KRL path was never re-uploaded after
+  `ClearAllViewportToolpaths`.
+- Fix: park rotary children onto the root (or the new rotary group).
+  Snapshot standalone toolpaths; cell-swap now slides LocalTransform
+  (see entry above) rather than mutating vertices.
+- Tests: `KrlImportOutlinerTest` (promote / keep / enumerate).
+- Restart Slicer. Import/slice on LFAM 3, switch to LFAM 1 — path should
+  stay in the outliner and on the LFAM 1 plate. Not committed.
+
+### 2026-09-17 — KRL import labeled print SRC as mill
+
+- Symptom: T1 selected, Import KRL. Outliner treated the path as mill
+  (orange mill icon / mill IK) instead of print.
+- Cause: `KrlToolpathParser` mapped every `LIN` to `MoveKind.Mill`.
+  `OutlinerToolpathKinds.Infer` then labeled the whole import mill.
+  Print programs use LIN for extrusion; T1/T2/T3 temps were ignored.
+- Fix: `HasPrintTemperatures` / `Classify`. T1/T2/T3 (or `; Mode print`)
+  → print (`LIN` = Extrude). `; Mode mill` / spindle RPM stays mill.
+  Else selected TOOL # T1/T2/T3 = print, T11/T12 = mill.
+  `ImportKrlToolpath` passes that kind into the outliner.
+- Tests: `KrlToolpathParserTest`, `KrlImportOutlinerTest`,
+  `OutlinerToolpathKindTest` (23 passed with handling tests).
+- Restart Slicer. Import the print `.src` with T1 mounted — should say
+  print in the console and use the green print icon. Not committed.
+
+### 2026-09-16 — Toolhead Y/X/Z did not update the robot until scrub
+
+- Symptom: PRINT GLOBAL Toolhead X=−45 (Y=0, Z=0). Robot stayed put. Green
+  arrow: they expected the barrel to lean immediately. Had to drag the
+  scrubber before the pose changed.
+- Cause: `ScrubIk` replayed `_ikSolutionsByNode` from the last validation
+  (old ABC) and returned. Slider handler also required `IsToolpathSelected`
+  — Preview with the mesh selected (`IsScrubSessionActive`) never called
+  live IK. Scrubbing is the only other path that invokes `OnScrubIkRequested`.
+- Fix: `ReplayToolheadOrientation` drops the cache, live-solves on Preview
+  too, re-validates. `UseCachedScrubJoints` is false while dirty. Mill
+  sliders use the same helper.
+- Tests: `PathFollowIkTest` (`Cached_scrub_joints_are_skipped_when_toolhead_orientation_changed`).
+- Restart Slicer. Drag Y/X/Z — arm should lean without touching the
+  scrubber. Do not `save.sh` until they confirm.
+
+### 2026-09-16 — Planar preview: HV sideways on the curtain (Heated Bed Home)
+
+- Symptom: `Curtain_SineWave_topFalloff-_v2_LFAM3.mass`, SliceMethod Planar, Preview
+  layer 45/799. HV barrel pointing left, not straight up. Joints match Heated
+  Bed Home (A4≈−118, A5≈−18, A6≈187). BASE 6, Toolhead Y=−15.
+- Not the slice: 200k move normals are Zero (UnitZ fallback), PlaneNormal +Z.
+  KRL ABC would still be nozzle-down. Preview IK is the lie.
+- Cause: 6D `Solve` returns success if TCP is within 10 mm, **ignoring
+  remaining orientation**. Home is already on the bead, so DLS stagnates in 5
+  iters and keeps the folded wrist. Path-follow also kept position-only hits
+  for print (mill should).
+- Fix: print `requireOrientation` (no 10 mm-only accept, no stagnate while
+  the tool is still sideways). Print does **not** keep position-only.
+  Fallback wrists add A5 ±90. Mill unchanged. Live scrub retries the same
+  seeds. Toolhead Y=−15 is a real 15° lean — not the 90° hang.
+- Tests: `PathFollowIkTest` 8 passed (`DOTNET_ROLL_FORWARD=Major`).
+- Restart Slicer and scrub. Do not `save.sh` until they confirm the barrel
+  is up on planar Preview.
+
+### 2026-09-16 — Curtain IK seed: aimed print fallback when home DLS stagnates
+
+- Symptom: SB101 curtain `0914 - Curtain - Overhang Correction VC v1b`, T1 / BASE 6,
+  toolhead A 1 / B 1 / C −35. Banner `1,290,877–1,452,867 / 1,838,759 unreachable`
+  from Z 129 (on the plate) through 3325 mm. `FirstValidationIssueIndex = 0`.
+  Heated Bed Home TCP ~Z 2408. Same job was `All 1,640,090 reachable` on 2026-09-15.
+- Cause: path-follow keypoints start at named home. Folded Heated Bed Home
+  (`A1≈−59`, wrist −157/−38/174) is ~2.4 m from layer-1 beads at ROBROOT XY
+  ~(1586, 1677). DLS stagnates in 5 iters; `BuildWindowSeeds` keeps that seed
+  for every later window. LFAM 3 Start (`A1=0`) still misses A1 ≈ 46.6°.
+- Fix: print keypoints retry `PrintIkFallbackSeed` = A1 `atan2(Y,X)` +
+  `−90/90/0/0/15`, then A1+180. Mill paths unchanged. Named home still first.
+- Tests: `PathFollowIkTest` 5 passed (`DOTNET_ROLL_FORWARD=LatestMajor`).
+- Key files: `ToolpathFeasibilityEvaluator.cs`, `PathFollowIkTest.cs`.
+- Do not `save.sh` until shop confirms on a **Windows Release** restart
+  (`net8.0-windows`; Mac Release is `net8.0` only). SSH/WinRM to SB101 closed.
+
+### 2026-09-16 — Send to MassiveDRIVE 413 on the curtain job
+
+- Symptom: LFAM 3 Send of `0914 - Curtain - Overhang Correction VC v1b` failed.
+  Drive log `POST /api/jobs/package` HTTP 413. Existing job `f629d5ce77e2` is
+  1.84M segments / 1103 MB pretty JSON (Drive load limit 84 MB). Dashboard
+  hammered `GET .../path` 413 every ~3 s.
+- Cause: Slicer posted uncompressed JSON (`ExportDict` per-segment objects).
+  Flask `MAX_CONTENT_LENGTH` 100 MB. Drive `json.dumps(..., indent=2)` made
+  on-disk files ~3× larger. `json.loads` of 1 GB → 8–12 GB RSS / RSITimeout.
+- Fix: ≥20k moves Send a packed zip (`from.bin`/`to.bin` float32 + manifest),
+  gzip JSON for smaller jobs. Drive stores `.mdrive.zip`, mmaps via
+  `PackedSegments`, no `json.loads`. Path for oversized JSON returns 200
+  `too_large` (stops 413 loop). Upload is Jobs → Run (no auto-start).
+- Tests: `MassiveDriveJobExporterTest` 14 passed; Drive `test_job_pack.py`;
+  live POST zip `packtest12ab` 200.
+- Key files: `MassiveDriveJobExporter.cs`, `MassiveDriveClient.cs`,
+  `ViewportView.axaml.cs`; Drive `job_pack.py`, `job_package.py`, `web/app.py`.
+- Do not `save.sh` until shop confirms Send.
 
 ### 2026-09-15 — Send-to-Drive writes v2 job dir + pointer (not 1GB JSON)
 - Symptom: LFAM3 curtain Send was ~1GB v1 JSON over HTTP; Drive re-parsed for minutes.
 - Cause: `MassiveDriveJobExporter` + `POST /api/jobs/package` serialized every segment as pretty JSON.
-- Fix: large jobs write `massivedrive.job/v2` on the shared jobs disk (`manifest.json`, fixed-stride LE `segments.bin`, downsampled preview, summary) and POST `/api/jobs/package/pointer` (`job_id`, `name`, relative `root`, `sha256`). Small jobs (`<8000` segs / `<4MB`) keep v1 JSON. Prefs `MassiveDriveForceLegacyJson` is the escape hatch. UNC/share write failure stages locally and errors clearly (Samba user `massive`). `frames.tool` / `frames.base` (incl. heated BASE #6) unchanged.
-- Key files: `MassiveDriveJobExporter.cs`, `MassiveDriveSegmentBinary.cs`, `MassiveDriveJobV2Writer.cs`, `MassiveDriveJobV2.cs`, `MassiveDriveClient.cs`, `ViewportView.axaml.cs`, `CellConfig.cs`, `AppPreferences.cs`, `docs/massivedrive-job-v2.md`, LFAM3 `lfam3.json` (`massiveDriveJobsRoot`).
+- Fix: large jobs write `massivedrive.job/v2` on the shared jobs disk and POST `/api/jobs/package/pointer`. Small jobs keep v1 JSON. Shipped in main build 647.
+- Key files: `MassiveDriveJobExporter.cs`, `MassiveDriveJobV2Writer.cs`, `MassiveDriveClient.cs`, `docs/massivedrive-job-v2.md`.
 
 ### 2026-09-15 — Stale robot-validation banner after a later clean pass
 

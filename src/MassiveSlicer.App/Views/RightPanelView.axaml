@@ -158,7 +158,8 @@
 
             <!-- ADDITIVE tab -->
             <Grid Grid.Row="1" IsVisible="{Binding IsAdditiveTab}">
-                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                <ScrollViewer x:Name="AdditiveTabScroller"
+                              VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
                 <StackPanel Margin="0,0,0,8">
 
@@ -168,7 +169,7 @@
                             HorizontalContentAlignment="Stretch"
                             Padding="10,10"
                             Margin="0,0,0,6"
-                            IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                            IsVisible="{Binding IsPaintEditOpen}"
                             Command="{Binding $parent[Window].DataContext.Viewport.ExitPaintEditCommand}"
                             ToolTip.Tip="Leave toolpath edit mode and resume the normal workflow cards">
                         <StackPanel Orientation="Horizontal" Spacing="8">
@@ -183,7 +184,7 @@
                     </Button>
 
                     <Expander Classes="StepCard"
-                              IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsVisible="{Binding IsPaintEditOpen}"
                               IsExpanded="{Binding StepModificationsExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
@@ -596,7 +597,7 @@
                          StackPanel (badge + text), not a plain string, so the attached behavior's generic
                          Header-based keying can't apply — see PersistExpander.KeyFor(). -->
                     <Expander Classes="StepCard"
-                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsVisible="{Binding ShowWorkflowCards}"
                               IsExpanded="{Binding StepModelExpanded, Mode=TwoWay}"
                               behaviors:PersistExpander.Key="Model">
                         <Expander.Header>
@@ -1059,7 +1060,7 @@
 
                     <!-- 2 SLICE -->
                     <Expander Classes="StepCard"
-                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsVisible="{Binding ShowWorkflowCards}"
                               IsExpanded="{Binding StepSliceExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
@@ -1739,7 +1740,7 @@
 
                     <!-- 3 PATTERN AND TEXTURE -->
                     <Expander Classes="StepCard"
-                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsVisible="{Binding ShowWorkflowCards}"
                               IsExpanded="{Binding StepPatternExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
@@ -2533,7 +2534,7 @@
 
                     <!-- 4 TOOLPATH -->
                     <Expander Classes="StepCard"
-                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsVisible="{Binding ShowWorkflowCards}"
                               IsExpanded="{Binding StepToolpathExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
@@ -3066,7 +3067,7 @@
 
                     <!-- Other workflows (tab bar was removed; steps are the panel home) -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4" Margin="0,10,0,4"
-                                IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}">
+                                IsVisible="{Binding ShowWorkflowCards}">
                         <TextBlock Text="Other workflows:" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
                         <Button Content="SCAN" FontSize="10" Padding="6,2" Background="Transparent"
                                 Foreground="{DynamicResource TextSecondary}" BorderThickness="0"

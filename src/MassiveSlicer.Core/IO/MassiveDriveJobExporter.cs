@@ -351,9 +351,9 @@ public static class MassiveDriveJobExporter
 
     static Vector3 ToBase(Vector3 stored, MassiveDriveExportSettings s)
     {
-        var world = stored;
-        if (!(s.NodeWorldTransform.IsIdentity && s.NodeOrigin == default))
-            world = Vector3.Transform(stored - s.NodeOrigin, s.NodeWorldTransform);
+        // Same as KRL / viewport: (stored − origin) × node world. Do not skip when
+        // WT is identity — origin still recentres a far slice onto the node.
+        var world = Vector3.Transform(stored - s.NodeOrigin, s.NodeWorldTransform);
         return KrlExporter.WorldToBase(world, s.RobrootWorldPos, s.BaseDataOffset, s.SliceBedWorldZ);
     }
 

@@ -356,7 +356,13 @@ public sealed class AppPreferences
     public double PatternAmplitude { get; set; }
     public double PatternFrequency { get; set; } = 15.0;
 
-    /// <summary>Sine only: whole sine cycles per layer, alternating phase. 0 = off.</summary>
+    /// <summary>
+    /// Sine only: whole sine cycles per layer, alternating phase. 0 = off.
+    /// Must always be written to .mass JSON: SaveOptions use WhenWritingDefault,
+    /// and default(double) is 0 — so an omitted field looks like "Sine + wavelength"
+    /// after LFAM2→LFAM3 cell switch (Curtain_SineWave 180 vanished).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public double PatternSineCyclesPerLayer { get; set; }
     public double PatternTwist { get; set; }
     public double PatternOffset { get; set; }

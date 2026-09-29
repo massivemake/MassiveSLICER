@@ -190,6 +190,10 @@
       0.093820065
     ]
   },
+  "t1TcpEnvelope": {
+    "name": "T1 HV TCP outer",
+    "modelPath": "assets/cells/LFAM3/t1_hv_tcp_envelope.glb"
+  },
   "tools": [
     {
       "name": "HV Extruder",

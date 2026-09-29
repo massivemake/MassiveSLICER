@@ -258,6 +258,11 @@ public partial class MainWindow : Window
             vm.ImportKrlToolpath(path);
         };
 
+        vm.Toolbar.ExportPolylineRequested += async (_, _) =>
+        {
+            await Viewport.ExportPolylineAsync();
+        };
+
         if (App.StartupWorkspacePath is { } startupWorkspace)
             vm.OpenWorkspace(startupWorkspace);
     }

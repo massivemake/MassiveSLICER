@@ -38,6 +38,12 @@ public sealed record CellConfig
     /// </summary>
     public HeatedBedCellConfig? HeatedBed { get; init; }
 
+    /// <summary>
+    /// Tool #1 HV TCP kinematic outer (visualization only, ROBROOT mm).
+    /// VIEWPORT checkbox; 5% ghost. Not a collision / mill / IK solid.
+    /// </summary>
+    public T1TcpEnvelopeCellConfig? T1TcpEnvelope { get; init; }
+
     /// <summary>Linear rail (LFAM 1 E1). Null = no rail translation in the viewport.</summary>
     public RobotRailCellConfig? RobotRail { get; init; }
 
@@ -542,6 +548,16 @@ public sealed record HeatedBedCellConfig
         robrootWorld.X + (BasePos.Length > 0 ? BasePos[0] : 0f),
         robrootWorld.Y + (BasePos.Length > 1 ? BasePos[1] : 0f),
         robrootWorld.Z + (BasePos.Length > 2 ? BasePos[2] : 0f));
+}
+
+/// <summary>
+/// Closed Tool #1 HV TCP envelope (Drive <c>02_T1_HV_TCP_outer</c>).
+/// Mesh is Y-up metres GLB; wrapper sits at ROBROOT. Visualization only.
+/// </summary>
+public sealed record T1TcpEnvelopeCellConfig
+{
+    public string Name { get; init; } = "T1 HV TCP outer";
+    public required string ModelPath { get; init; }
 }
 
 /// <summary>A named KUKA BASE_DATA entry exposed for dropdowns and KRL export.</summary>

@@ -482,7 +482,7 @@ public sealed class SceneRenderer : IDisposable
                     showOrientationPreview: false,
                     scrubIndex: hi, scrubStart: lo,
                     eyeLocal: eyeLocal, lineOpacity: 1f,
-                    showAllPathPoints: false, showDepthLines: false,
+                    showAllPathPoints: ShowAllPathPoints, showDepthLines: false,
                     viewportW: _viewportWidthPx, viewportH: _viewportHeightPx,
                     dashPeriodPx: 0f, lineWidth: activeWidth);
             }
@@ -2389,7 +2389,9 @@ public sealed class SceneRenderer : IDisposable
             // Skip expensive env IBL on cell geometry; keep it for user-imported meshes.
             mesh.HasEnvMap        = hasEnv && n.Selectable && !arctic;
             mesh.ArcticMode       = arctic;
-            mesh.GhostOpacity     = BaseBedGhosting.IsGhosted(n) ? BaseBedGhosting.GhostOpacity : 1f;
+            mesh.GhostOpacity     = BaseBedGhosting.IsT1TcpEnvelope(n)
+                ? BaseBedGhosting.T1EnvelopeGhostOpacity
+                : BaseBedGhosting.IsGhosted(n) ? BaseBedGhosting.GhostOpacity : 1f;
             mesh.FloorZ           = BedZ;
             // Cell geometry stays on the cheap path for Standard + inspect modes
             // (debug channels / wireframe are meant to inspect imported meshes, not the robot).

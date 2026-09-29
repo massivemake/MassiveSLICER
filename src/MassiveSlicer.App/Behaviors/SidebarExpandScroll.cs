@@ -34,6 +34,10 @@ public static class SidebarExpandScroll
     static void OnExpandedChanged(Expander card, AvaloniaPropertyChangedEventArgs e)
     {
         if (!card.Classes.Contains("StepCard")) return;
+        // A hidden card (edit-mode MODIFICATIONS after Exit, or a workflow card
+        // hidden while 2D edit is open) must not pin. That scroll + pad is what
+        // makes the right column look gone.
+        if (!card.IsVisible) return;
         if (!UserScrollAllowed(card)) return;
 
         if (IsNowExpanded(e))
@@ -96,7 +100,7 @@ public static class SidebarExpandScroll
 
         void Tick()
         {
-            if (!card.IsExpanded)
+            if (!card.IsExpanded || !card.IsVisible)
             {
                 Finish();
                 return;
@@ -233,7 +237,7 @@ public static class SidebarExpandScroll
         double max = 0;
         foreach (var exp in sv.GetVisualDescendants().OfType<Expander>())
         {
-            if (!exp.Classes.Contains("StepCard") || !exp.IsExpanded) continue;
+            if (!exp.Classes.Contains("StepCard") || !exp.IsExpanded || !exp.IsVisible) continue;
             max = Math.Max(max, NeededPad(sv, exp));
         }
         return max;

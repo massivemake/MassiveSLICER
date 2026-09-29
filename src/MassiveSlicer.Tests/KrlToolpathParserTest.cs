@@ -84,4 +84,82 @@ public class KrlToolpathParserTest
         Assert.Equal(0, moves);
         Assert.Empty(tp.Layers);
     }
+
+    [Fact]
+    public void Print_temps_T1_T2_T3_make_LIN_extrude_not_mill()
+    {
+        const string krl = """
+            DEF PRINT()
+            ; Mode print
+            ; T1 220 C  T2 210 C  T3 200 C
+            T1 = 220
+            T2 = 210
+            T3 = 200
+            PTP {X 0.0, Y 0.0, Z 100.0, A 0, B 0, C 0}
+            LIN {X 50.0, Y 0.0, Z 100.0, A 0, B 0, C 0}
+            END
+            """;
+        Assert.True(KrlToolpathParser.HasPrintTemperatures(krl));
+        Assert.Equal(KrlImportKind.Print, KrlToolpathParser.Classify(krl, selectedKrlTool: 12));
+        var tp = KrlToolpathParser.Parse(krl, Vector3.Zero, out int moves);
+        Assert.Equal(1, moves);
+        Assert.Equal(MoveKind.Extrude, tp.Layers[0].Moves[0].Kind);
+    }
+
+    [Fact]
+    public void Anout_T1_comment_is_print()
+    {
+        const string krl = """
+            DEF PRINT()
+            $ANOUT[1] = 0.2272 ; T1 = 220C
+            PTP {X 0.0, Y 0.0, Z 10.0}
+            LIN {X 10.0, Y 0.0, Z 10.0}
+            END
+            """;
+        Assert.True(KrlToolpathParser.HasPrintTemperatures(krl));
+        Assert.Equal(KrlImportKind.Print, KrlToolpathParser.Classify(krl));
+    }
+
+    [Fact]
+    public void Selected_T1_without_temps_is_print()
+    {
+        const string krl = """
+            DEF FOO()
+            PTP {X 0.0, Y 0.0, Z 10.0}
+            LIN {X 10.0, Y 0.0, Z 10.0}
+            END
+            """;
+        Assert.False(KrlToolpathParser.HasPrintTemperatures(krl));
+        Assert.Equal(KrlImportKind.Print, KrlToolpathParser.Classify(krl, selectedKrlTool: 1));
+        var tp = KrlToolpathParser.Parse(krl, Vector3.Zero, out _, KrlImportKind.Print);
+        Assert.Equal(MoveKind.Extrude, tp.Layers[0].Moves[0].Kind);
+    }
+
+    [Fact]
+    public void Mill_mode_comment_stays_mill_even_with_T1_selected()
+    {
+        const string krl = """
+            DEF MILL()
+            ; Mode mill
+            ; Spindle RPM 8000
+            PTP {X 0.0, Y 0.0, Z 10.0}
+            LIN {X 10.0, Y 0.0, Z 10.0}
+            END
+            """;
+        Assert.Equal(KrlImportKind.Mill, KrlToolpathParser.Classify(krl, selectedKrlTool: 1));
+        var tp = KrlToolpathParser.Parse(krl, Vector3.Zero, out _);
+        Assert.Equal(MoveKind.Mill, tp.Layers[0].Moves[0].Kind);
+    }
+
+    [Fact]
+    public void Selected_T12_without_temps_is_mill()
+    {
+        const string krl = """
+            DEF FOO()
+            PTP {X 0.0, Y 0.0, Z 10.0}
+            LIN {X 10.0, Y 0.0, Z 10.0}
+            END
+            """;
+        Assert.Equal(KrlImportKind.Mill, KrlToolpathParser.Classify(krl, selectedKrlTool: 12));
+    }
 }

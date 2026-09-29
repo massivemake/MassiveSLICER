@@ -2742,17 +2742,29 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public void UpdateFromCell(CellConfig cell, string? defaultPositionName,
                                IReadOnlyList<HomePositionConfig>? userPositions = null)
     {
+        List<(string Name, float[] Angles)> incoming;
         if (userPositions is { Count: > 0 })
         {
-            _homePositions = userPositions.Select(p => (p.Name, p.Angles)).ToList();
+            incoming = userPositions.Select(p => (p.Name, p.Angles)).ToList();
         }
         else
         {
             var positions = cell.Robot.HomePositions;
-            _homePositions = positions.Count > 0
+            incoming = positions.Count > 0
                 ? positions.Select(p => (p.Name, p.Angles)).ToList()
                 : [("Default", cell.Robot.HomePosition)];
         }
+
+        // Cell swap reloads from disk. Keep names the user just saved that the
+        // cell JSON / sidecar has not picked up yet (or that a rebuild wiped).
+        foreach (var existing in _homePositions)
+        {
+            if (existing.Name == "Default" && incoming.Count > 0) continue;
+            if (incoming.All(p => p.Name != existing.Name))
+                incoming.Add(existing);
+        }
+
+        _homePositions = incoming;
 
         AvailableHomePositionNames = _homePositions.Select(p => p.Name).ToArray();
 

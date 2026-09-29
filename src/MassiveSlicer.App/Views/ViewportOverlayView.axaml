@@ -1670,12 +1670,13 @@
                                   VerticalAlignment="Center"
                                   ToolTip.Tip="Playback speed"/>
                         <Button Classes="ToolbarButton" Padding="6,4"
+                                IsVisible="{Binding ShowTcpHelpers}"
                                 Command="{Binding AddTcpKeyframeCommand}"
                                 ToolTip.Tip="Add a TCP keyframe at this moment — drag the TCP first (or click to pin the nominal position). The offset eases in/out over nearby moves.">
                             <ia:Icon Value="mdi-key-plus" FontSize="15"/>
                         </Button>
                         <Button Classes="ToolbarButton" Padding="6,4"
-                                IsVisible="{Binding HasTcpKeyframes}"
+                                IsVisible="{Binding ShowClearTcpKeyframes}"
                                 Command="{Binding ClearTcpKeyframesCommand}"
                                 ToolTip.Tip="Clear all TCP keyframes and restore the original toolpath">
                             <ia:Icon Value="mdi-key-remove" FontSize="15"/>

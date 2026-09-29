@@ -258,6 +258,13 @@ public static class GltfLoader
     private static MeshData? ExtractPrimitive(MeshPrimitive prim, string name,
                                               Dictionary<int, TextureData> textureCache)
     {
+        // LINE_STRIP / LINES / POINTS are not triangle meshes. lfam3_HeatedBed.glb
+        // prim 0 is a 5-vert plate outline (mode LINE_STRIP, no indices). Uploading
+        // it as triangles drew one diagonal tent across the heated bed in Preview.
+        // Drive's Three.js keeps that prim as lines, so the same GLB looks fine there.
+        if (prim.DrawPrimitiveType != SharpGLTF.Schema2.PrimitiveType.TRIANGLES)
+            return null;
+
         var posAccessor = prim.GetVertexAccessor("POSITION");
         if (posAccessor is null) return null;
 

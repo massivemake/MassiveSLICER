@@ -284,6 +284,15 @@ public sealed partial class ViewportViewModel : ViewModelBase
         set { if (SetField(ref _showTcpFrame, value)) NotifyRenderNeeded(); }
     }
 
+    private bool _showT1TcpEnvelope;
+
+    /// <summary>Tool #1 HV TCP kinematic outer hull (5% ghost). LFAM 3 only.</summary>
+    public bool ShowT1TcpEnvelope
+    {
+        get => _showT1TcpEnvelope;
+        set { if (SetField(ref _showT1TcpEnvelope, value)) NotifyRenderNeeded(); }
+    }
+
     private bool _showContactShadows = true;
 
     /// <summary>Soft ground-contact shadows beneath robot, rail, and print bed.</summary>
@@ -718,6 +727,24 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// at startup so the viewport render loop can read joint angles for FK.
     /// </summary>
     public RobotPanelViewModel? Robot { get; set; }
+
+    /// <summary>
+    /// Cell-swap analog: LFAM 1/2 rectangular plate → LFAM 3 heated BASE index.
+    /// Consumed once by <see cref="MainWindowViewModel"/> after the swap.
+    /// </summary>
+    internal int? PendingAnalogHeatedBase { get; set; }
+
+    internal int? TakePendingAnalogHeatedBase()
+    {
+        var v = PendingAnalogHeatedBase;
+        PendingAnalogHeatedBase = null;
+        return v;
+    }
+
+    /// <summary>True when the live KRL BASE is the lower heated plate (LFAM 3 BASE #6).</summary>
+    internal bool ActivePrintSurfaceIsHeated =>
+        ActiveCell is { } cell
+        && PrintSurface.IsHeatedBase(cell, Robot?.KrlBaseIndex ?? 0);
 
     /// <summary>
     /// The active cell configuration. Set at startup after loading the cell JSON.
@@ -1919,6 +1946,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 IsSlicePlaneViewerActive = true;
             }
             RealtimeSlicingPaused = value;   // collapse → deferred re-slice fires
+            OnPropertyChanged(nameof(ShowTcpHelpers));
+            OnPropertyChanged(nameof(ShowClearTcpKeyframes));
             // Edit mode borrows the Toolpath view's display profile (dark,
             // line-oriented); leaving restores the active view's own profile.
             ApplyViewDisplayProfile();
@@ -1962,11 +1991,19 @@ public sealed partial class ViewportViewModel : ViewModelBase
             if (value && !IsPaintEditOpen) value = false;
             if (!SetField(ref _isSlicePlaneViewerActive, value)) return;
             OnPropertyChanged(nameof(ShowSlicePlaneStatsOverlay));
+            OnPropertyChanged(nameof(ShowTcpHelpers));
+            OnPropertyChanged(nameof(ShowClearTcpKeyframes));
             RefreshSlicePlaneStats();
             OnSlicePlaneViewerChanged?.Invoke(value);
             NotifyRenderNeeded();
         }
     }
+
+    /// <summary>TCP triad, axis labels, and keyframe buttons. Hidden in 2D slice edit.</summary>
+    public bool ShowTcpHelpers => !(IsSlicePlaneViewerActive && IsPaintEditOpen);
+
+    /// <summary>Clear-keyframes button: only when helpers are shown and keys exist.</summary>
+    public bool ShowClearTcpKeyframes => ShowTcpHelpers && HasTcpKeyframes;
 
     /// <summary>Camera lock / restore when the 2D slice plane viewer toggles.</summary>
     internal Action<bool>? OnSlicePlaneViewerChanged { get; set; }
@@ -3914,7 +3951,11 @@ public sealed partial class ViewportViewModel : ViewModelBase
     public bool HasTcpKeyframes
     {
         get => _hasTcpKeyframes;
-        internal set => SetField(ref _hasTcpKeyframes, value);
+        internal set
+        {
+            if (!SetField(ref _hasTcpKeyframes, value)) return;
+            OnPropertyChanged(nameof(ShowClearTcpKeyframes));
+        }
     }
 
     private double _keyframeSmoothing = 150;
@@ -6498,12 +6539,52 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal void SetRotaryBedGroup(SceneNode? pivot, string displayName)
     {
         _rotaryPivotForScans = pivot;
-        if (_rotaryGroupItem is not null) { OutlinerItems.Remove(_rotaryGroupItem); _rotaryGroupItem = null; }
-        if (pivot is null) return;
+        // Keep user CAD / imported KRL / scans. Dropping the group used to delete them
+        // from the outliner on LFAM 3 → LFAM 1 (no rotary on the destination).
+        List<OutlinerItemViewModel> keep = [];
+        if (_rotaryGroupItem is not null)
+        {
+            keep.AddRange(_rotaryGroupItem.Children);
+            foreach (var c in keep)
+                _rotaryGroupItem.RemoveChild(c);
+            OutlinerItems.Remove(_rotaryGroupItem);
+            _rotaryGroupItem = null;
+        }
+        if (pivot is null)
+        {
+            foreach (var c in keep)
+                OutlinerItems.Add(c);
+            return;
+        }
         // The group itself isn't deletable; visibility toggling falls through to the pivot node.
         _rotaryGroupItem = new OutlinerItemViewModel(pivot, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false);
         _rotaryGroupItem.IsLocked = true;
         OutlinerItems.Add(_rotaryGroupItem);
+        foreach (var c in keep)
+            _rotaryGroupItem.AddChild(c);
+    }
+
+    /// <summary>
+    /// User CAD rides the rotary outliner group only on a rotary BASE. Heated BASE keeps
+    /// rows at the root so E1 does not own the part. Scans stay under the rotary group.
+    /// </summary>
+    internal void RehomeOutlinerForActiveBed(bool heated)
+    {
+        if (_rotaryGroupItem is null) return;
+        foreach (var item in EnumerateUserModelItems().ToList())
+        {
+            bool underRotary = _rotaryGroupItem.Children.Contains(item);
+            if (heated && underRotary)
+            {
+                _rotaryGroupItem.RemoveChild(item);
+                OutlinerItems.Add(item);
+            }
+            else if (!heated && !underRotary)
+            {
+                OutlinerItems.Remove(item);
+                _rotaryGroupItem.AddChild(item);
+            }
+        }
     }
 
     /// <summary>LFAM 3 multi-tool rows under a top-level "Toolheads" group (exclusive visibility on click).</summary>
@@ -6931,7 +7012,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     private void EnqueueRotarySceneNode(SceneNode node)
     {
-        if (_rotaryPivotForScans is null)
+        // Heated BASE: scene-root / heated parent (PendingNodes), not the E1 pivot.
+        if (_rotaryPivotForScans is null || ActivePrintSurfaceIsHeated)
             PendingNodes.Enqueue(node);
         else
             PendingRotaryNodes.Enqueue(node);
@@ -6997,7 +7079,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
     {
         EnqueueRotarySceneNode(node);
 
-        if (_rotaryPivotForScans is null || _rotaryGroupItem is null)
+        if (_rotaryPivotForScans is null || _rotaryGroupItem is null || ActivePrintSurfaceIsHeated)
         {
             var rootItem = RegisterOutlinerItem(node);
             AdoptToolpaths(adoptToolpathsFrom, rootItem);
@@ -7101,6 +7183,24 @@ public sealed partial class ViewportViewModel : ViewModelBase
             }
             if (!OutlinerModelOps.IsScanItem(item))
                 yield return item;
+        }
+    }
+
+    /// <summary>
+    /// Toolpath outliner rows for cell-swap: children of a mesh, or a standalone
+    /// KRL import nested directly under the rotary group (no parent mesh).
+    /// </summary>
+    internal IEnumerable<OutlinerItemViewModel> EnumerateToolpathItems()
+    {
+        foreach (var model in EnumerateUserModelItems())
+        {
+            if (model.IsToolpath)
+                yield return model;
+            foreach (var child in model.Children)
+            {
+                if (child.IsToolpath)
+                    yield return child;
+            }
         }
     }
 
@@ -7348,11 +7448,12 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// Adds an imported KRL toolpath as a scrubbable outliner node under the active print object
     /// or rotary-bed group (same nesting as slice-generated toolpaths). Must be called on the UI thread.
     /// </summary>
-    public void AddImportedToolpath(MassiveSlicer.Core.Models.Toolpath tp, string name, float beadWidth = 6f)
+    public void AddImportedToolpath(MassiveSlicer.Core.Models.Toolpath tp, string name, float beadWidth = 6f,
+        OutlinerToolpathKind? kind = null)
     {
         var node = new SceneNode { Name = name, Selectable = true };
         RegisterToolpathInOutliner(node, ResolveToolpathParentOutlinerItem(),
-            OutlinerToolpathKinds.Infer(name, tp));
+            kind ?? OutlinerToolpathKinds.Infer(name, tp));
         PendingToolpath.Enqueue(new PendingToolpathEntry
         {
             Toolpath      = tp,
@@ -7565,6 +7666,62 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 return nested;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Like <see cref="FindToolpathChild"/> but skips paths frozen after a cell swap
+    /// so Slice / realtime fork a sibling instead of replacing the kept geometry.
+    /// </summary>
+    internal static OutlinerItemViewModel? FindUpdatableToolpathChild(
+        OutlinerItemViewModel parent, OutlinerToolpathKind kind)
+    {
+        foreach (var child in parent.Children)
+        {
+            if (child.IsToolpath && child.ToolpathKind == kind && !child.KeepOnReslice)
+                return child;
+            var nested = FindUpdatableToolpathChild(child, kind);
+            if (nested is not null)
+                return nested;
+        }
+        return null;
+    }
+
+    /// <summary>Freeze every toolpath under <paramref name="parent"/> against overwrite.</summary>
+    internal static void KeepExistingToolpathsOnReslice(OutlinerItemViewModel parent)
+    {
+        foreach (var child in parent.Children)
+        {
+            if (child.IsToolpath)
+                child.KeepOnReslice = true;
+            KeepExistingToolpathsOnReslice(child);
+        }
+    }
+
+    /// <summary>
+    /// Next free name when a kept toolpath already owns <paramref name="baseName"/>
+    /// ("Scene 8 P04" → "Scene 8 P04 2").
+    /// </summary>
+    internal static string UniqueSiblingToolpathName(OutlinerItemViewModel parent, string baseName)
+    {
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        CollectToolpathNames(parent, used);
+        if (!used.Contains(baseName)) return baseName;
+        for (int n = 2; n < 1000; n++)
+        {
+            var candidate = $"{baseName} {n}";
+            if (!used.Contains(candidate)) return candidate;
+        }
+        return $"{baseName} new";
+    }
+
+    static void CollectToolpathNames(OutlinerItemViewModel parent, HashSet<string> used)
+    {
+        foreach (var child in parent.Children)
+        {
+            if (child.IsToolpath)
+                used.Add(child.Name);
+            CollectToolpathNames(child, used);
+        }
     }
 
     /// <summary>

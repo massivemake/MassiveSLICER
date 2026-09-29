@@ -61,6 +61,36 @@ public sealed class OutlinerToolpathKindTest
     }
 
     [Fact]
+    public void Cell_swap_keeps_existing_toolpath_and_forks_a_new_one()
+    {
+        var vm = new ViewportViewModel();
+        var import = new SceneNode { Name = "Scene 8 P04", PendingMesh = BoxMesh() };
+        vm.AddImportNode(import);
+        var importItem = vm.EnumerateUserModelItems().Single();
+        vm.RegisterToolpathInOutliner(new SceneNode { Name = "Scene 8 P04" }, importItem, OutlinerToolpathKind.Print);
+
+        ViewportViewModel.KeepExistingToolpathsOnReslice(importItem);
+
+        var kept = ViewportViewModel.FindToolpathChild(importItem, OutlinerToolpathKind.Print);
+        Assert.NotNull(kept);
+        Assert.True(kept!.KeepOnReslice);
+        Assert.Null(ViewportViewModel.FindUpdatableToolpathChild(importItem, OutlinerToolpathKind.Print));
+
+        vm.RegisterToolpathInOutliner(
+            new SceneNode { Name = ViewportViewModel.UniqueSiblingToolpathName(importItem, "Scene 8 P04") },
+            importItem,
+            OutlinerToolpathKind.Print);
+
+        Assert.Equal(2, importItem.Children.Count(c => c.IsPrintToolpath));
+        Assert.Equal("Scene 8 P04", kept.Name);
+        var next = ViewportViewModel.FindUpdatableToolpathChild(importItem, OutlinerToolpathKind.Print);
+        Assert.NotNull(next);
+        Assert.Equal("Scene 8 P04 2", next!.Name);
+        Assert.False(next.KeepOnReslice);
+        Assert.True(kept.KeepOnReslice);
+    }
+
+    [Fact]
     public void Infer_detects_mill_from_moves_and_name()
     {
         var millTp = new Toolpath();
@@ -74,6 +104,12 @@ public sealed class OutlinerToolpathKindTest
         Assert.Equal("Mill", OutlinerToolpathKinds.ToWorkspaceValue(OutlinerToolpathKind.Mill));
         Assert.Equal(OutlinerToolpathKind.Mill, OutlinerToolpathKinds.Parse("mill"));
         Assert.Equal(OutlinerToolpathKind.Print, OutlinerToolpathKinds.Parse(null));
+
+        var printTp = new Toolpath();
+        var printLayer = new ToolpathLayer(0, 1f);
+        printLayer.Moves.Add(new ToolpathMove(Vector3.Zero, new Vector3(1, 0, 0), MoveKind.Extrude));
+        printTp.Layers.Add(printLayer);
+        Assert.Equal(OutlinerToolpathKind.Print, OutlinerToolpathKinds.Infer("KRL: job", printTp));
     }
 
     private static MeshData BoxMesh()
