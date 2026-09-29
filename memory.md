@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-28** (shop WIP committed on main after sync to 652)
+Last updated: **2026-09-28** (2D edit sidebar + line/point select)
 
 ---
 
@@ -521,6 +521,14 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-09-28 — 2D edit: sidebar returns, lines and points select
+
+- Symptom: enter 2D slice (pencil, layers-triple on by default), Exit, right column gone. In 2D, clicks on lines and points select nothing.
+- Sidebar: `ApplyPaintEditMode` set `Step*Expanded = false` (PersistExpander saved it) and `$parent[Window]` visibility did not refresh. Expand-to-top also pinned the hidden MODIFICATIONS card, leaving Offset in blank space.
+- Pick: 2D skipped point sprites. A midpoint reject dropped clicks on the ends of a long top-down wall before the segment test. Ghost layers under the active line were drawn but not pickable.
+- Fix: hide workflow cards, do not collapse them; bind visibility on `RightPanelViewModel`; reset column scroll; draw points in 2D; pick the active layer plus the ghost band; skip the midpoint/ray reject in 2D.
+- Key files: `RightPanelViewModel.cs`, `RightPanelView.axaml`, `SidebarExpandScroll.cs`, `ViewportView.axaml.cs`, `SceneRenderer.cs`, `SlicePlanePick.cs`.
 
 ### 2026-09-24 — Export Polyline (Blender OBJ)
 

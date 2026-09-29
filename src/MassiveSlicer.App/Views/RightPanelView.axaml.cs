@@ -42,6 +42,23 @@ public partial class RightPanelView : UserControl
         if (DataContext is not RightPanelViewModel vm) return;
         vm.Subtractive.OpenBitLibraryRequested -= OnOpenBitLibraryRequested;
         vm.Subtractive.OpenBitLibraryRequested += OnOpenBitLibraryRequested;
+        vm.OnPaintEditLayoutReset = ResetPaintEditScroll;
+    }
+
+    /// <summary>
+    /// Edit open pins MODIFICATIONS and can leave Offset in the pad. Exit hides
+    /// that card; without a reset the workflow cards sit above the viewport.
+    /// </summary>
+    void ResetPaintEditScroll()
+    {
+        void Zero(ScrollViewer? sv)
+        {
+            if (sv is null) return;
+            sv.Offset = new Vector(sv.Offset.X, 0);
+        }
+
+        Zero(this.FindControl<ScrollViewer>("AdditiveTabScroller"));
+        Zero(this.FindAncestorOfType<ScrollViewer>());
     }
 
     async void OnOpenBitLibraryRequested(object? sender, EventArgs e)

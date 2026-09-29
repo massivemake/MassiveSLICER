@@ -482,7 +482,7 @@ public sealed class SceneRenderer : IDisposable
                     showOrientationPreview: false,
                     scrubIndex: hi, scrubStart: lo,
                     eyeLocal: eyeLocal, lineOpacity: 1f,
-                    showAllPathPoints: false, showDepthLines: false,
+                    showAllPathPoints: ShowAllPathPoints, showDepthLines: false,
                     viewportW: _viewportWidthPx, viewportH: _viewportHeightPx,
                     dashPeriodPx: 0f, lineWidth: activeWidth);
             }

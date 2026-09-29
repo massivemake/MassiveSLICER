@@ -1781,9 +1781,9 @@ public partial class ViewportView : UserControl
             if (slicePlane && _activeScrubNode is not null)
                 _renderer.ToolpathActiveScrubNode = _activeScrubNode;
             // Edit Point mode: every programmed vertex (corners + side points).
-            // Slice plane viewer is pure centre-line readout — skip dense points.
+            // 2D slice used to skip these, so Point select had nothing to click.
             _renderer.ShowAllPathPoints =
-                vm.IsPaintEditOpen && vm.PaintPointGranularityActive && !slicePlane;
+                vm.IsPaintEditOpen && vm.PaintPointGranularityActive;
             // Edit Path mode: depth-cued line width (near 2.5x) + far fade.
             // Top-down slice view uses flat line widths instead.
             _renderer.ShowDepthAwareLines =
@@ -10286,45 +10286,58 @@ public partial class ViewportView : UserControl
     /// Global move index at which the active scrub hides further geometry
     /// (moves with index ≥ this are not drawn and must not be pickable).
     /// <see cref="int.MaxValue"/> = no scrub limit.
-    /// In 2D slice view only the <em>active</em> layer is pickable — neighbours
-    /// (three below + dashed above) are drawn for context but not selectable.
+    /// In 2D slice view the pickable band is the active layer plus the ghost
+    /// layers drawn under it. The dashed layer above stays context-only.
     /// </summary>
     private int GetPaintScrubMoveLimit()
     {
         if (_vm is not { } vm) return int.MaxValue;
+        if (TrySlicePlanePickWindow(vm, out _, out int hi))
+            return hi;
         if (!(vm.IsToolpathSelected || vm.IsScrubSessionActive)) return int.MaxValue;
         if (vm.ToolpathScrubMax <= 0) return int.MaxValue;
         // ScrubCount uses cumulative[scrubIndex]: vertices for moves [0, scrubIndex).
         // Match that — at scrub S, move S and above are not yet printed.
-        int hi = Math.Clamp(vm.ToolpathScrubIndex, 0, vm.ToolpathScrubMax);
-
-        // 2D slice: exclusive end of the active layer only (no layer above).
-        if (vm.IsSlicePlaneViewerActive && vm.IsPaintEditOpen
-            && vm.ScrubLayerEnds is { Length: > 0 } ends)
-        {
-            int cur = Math.Clamp(vm.CurrentScrubLayerIndex, 0, ends.Length - 1);
-            hi = ends[cur];
-        }
-        return hi;
+        return Math.Clamp(vm.ToolpathScrubIndex, 0, vm.ToolpathScrubMax);
     }
 
     /// <summary>Lower bound of the pickable move window.
-    /// In 2D slice view this is the start of the active layer only — layers below
-    /// remain visible for context but are not hoverable/selectable.</summary>
+    /// In 2D slice view this is the start of the ghost band under the active layer.</summary>
     private int GetPaintScrubMoveStart()
     {
         if (_vm is not { } vm) return 0;
+        if (TrySlicePlanePickWindow(vm, out int start, out _))
+            return start;
         if (!(vm.IsToolpathSelected || vm.IsScrubSessionActive)) return 0;
+        return Math.Max(0, vm.ToolpathScrubLowIndex);
+    }
 
-        if (vm.IsSlicePlaneViewerActive && vm.IsPaintEditOpen
-            && vm.ScrubLayerEnds is { Length: > 0 } ends)
+    /// <summary>
+    /// Live 2D pick window. Uses the same layer ends the multipass draw builds
+    /// when the scrub ends array is missing, so a visible line is not excluded.
+    /// </summary>
+    private static bool TrySlicePlanePickWindow(ViewportViewModel vm, out int start, out int limit)
+    {
+        start = 0;
+        limit = 0;
+        if (!vm.IsSlicePlaneViewerActive || !vm.IsPaintEditOpen) return false;
+
+        int[]? ends = vm.ScrubLayerEnds;
+        if ((ends is null || ends.Length == 0) && vm.ActiveScrubToolpath is { Layers.Count: > 0 } tp)
         {
-            int cur = Math.Clamp(vm.CurrentScrubLayerIndex, 0, ends.Length - 1);
-            // Exclusive end of previous layer = start of current.
-            return cur <= 0 ? 0 : ends[cur - 1];
+            ends = new int[tp.Layers.Count];
+            int acc = 0;
+            for (int i = 0; i < tp.Layers.Count; i++)
+            {
+                acc += tp.Layers[i].Moves.Count;
+                ends[i] = acc;
+            }
         }
 
-        return Math.Max(0, vm.ToolpathScrubLowIndex);
+        if (ends is null || ends.Length == 0) return false;
+        (start, limit) = SlicePlanePick.Window(
+            vm.CurrentScrubLayerIndex, ends, vm.SlicePlaneGhostLayers);
+        return limit > start;
     }
 
     /// <summary>
@@ -12143,6 +12156,10 @@ public partial class ViewportView : UserControl
 
         // ONE matrix for the whole pick — ProjectToScreen used to rebuild this every move.
         var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+        // Top-down 2D: a layer wall often spans most of the viewport. The midpoint
+        // early-out then drops a click on the end of that line before the segment
+        // test runs. One layer is cheap enough to test fully.
+        bool sliceNav = vmPick is { IsSlicePlaneViewerActive: true, IsPaintEditOpen: true };
 
         // Tier 1 — TIGHT radius (the line under the cursor): the FRONT candidate
         // wins. Depth is bucketed to ~2 beads so pixel jitter along one line can't
@@ -12206,7 +12223,7 @@ public partial class ViewportView : UserControl
                         new Vector3(wMid.X, wMid.Y, wMid.Z), viewProj, vpW, vpH);
                     if (float.IsNaN(sM.X)) continue;
                     float midDx = sM.X - mx, midDy = sM.Y - my;
-                    if (midDx * midDx + midDy * midDy > midRejectPx2)
+                    if (!sliceNav && midDx * midDx + midDy * midDy > midRejectPx2)
                         continue;
 
                     // Near the cursor: full segment ends for accurate screen distance.
@@ -12224,9 +12241,9 @@ public partial class ViewportView : UserControl
                     if (screenD > pickPx) continue;
 
                     float dist3 = DistanceRayToSegment(rayO, rayD, wFrom, wTo, out float rayT);
-                    // Screen proximity already proved the click is on the line; only
-                    // reject when the ray clearly misses behind the camera or is absurdly far.
-                    if (rayT < 0f || dist3 > looseRayDist) continue;
+                    // Screen proximity already proved the click is on the line. In 2D
+                    // the ortho ray can still miss a long top-down segment; keep the hit.
+                    if (!sliceNav && (rayT < 0f || dist3 > looseRayDist)) continue;
 
                     int g = globalMove + i;
                     if (screenD <= tightPx)
@@ -12300,7 +12317,6 @@ public partial class ViewportView : UserControl
         // Single-click Path mode: local section. In 2D slice multiplanar paths have
         // larger 3D gaps / corners — use a looser expand so we get a real line, not
         // a one-bead "point" pick.
-        bool sliceNav = vmPick is { IsSlicePlaneViewerActive: true, IsPaintEditOpen: true };
         var section = sliceNav
             ? ExpandLocalSection(bestLayer, bestMove, beadMm, maxMoveInLayer,
                 maxMovesCap: 256, minMoveInclusive: minMoveInLayer,
