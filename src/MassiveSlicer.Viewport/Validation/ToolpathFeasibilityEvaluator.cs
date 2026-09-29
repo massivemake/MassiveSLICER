@@ -36,7 +36,9 @@ public static class ToolpathFeasibilityEvaluator
     /// <param name="Cache">Flat scrub cache (entry 0 = first From, then each To).</param>
     /// <param name="WorldTransform">Node world transform for toolpath → world mapping.</param>
     /// <param name="Origin">Toolpath origin subtracted before the world transform.</param>
-    /// <param name="SeedKrl">Six-axis KRL seed for the first IK solve of each chunk.</param>
+    /// <param name="SeedKrl">Six-axis KRL seed for the path-follow walk — named home,
+    /// not the live scrub pose. Parallel windows start from sequential keypoints along
+    /// the path so a folded-up sim pose cannot paint the bed unreachable.</param>
     /// <param name="E1Motion">Whether rail motion is planned (targets follow the carriage).</param>
     /// <param name="Rail">Rail geometry; required when <paramref name="E1Motion"/> is set.</param>
     /// <param name="HomeWorld">Robot home (ROBROOT) world position used for rail math.</param>
@@ -66,6 +68,102 @@ public static class ToolpathFeasibilityEvaluator
         float BeadWidthColl,
         TkVector3 Robroot,
         IReadOnlyList<JointConfig>? Joints = null);
+
+    /// <summary>
+    /// Sequential keypoint stride. Adjacent print moves are 1–6 mm; a 256-move jump is
+    /// still close enough for position-first DLS, and 1.8M-move paths stay parallel.
+    /// </summary>
+    public const int IkWindowStride = 256;
+
+    /// <summary>
+    /// Walks from <paramref name="homeSeed"/> along the path, solving only window starts.
+    /// Each window then parallel-fills from its own key instead of every chunk jumping
+    /// from the same pose (the scrub-at-end false-unreachable case).
+    /// </summary>
+    public static float[][] BuildWindowSeeds(
+        int total,
+        float[] homeSeed,
+        Func<int, float[], float[]?> solveAt,
+        int stride = IkWindowStride,
+        CancellationToken ct = default)
+    {
+        if (total <= 0) return [];
+        if (stride < 1) stride = 1;
+        int n = (total + stride - 1) / stride;
+        var keys = new float[n][];
+        var seed = (float[])homeSeed.Clone();
+        for (int k = 0; k < n; k++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var sol = solveAt(k * stride, seed);
+            if (sol is not null) seed = sol;
+            keys[k] = (float[])seed.Clone();
+        }
+        return keys;
+    }
+
+    /// <summary>
+    /// Stretched print seed with A1 facing ROBROOT XY. Named home (folded Heated
+    /// Bed Home, etc.) is too far for DLS to reach layer-1 beads; this is the retry.
+    /// </summary>
+    public static float[] PrintIkFallbackSeed(float robrootX, float robrootY)
+    {
+        float a1 = MathF.Atan2(robrootY, robrootX) * (180f / MathF.PI);
+        return [a1, -90f, 90f, 0f, 0f, 15f];
+    }
+
+    /// <summary>Aimed A1, opposite shoulder, then A5 ±90 (nozzle-down wrists).</summary>
+    public static float[][] PrintIkFallbackSeeds(float robrootX, float robrootY)
+    {
+        var aimed = PrintIkFallbackSeed(robrootX, robrootY);
+        float flip = aimed[0] + 180f;
+        if (flip > 180f) flip -= 360f;
+        else if (flip < -180f) flip += 360f;
+        var other = (float[])aimed.Clone();
+        other[0] = flip;
+        var a5p = (float[])aimed.Clone();
+        a5p[4] = 90f;
+        var a5n = (float[])aimed.Clone();
+        a5n[4] = -90f;
+        return [aimed, other, a5p, a5n];
+    }
+
+    /// <summary>
+    /// Cached scrub joints were solved at a previous Toolhead Y/X/Z.
+    /// Replaying them makes the sliders look dead until the operator scrubs.
+    /// </summary>
+    public static bool UseCachedScrubJoints(bool hasCache, bool toolheadOrientationDirty)
+        => hasCache && !toolheadOrientationDirty;
+
+    /// <summary>
+    /// Mill may keep a position-only hit. Print may not — that is the sideways
+    /// HV on a planar path when Heated Bed Home is already on the bead.
+    /// </summary>
+    public static float[]? PreferOrientedPrintSolution(
+        float[]? oriented, float[]? positionOnly, float orientErr, bool millPath)
+    {
+        if (millPath)
+            return oriented ?? positionOnly;
+        if (oriented is not null && orientErr <= GltfNumericalIkSolver.PrintOrientErrMax)
+            return oriented;
+        return null;
+    }
+
+    /// <summary>Try <paramref name="seed"/> first, then each fallback. Null only if all fail.</summary>
+    public static float[]? SolveWithPrintFallback(
+        float[] seed,
+        Func<float[], float[]?> solve,
+        IEnumerable<float[]> extras)
+    {
+        var first = solve(seed);
+        if (first is not null) return first;
+        foreach (var extra in extras)
+        {
+            var sol = solve(extra);
+            if (sol is not null) return sol;
+        }
+        return null;
+    }
 
     /// <summary>Per-move verdicts, all arrays indexed by flat move index.</summary>
     /// <param name="Reachable">False where IK failed to converge.</param>
@@ -172,34 +270,55 @@ public static class ToolpathFeasibilityEvaluator
 
         if (ct.IsCancellationRequested) return null;
 
-        // Chunked parallel IK: each chunk propagates solutions sequentially so each
-        // move seeds from its predecessor.  Adjacent toolpath moves are ~1–6 mm apart,
-        // so the previous solution typically converges in 2–5 iterations instead of
-        // 20–80 from the static home-position seed.
+        // Path-follow IK: sequential keypoints from named home, then parallel fill.
+        // Each window seeds from its predecessor on the path so a folded-up scrub pose
+        // cannot make layer 1 look unreachable. Position-first DLS, then 6D refine —
+        // 6D from a far seed stalls because orientation weight dominates.
         var result      = new bool[total];
         var ikSolutions = new float[]?[total]; // null = unreachable
-        int numChunks   = Math.Max(1, Math.Min(Environment.ProcessorCount, total));
-        int chunkSize   = (total + numChunks - 1) / numChunks;
+
+        float[]? SolveReach(TkVector3 target, float[] walkSeed,
+            (TkVector3 r0, TkVector3 r1, TkVector3 r2) rot, int maxIterations)
+        {
+            var pos = solver.Solve(target, walkSeed, maxIterations: maxIterations);
+            if (pos is null || (cellJoints is not null && !JointLimitEnvelope.JointsInside(pos, cellJoints)))
+                return null;
+            var sol = solver.Solve(target, pos, rot, maxIterations: maxIterations,
+                requireOrientation: !millPath);
+            if (sol is not null && (cellJoints is not null && !JointLimitEnvelope.JointsInside(sol, cellJoints)))
+                sol = null;
+            float orientErr = sol is not null ? solver.OrientationError(sol, rot) : float.MaxValue;
+            return PreferOrientedPrintSolution(sol, pos, orientErr, millPath);
+        }
 
         try
         {
-            Parallel.For(0, numChunks,
+            var windowSeeds = BuildWindowSeeds(
+                total, seed,
+                (i, s) => millPath
+                    ? SolveReach(targets[i], s, targetRots[i], 80)
+                    : SolveWithPrintFallback(
+                        s,
+                        w => SolveReach(targets[i], w, targetRots[i], 80),
+                        PrintIkFallbackSeeds(targets[i].X, targets[i].Y)),
+                IkWindowStride, ct);
+            int stride = IkWindowStride;
+
+            Parallel.For(0, windowSeeds.Length,
                 new ParallelOptions { CancellationToken = ct },
-                ci =>
+                wi =>
                 {
-                    int start     = ci * chunkSize;
-                    int end       = Math.Min(start + chunkSize, total);
-                    var chunkSeed = (float[])seed.Clone();
+                    int start     = wi * stride;
+                    int end       = Math.Min(start + stride, total);
+                    var chunkSeed = windowSeeds[wi];
 
                     for (int i = start; i < end; i++)
                     {
                         if (ct.IsCancellationRequested) return;
-                        var sol = solver.Solve(targets[i], chunkSeed, targetRots[i], maxIterations: 40);
-                        bool inEnv = sol is not null &&
-                            (cellJoints is null || JointLimitEnvelope.JointsInside(sol, cellJoints));
-                        result[i]      = inEnv;
-                        ikSolutions[i] = inEnv ? sol : null;
-                        if (inEnv) chunkSeed = sol!;
+                        var sol = SolveReach(targets[i], chunkSeed, targetRots[i], 40);
+                        result[i]      = sol is not null;
+                        ikSolutions[i] = sol;
+                        if (sol is not null) chunkSeed = sol;
                     }
                 });
         }

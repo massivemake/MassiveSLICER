@@ -69,6 +69,10 @@ internal static class CellEnvironmentBuilder
                     $"basePos=[{hb.BasePos[0]:F1}, {hb.BasePos[1]:F1}, {hb.BasePos[2]:F1}]  " +
                     $"baseAbc=[{hb.BaseAbc[0]:F3}, {hb.BaseAbc[1]:F3}, {hb.BaseAbc[2]:F3}]");
             }
+            else if (env.Name == BaseBedGhosting.T1TcpEnvelopeNodeName)
+            {
+                env.LocalTransform = Matrix4.CreateTranslation(rp.X, rp.Y, rp.Z);
+            }
         }
 
         if (payload.MultiTools is { } mt)
@@ -138,6 +142,9 @@ internal static class CellEnvironmentBuilder
 
         if (cell.HeatedBed is { } hb)
             TryAddHeatedBed(envNodes, hb, cell.Robot.WorldPosition);
+
+        if (!Lfam3MinimalProbeActive && cell.T1TcpEnvelope is { } t1)
+            TryAddT1TcpEnvelope(envNodes, t1, cell.Robot.WorldPosition);
 
         if (!Lfam3MinimalProbeActive)
         {
@@ -543,6 +550,48 @@ internal static class CellEnvironmentBuilder
         }
     }
 
+    private static void TryAddT1TcpEnvelope(List<SceneNode> envNodes, T1TcpEnvelopeCellConfig cfg, Float3 robroot)
+    {
+        if (!AssetPaths.Exists(cfg.ModelPath))
+        {
+            System.Console.Error.WriteLine($"[cell] missing T1 TCP envelope: {cfg.ModelPath}");
+            return;
+        }
+
+        try
+        {
+            var resolved = AssetPaths.Resolve(cfg.ModelPath);
+            var mesh     = LoadRotaryBedPart(resolved, "T1 TCP envelope");
+            TintT1EnvelopeMeshes(mesh);
+
+            var root = new SceneNode
+            {
+                Name               = BaseBedGhosting.T1TcpEnvelopeNodeName,
+                Selectable         = false,
+                Visible            = false,
+                PickIgnore         = true,
+                IsAuthoringOverlay = true,
+                LocalTransform     = Matrix4.CreateTranslation(robroot.X, robroot.Y, robroot.Z),
+            };
+            root.AddChild(mesh);
+            root.MarkEnvironmentSubtree();
+            foreach (var n in root.SelfAndDescendants())
+            {
+                n.PickIgnore         = true;
+                n.IsAuthoringOverlay = true;
+                n.Selectable         = false;
+                n.Visible            = false;
+            }
+            envNodes.Add(root);
+            System.Console.WriteLine(
+                $"[cell] T1 TCP envelope '{cfg.Name}' at ROBROOT ({robroot.X:F0}, {robroot.Y:F0}, {robroot.Z:F0})");
+        }
+        catch (Exception ex)
+        {
+            System.Console.Error.WriteLine($"[cell] T1 TCP envelope load failed: {ex.Message}");
+        }
+    }
+
     /// <summary>CONNECT seed metres → slicer Z-up world mm.</summary>
     private static Vector3 StandWorldPosition(float[] pos)
     {
@@ -629,6 +678,19 @@ internal static class CellEnvironmentBuilder
                 mesh.Positions, mesh.Normals, mesh.Indices, mesh.Name,
                 new Vector4(0.91f, 0.92f, 0.93f, 1f),
                 metallic: 0.25f, roughness: 0.6f);
+        }
+    }
+
+    /// <summary>Brand lime #71a72a — 5% ghost is applied in the viewport, not here.</summary>
+    private static void TintT1EnvelopeMeshes(SceneNode root)
+    {
+        var lime = new Vector4(0x71 / 255f, 0xa7 / 255f, 0x2a / 255f, 1f);
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (n.PendingMesh is not { } mesh) continue;
+            n.PendingMesh = new MeshData(
+                mesh.Positions, mesh.Normals, mesh.Indices, mesh.Name,
+                lime, metallic: 0.05f, roughness: 0.85f);
         }
     }
 }

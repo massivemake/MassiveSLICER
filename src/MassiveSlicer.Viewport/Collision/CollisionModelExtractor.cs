@@ -251,6 +251,12 @@ public static class CollisionModelExtractor
         foreach (var node in sceneRoot.SelfAndDescendants())
         {
             if (node.PickTier != PickTier.Environment) continue;
+            bool authoring = false;
+            for (var w = node; w is not null; w = w.Parent)
+            {
+                if (w.IsAuthoringOverlay) { authoring = true; break; }
+            }
+            if (authoring) continue;
             if (IsExcluded(node)) continue;
             var mesh = node.Mesh?.PickingData ?? node.PendingMesh;
             if (mesh is null || mesh.Positions.Length == 0) continue;

@@ -63,6 +63,9 @@ logs/
 # Accidental drop of the Hermes installer into this repo
 /install.sh
 
+# Live-verify screenshots if dumped in-tree (canonical dir is AppData)
+.agents/skills/verify-massiveslicer/evidence/
+
 # SMB delete leftovers (Synology / macOS smbfs)
 .smbdelete*
 

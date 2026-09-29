@@ -1336,6 +1336,14 @@
                                        IsChecked="{Binding DataContext.Viewport.ShowTcpFrame,
                                                    RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
                         </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="T1 TCP outer" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
+                            <CheckBox  Grid.Column="1" VerticalAlignment="Center"
+                                       IsChecked="{Binding DataContext.Viewport.ShowT1TcpEnvelope,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                       ToolTip.Tip="Tool #1 HV kinematic envelope, 5% ghost. Visualization only."/>
+                        </Grid>
 
                     </StackPanel>
         </StackPanel>

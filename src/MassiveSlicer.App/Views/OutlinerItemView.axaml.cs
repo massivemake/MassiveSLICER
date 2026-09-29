@@ -110,6 +110,13 @@ public partial class OutlinerItemView : UserControl
     private void OnExportScanMeshClick(object? sender, RoutedEventArgs e)
         => RequestScanExport(pointCloud: false);
 
+    private void OnExportPolylineClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not OutlinerItemViewModel item) return;
+        if (TopLevel.GetTopLevel(this) is not MainWindow win) return;
+        _ = win.Viewport.ExportPolylineAsync(item.Node);
+    }
+
     void RequestScanExport(bool pointCloud)
     {
         if (DataContext is not OutlinerItemViewModel item) return;
@@ -171,6 +178,9 @@ public partial class OutlinerItemView : UserControl
             && (mvm.Viewport.IsUserModelItem(modelRow)
                 || (mill && OutlinerModelOps.IsScanItem(modelRow)));
         CreateSequenceItem.IsVisible = mvm.Viewport.CanMergeToolpaths;
+        bool isToolpath = DataContext is OutlinerItemViewModel tpRow && tpRow.IsToolpath;
+        ExportPolylineItem.IsVisible = isToolpath;
+        ExportPolylineItem.IsEnabled = isToolpath;
 
         foreach (var child in RowContextMenu.Items)
         {

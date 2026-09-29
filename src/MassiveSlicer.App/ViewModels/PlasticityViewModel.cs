@@ -189,7 +189,7 @@ public sealed class PlasticityViewModel : ViewModelBase
             else
             {
                 node = new SceneNode { Name = mesh.Name, PendingMesh = mesh };
-                ImportHelper.PlaceOnBed(node, _viewport.ActiveCell);
+                ImportHelper.PlaceOnBed(node, _viewport.ActiveCell, _viewport.ActivePrintSurfaceIsHeated);
                 _viewport.AddImportNode(node);
                 _nodes[o.Id] = node;
             }

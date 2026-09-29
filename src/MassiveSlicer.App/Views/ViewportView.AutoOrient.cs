@@ -142,11 +142,7 @@ public partial class ViewportView
             var chainRootColl  = _fkController is { } fk
                 ? CollisionModelExtractor.ToNumericsMatrix(fk.LiveChainRootTransform())
                 : NMatrix.Identity;
-            var seed = new float[]
-            {
-                (float)robot.A1, (float)robot.A2, (float)robot.A3,
-                (float)robot.A4, (float)robot.A5, (float)robot.A6,
-            };
+            var seed = IkPathSeed(vm);
             var joints   = cell?.Robot.Joints is { Count: >= 6 } j ? j : null;
             bool e1Motion = add.E1MotionEnabled && cell?.RobotRail is not null;
             float homeE1  = (float)robot.E1;

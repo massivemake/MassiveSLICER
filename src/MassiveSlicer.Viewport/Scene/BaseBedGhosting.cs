@@ -9,6 +9,12 @@ public static class BaseBedGhosting
     /// <summary>Fill alpha for the inactive bed (rotary when BASE #6, heated otherwise).</summary>
     public const float GhostOpacity = 0.25f;
 
+    /// <summary>VIEWPORT T1 HV TCP outer hull when the checkbox is on.</summary>
+    public const float T1EnvelopeGhostOpacity = 0.05f;
+
+    /// <summary>Cell env node name for the Tool #1 kinematic envelope.</summary>
+    public const string T1TcpEnvelopeNodeName = "T1TcpEnvelope";
+
     /// <summary>
     /// Heated base → rotary ghosted, heated solid. Rotary base → heated ghosted, rotary solid.
     /// </summary>
@@ -42,6 +48,14 @@ public static class BaseBedGhosting
     {
         for (var cur = node; cur is not null; cur = cur.Parent)
             if (cur.Name == "HeatedBed") return true;
+        return false;
+    }
+
+    /// <summary>Tool #1 HV TCP outer hull (or a mesh under it).</summary>
+    public static bool IsT1TcpEnvelope(SceneNode node)
+    {
+        for (var cur = node; cur is not null; cur = cur.Parent)
+            if (cur.Name == T1TcpEnvelopeNodeName) return true;
         return false;
     }
 

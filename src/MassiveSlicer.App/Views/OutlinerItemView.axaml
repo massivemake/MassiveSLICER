@@ -36,6 +36,9 @@
                                   Click="OnMergePointCloudClick"/>
                         <MenuItem Header="Merge as Mesh"
                                   Click="OnMergeMeshClick"/>
+                        <MenuItem x:Name="ExportPolylineItem"
+                                  Header="Export as Polyline (Blender)..."
+                                  Click="OnExportPolylineClick"/>
                         <MenuItem x:Name="ExportPointCloudItem"
                                   Header="Export Point Cloud..."
                                   Click="OnExportPointCloudClick"/>

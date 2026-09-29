@@ -122,12 +122,15 @@ public static class MassiveDriveJobShare
 
     /// <summary>
     /// Create <c>{root}/{jobId}</c>. Prefer <paramref name="primaryRoot"/> (cell/prefs share).
-    /// If that write is denied or missing, fall back to staging and return a warning.
+    /// On macOS, a Windows UNC for the LFAM 3 jobs share is not a path, so the usual
+    /// mounts are tried before local staging. If every share write fails, fall back
+    /// to staging and return a warning.
     /// </summary>
     public static MassiveDriveShareResolveResult PrepareJobDirectory(
         string jobId,
         string? primaryRoot,
-        string? stagingRoot = null)
+        string? stagingRoot = null,
+        IReadOnlyList<string>? extraRoots = null)
     {
         if (string.IsNullOrWhiteSpace(jobId))
             throw new ArgumentException("job id is required", nameof(jobId));
@@ -137,21 +140,21 @@ public static class MassiveDriveJobShare
         string relative = jobId;
         string? primaryError = null;
 
-        if (!string.IsNullOrWhiteSpace(primaryRoot))
+        foreach (var root in RootsToTry(primaryRoot, extraRoots))
         {
-            var primary = TryCreate(primaryRoot.Trim(), jobId);
-            if (primary.ok)
+            var attempt = TryCreate(root, jobId);
+            if (attempt.ok)
             {
                 return new MassiveDriveShareResolveResult
                 {
-                    JobDirectory = primary.dir!,
+                    JobDirectory = attempt.dir!,
                     RelativeRoot = relative,
-                    UsedRoot = primaryRoot.Trim(),
+                    UsedRoot = root,
                     UsedStaging = false,
                 };
             }
 
-            primaryError = primary.error;
+            primaryError ??= attempt.error;
         }
 
         string staging = string.IsNullOrWhiteSpace(stagingRoot)
@@ -186,8 +189,68 @@ public static class MassiveDriveJobShare
         };
     }
 
+    /// <summary>
+    /// Share roots to try before staging. <paramref name="extraRoots"/> is for tests.
+    /// When it is null and this is not Windows, the LFAM 3 UNC also tries the Mac mounts.
+    /// </summary>
+    static IEnumerable<string> RootsToTry(string? primaryRoot, IReadOnlyList<string>? extraRoots)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(primaryRoot))
+        {
+            string trimmed = primaryRoot.Trim();
+            // A Windows UNC is not a path on macOS. Creating it would make a junk
+            // folder whose name contains backslashes, not the Drive jobs share.
+            if (OperatingSystem.IsWindows() || !IsWindowsUnc(trimmed))
+            {
+                if (seen.Add(trimmed))
+                    yield return trimmed;
+            }
+        }
+
+        if (extraRoots is not null)
+        {
+            foreach (var extra in extraRoots)
+            {
+                if (!string.IsNullOrWhiteSpace(extra) && seen.Add(extra.Trim()))
+                    yield return extra.Trim();
+            }
+            yield break;
+        }
+
+        if (OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(primaryRoot))
+            yield break;
+
+        foreach (var mount in MacMountsForUnc(primaryRoot))
+        {
+            if (seen.Add(mount))
+                yield return mount;
+        }
+    }
+
+    /// <summary>Known macOS mounts for <c>\\192.168.0.201\MassiveDRIVE\var\jobs</c>.</summary>
+    internal static IEnumerable<string> MacMountsForUnc(string root)
+    {
+        string norm = root.Replace('/', '\\').Trim().TrimEnd('\\');
+        if (!norm.StartsWith(@"\\", StringComparison.Ordinal))
+            yield break;
+        const string jobs = @"\MassiveDRIVE\var\jobs";
+        if (!norm.EndsWith(jobs, StringComparison.OrdinalIgnoreCase))
+            yield break;
+        yield return "/Users/massive/mnt/massivedrive/var/jobs";
+        yield return "/Volumes/MassiveDRIVE/var/jobs";
+    }
+
+    static bool IsWindowsUnc(string root)
+    {
+        string norm = root.Replace('/', '\\').Trim();
+        return norm.StartsWith(@"\\", StringComparison.Ordinal);
+    }
+
     static (bool ok, string? dir, string? error) TryCreate(string root, string jobId)
     {
+        if (!OperatingSystem.IsWindows() && root.Contains('\\'))
+            return (false, null, "Windows UNC is not a path on this Mac.");
         try
         {
             string dir = Path.Combine(root, jobId);

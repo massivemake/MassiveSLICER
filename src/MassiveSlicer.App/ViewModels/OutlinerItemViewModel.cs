@@ -130,6 +130,12 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     public bool IsMillToolpath  => _isToolpath && _toolpathKind == OutlinerToolpathKind.Mill;
     public bool IsPrintToolpath => _isToolpath && _toolpathKind == OutlinerToolpathKind.Print;
 
+    /// <summary>
+    /// Cell-swap (and similar) freeze: a later Slice / realtime pass must not replace this
+    /// node's geometry. A new sibling toolpath is created instead.
+    /// </summary>
+    public bool KeepOnReslice { get; set; }
+
     void NotifyTypeBadge()
     {
         OnPropertyChanged(nameof(TypeIcon));

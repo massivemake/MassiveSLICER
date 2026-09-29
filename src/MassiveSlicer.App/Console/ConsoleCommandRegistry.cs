@@ -6,7 +6,7 @@ using MassiveSlicer.ViewModels;
 namespace MassiveSlicer.App.Console;
 
 /// <summary>Registers and executes MassiveSlicer console commands.</summary>
-public sealed class ConsoleCommandRegistry
+public sealed partial class ConsoleCommandRegistry
 {
     private readonly List<ConsoleCommandDefinition> _commands = [];
     private readonly Dictionary<string, ConsoleCommandDefinition> _lookup = new(StringComparer.OrdinalIgnoreCase);
@@ -15,6 +15,7 @@ public sealed class ConsoleCommandRegistry
 
     public ConsoleCommandRegistry()
     {
+        RegisterPolylineExport();
         Register(new ConsoleCommandDefinition
         {
             Name = "help",

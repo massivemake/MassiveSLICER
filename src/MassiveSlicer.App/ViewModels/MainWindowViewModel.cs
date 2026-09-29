@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Threading;
 using MassiveSlicer.App;
 using MassiveSlicer.App.Console;
+using MassiveSlicer.App.Enums;
 using MassiveSlicer.App.Undo;
 using MassiveSlicer.Commands;
 using MassiveSlicer.Core.C3Bridge;
@@ -571,6 +572,10 @@ public sealed class MainWindowViewModel : ViewModelBase
                                ?? pending.Doc.Settings.ToolDataIndex;
                     wantBase = pending.Doc.UiSession?.KrlBaseIndex
                                ?? pending.Doc.Settings.BaseDataIndex;
+                }
+                else if (Viewport.TakePendingAnalogHeatedBase() is int analogBase)
+                {
+                    wantBase = analogBase;
                 }
                 robot.SetKrlFrameOptions(
                     cell.EffectiveTools,
@@ -3601,17 +3606,22 @@ public sealed class MainWindowViewModel : ViewModelBase
             else
                 Console.Log("[krl] No active cell — placing the toolpath in raw KRL base coordinates.");
 
-            var tp = KrlToolpathParser.Parse(text, off, out int moves);
+            var kind = KrlToolpathParser.Classify(text, Viewport.Robot?.KrlToolIndex ?? 0);
+            var tp = KrlToolpathParser.Parse(text, off, out int moves, kind);
             if (moves == 0)
             {
-                Console.LogError($"[krl] No Cartesian LIN/PTP moves found in {System.IO.Path.GetFileName(path)} â€” " +
+                Console.LogError($"[krl] No Cartesian LIN/PTP moves found in {System.IO.Path.GetFileName(path)} - " +
                                  "nothing to display (joint-only programs like calibration sweeps aren't toolpaths).");
                 return false;
             }
 
             var name = $"KRL: {System.IO.Path.GetFileNameWithoutExtension(path)}";
-            Viewport.AddImportedToolpath(tp, name);
-            Console.Log($"[krl] Imported {moves} moves from {System.IO.Path.GetFileName(path)} â†’ \"{name}\". " +
+            Viewport.AddImportedToolpath(tp, name,
+                kind: kind == KrlImportKind.Print
+                    ? OutlinerToolpathKind.Print
+                    : OutlinerToolpathKind.Mill);
+            Console.Log($"[krl] Imported {moves} moves from {System.IO.Path.GetFileName(path)} -> \"{name}\" " +
+                        $"({(kind == KrlImportKind.Print ? "print" : "mill")}). " +
                         "Select it in the outliner to scrub the toolpath.");
             return true;
         }
@@ -3690,12 +3700,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         try
         {
             var cell = Viewport.ActiveCell;
+            bool heated = Viewport.ActivePrintSurfaceIsHeated;
             node = await Task.Run(() =>
             {
                 try
                 {
                     return ImportHelper.LoadAndPlace(path, cell, msg =>
-                        Dispatcher.UIThread.Post(() => Console.Log(msg)));
+                        Dispatcher.UIThread.Post(() => Console.Log(msg)), heated);
                 }
                 catch (Exception ex)
                 {
@@ -3727,7 +3738,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         SceneNode? node;
         try
         {
-            node = ImportHelper.LoadAndPlace(path, Viewport.ActiveCell, Console.Log);
+            node = ImportHelper.LoadAndPlace(path, Viewport.ActiveCell, Console.Log,
+                heated: Viewport.ActivePrintSurfaceIsHeated);
         }
         catch (Exception ex)
         {
@@ -4860,6 +4872,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.FirstLayerPrintSpeedOffset = p.FirstLayerPrintSpeedOffset;
         add.FirstLayerRpmOffset  = p.FirstLayerRpmOffset;
         add.ExtrusionRpmOverridePercent = p.ExtrusionRpmOverridePercent;
+        // Cycles before PatternType: showing the Sine slider TwoWay-binds and can
+        // write 0 over the VM if the source is still 0 when IsSinePattern becomes true.
+        add.PatternSineCyclesPerLayer = p.PatternSineCyclesPerLayer;
         add.PatternType         = p.PatternType;
         add.PatternMapping      = add.PatternMappingOptions.Contains(p.PatternMapping)
             ? p.PatternMapping : "Wavelength (mm)";

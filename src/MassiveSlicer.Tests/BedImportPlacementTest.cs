@@ -82,6 +82,28 @@ public class BedImportPlacementTest
         Assert.Equal(target.Z, min.Z, 0);
     }
 
+    [Fact]
+    public void PlaceOnBed_Lfam3_Heated_Centres_On_Heated_Plate_Not_Rotary()
+    {
+        var path = Path.Combine("assets", "cells", "LFAM3", "lfam3.json");
+        var cell = CellLoader.Load(path);
+        var target = PrintSurface.Center(cell, heated: true);
+        var rotary = PrintSurface.Center(cell, heated: false);
+
+        var mesh = BoxMesh(200, 200, 80, 0, 0, 40);
+        var node = new SceneNode { Name = "part", PendingMesh = mesh };
+
+        ImportHelper.PlaceOnBed(node, cell, heated: true);
+
+        var (min, max) = ImportHelper.ComputeSubtreeAabb(node);
+        var c = (min + max) * 0.5f;
+        Assert.Equal(target.X, c.X, 0);
+        Assert.Equal(target.Y, c.Y, 0);
+        Assert.Equal(target.Z, min.Z, 0);
+        Assert.True(MathF.Abs(c.X - rotary.X) > 200f);
+        Assert.True(MathF.Abs(c.Y - rotary.Y) > 200f);
+    }
+
     private static MeshData BoxMesh(float sx, float sy, float sz, float cx, float cy, float cz)
     {
         float hx = sx * 0.5f, hy = sy * 0.5f, hz = sz * 0.5f;

@@ -223,6 +223,41 @@ public sealed class MassiveDriveJobV2Test
     }
 
     [Fact]
+    public void Share_uses_extra_root_when_unc_is_not_a_local_path()
+    {
+        string tmp = Path.Combine(Path.GetTempPath(), "ms-drive-mount-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmp);
+        string mount = Path.Combine(tmp, "mount");
+        Directory.CreateDirectory(mount);
+        string staging = Path.Combine(tmp, "stage");
+        try
+        {
+            var resolved = MassiveDriveJobShare.PrepareJobDirectory(
+                "jobabc123456",
+                @"\\192.168.0.201\MassiveDRIVE\var\jobs",
+                staging,
+                extraRoots: [mount]);
+            Assert.False(resolved.UsedStaging);
+            Assert.Equal(mount, resolved.UsedRoot);
+            Assert.True(Directory.Exists(resolved.JobDirectory));
+        }
+        finally
+        {
+            if (Directory.Exists(tmp))
+                Directory.Delete(tmp, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Share_lfam3_unc_maps_to_known_mac_mounts()
+    {
+        var mounts = MassiveDriveJobShare.MacMountsForUnc(@"\\192.168.0.201\MassiveDRIVE\var\jobs").ToArray();
+        Assert.Contains("/Users/massive/mnt/massivedrive/var/jobs", mounts);
+        Assert.Contains("/Volumes/MassiveDRIVE/var/jobs", mounts);
+        Assert.Empty(MassiveDriveJobShare.MacMountsForUnc("/tmp/jobs"));
+    }
+
+    [Fact]
     public async Task Client_posts_pointer_to_package_pointer_without_segments()
     {
         var handler = new RecordingHandler();

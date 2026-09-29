@@ -63,6 +63,9 @@
                                   Command="{Binding OpenModelCommand}"/>
                         <MenuItem Header="Import _KRL..."
                                   Command="{Binding ImportKrlCommand}"/>
+                        <MenuItem Header="Export _Polyline (Blender)..."
+                                  Command="{Binding ExportPolylineCommand}"
+                                  ToolTip.Tip="Save the selected toolpath as an OBJ polyline Blender can import"/>
                         <Separator/>
                         <MenuItem Header="_Preferences..."
                                   Command="{Binding OpenPreferencesCommand}"/>

@@ -325,6 +325,94 @@ public sealed class MassiveDriveJobExporterTest
     }
 
     [Fact]
+    public void Export_lfam3_base6_uses_heated_origin_not_rotary()
+    {
+        var cell = CellLoader.Load(Path.Combine("assets", "cells", "LFAM3", "lfam3.json"));
+        var xf = PrintSurface.ForKrlBase(cell, 6);
+        var worldFrom = new Vector3(xf.Origin.X + 100f, xf.Origin.Y + 50f, xf.Origin.Z + 3f);
+        var worldTo = new Vector3(xf.Origin.X + 180f, xf.Origin.Y + 50f, xf.Origin.Z + 3f);
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, xf.Origin.Z + 3f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        layer.Moves.Add(new ToolpathMove(worldFrom, worldTo, MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+            PrintSpeedScale = 1f,
+        });
+        tp.Layers.Add(layer);
+
+        var settings = new MassiveDriveExportSettings
+        {
+            Name = "Heated curtain",
+            Tool = 1,
+            Base = 6,
+            PrintSpeedMmS = 40f,
+            TravelSpeedMmS = 40f,
+            RobrootWorldPos = new Vector3(cell.Robot.WorldPosition.X, cell.Robot.WorldPosition.Y, cell.Robot.WorldPosition.Z),
+            BaseDataOffset = new Vector3(xf.BaseData.X, xf.BaseData.Y, xf.BaseData.Z),
+            SliceBedWorldZ = xf.SliceWorldZ,
+            BedOrigin = new Vector3(xf.Origin.X, xf.Origin.Y, xf.Origin.Z),
+        };
+
+        var dict = MassiveDriveJobExporter.ExportDict(tp, settings);
+        var frames = Assert.IsType<Dictionary<string, int>>(dict["frames"]);
+        Assert.Equal(6, frames["base"]);
+        var segs = Assert.IsType<List<Dictionary<string, object?>>>(dict["segments"]);
+        var from0 = Assert.IsType<Dictionary<string, double>>(segs[0]["from"]);
+        Assert.InRange(from0["x"], 99.5, 100.5);
+        Assert.InRange(from0["y"], 49.5, 50.5);
+        Assert.InRange(from0["z"], 2.9, 3.1);
+        var meta = Assert.IsType<Dictionary<string, object?>>(dict["meta"]);
+        var bed = Assert.IsType<Dictionary<string, double>>(meta["bed_origin"]);
+        Assert.InRange(bed["z"], 120.0, 140.0);
+        Assert.True(Math.Abs(bed["z"] - 916.31) > 200);
+    }
+
+    [Fact]
+    public void Export_node_origin_plus_world_lands_on_heated_base()
+    {
+        // Viewport stores absolute slice XYZ and draws (stored − origin) × node world.
+        // Curtain file on Drive was (516, 3245, 129) — skip-transform wrote slice world.
+        var cell = CellLoader.Load(Path.Combine("assets", "cells", "LFAM3", "lfam3.json"));
+        var xf = PrintSurface.ForKrlBase(cell, 6);
+        var nodeOrigin = new Vector3(516.099f, 3245.615f, 128.96f);
+        var localFrom = new Vector3(100f, 50f, 3f);
+        var localTo = new Vector3(180f, 50f, 3f);
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, nodeOrigin.Z + 3f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        layer.Moves.Add(new ToolpathMove(nodeOrigin + localFrom, nodeOrigin + localTo, MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+            PrintSpeedScale = 1f,
+        });
+        tp.Layers.Add(layer);
+
+        var settings = new MassiveDriveExportSettings
+        {
+            Name = "Heated curtain node",
+            Tool = 1,
+            Base = 6,
+            PrintSpeedMmS = 40f,
+            TravelSpeedMmS = 40f,
+            NodeOrigin = nodeOrigin,
+            NodeWorldTransform = Matrix4x4.CreateTranslation(xf.Origin.X, xf.Origin.Y, xf.Origin.Z),
+            RobrootWorldPos = new Vector3(cell.Robot.WorldPosition.X, cell.Robot.WorldPosition.Y, cell.Robot.WorldPosition.Z),
+            BaseDataOffset = new Vector3(xf.BaseData.X, xf.BaseData.Y, xf.BaseData.Z),
+            SliceBedWorldZ = xf.SliceWorldZ,
+            BedOrigin = new Vector3(xf.Origin.X, xf.Origin.Y, xf.Origin.Z),
+        };
+
+        var dict = MassiveDriveJobExporter.ExportDict(tp, settings);
+        var segs = Assert.IsType<List<Dictionary<string, object?>>>(dict["segments"]);
+        var from0 = Assert.IsType<Dictionary<string, double>>(segs[0]["from"]);
+        Assert.InRange(from0["x"], 99.5, 100.5);
+        Assert.InRange(from0["y"], 49.5, 50.5);
+        Assert.InRange(from0["z"], 2.9, 3.1);
+        var meta = Assert.IsType<Dictionary<string, object?>>(dict["meta"]);
+        var bed = Assert.IsType<Dictionary<string, double>>(meta["bed_origin"]);
+        Assert.InRange(bed["z"], 120.0, 140.0);
+    }
+
+    [Fact]
     public void Export_stitches_z_hop_onto_last_print_to_not_from()
     {
         // Closed island then hop tagged at the last print's From (slicer viewport

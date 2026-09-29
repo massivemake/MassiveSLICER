@@ -30,13 +30,13 @@ internal static class ImportHelper
     /// Corrects a metres-as-millimetres import (see <see cref="NormalizeUnitScale"/>);
     /// <paramref name="log"/> receives any scale-correction warning.
     /// </summary>
-    internal static SceneNode? LoadAndPlace(string filePath, CellConfig? activeCell, Action<string>? log = null)
+    internal static SceneNode? LoadAndPlace(string filePath, CellConfig? activeCell, Action<string>? log = null, bool heated = false)
     {
         var node = LoadFile(filePath);
         if (node is null) return null;
 
         NormalizeUnitScale(node, log);
-        PlaceOnBed(node, activeCell);
+        PlaceOnBed(node, activeCell, heated);
         CenterOrigin(node);
         return node;
     }
@@ -184,18 +184,18 @@ internal static class ImportHelper
     /// <summary>
     /// Translates <paramref name="node"/> so its bounding-box centre XY aligns with the
     /// cell's import surface centre and its bounding-box min-Z sits on that surface.
-    /// LFAM 3 (rotary): centres on <c>bed.origin</c> and scales down to fit the table diameter.
-    /// LFAM 2 (rectangular): centres on the print-bed grid footprint.
+    /// LFAM 3 rotary BASE: centres on <c>bed.origin</c> and scales down to fit the table diameter.
+    /// LFAM 3 heated BASE / LFAM 2: centres on the rectangular print plate (no rotary fit-scale).
     /// No-op if no geometry is found or no active cell is loaded.
     /// </summary>
-    internal static void PlaceOnBed(SceneNode node, CellConfig? activeCell)
+    internal static void PlaceOnBed(SceneNode node, CellConfig? activeCell, bool heated = false)
     {
         if (activeCell?.Bed is not { } bed) return;
 
-        var surface = bed.ImportSurfaceCenter(activeCell.Robot.WorldPosition);
+        var surface = PrintSurface.Center(activeCell, heated);
         var bedCenter = new Vector3(surface.X, surface.Y, surface.Z);
 
-        if (bed.ImportSurfaceRadiusMm is { } radius)
+        if (!heated && bed.ImportSurfaceRadiusMm is { } radius)
             ScaleToFitWithinRadius(node, radius * RotaryFitMargin);
 
         var (min, max) = ComputeSubtreeAabb(node);

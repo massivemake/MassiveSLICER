@@ -9,6 +9,11 @@ namespace MassiveSlicer.Viewport.Scene;
 /// pointing the same way and never changes what a planar slicer would produce (confirmed:
 /// PlanarSlicer re-derives its Z bounds from the mesh's own current world-transformed vertices
 /// every time, never against a fixed world-Z grid) — only an actual tilt does.
+/// <para>
+/// Callers must pass WORLD transforms. Locals under the LFAM 3 rotary pivot (baseAbc C ≈ -90°)
+/// diverge on a reparent/move even when the part did not tilt — that used to auto-slice while
+/// Realtime was Paused.
+/// </para>
 /// </summary>
 public static class DragClassifier
 {
@@ -19,5 +24,16 @@ public static class DragClassifier
         var upBefore = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitZ, before));
         var upAfter  = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitZ, after));
         return Vector3.Dot(upBefore, upAfter) < 0.999f;
+    }
+
+    /// <summary>
+    /// Whether gizmo-release should schedule a realtime slice.
+    /// User pause always wins. A move (world up unchanged) never slices. Scale always does.
+    /// </summary>
+    public static bool ShouldResliceOnRelease(bool realtimePaused, Matrix4 worldBefore, Matrix4 worldAfter, bool scaled)
+    {
+        if (realtimePaused) return false;
+        if (scaled) return true;
+        return ChangedUpAxis(worldBefore, worldAfter);
     }
 }
