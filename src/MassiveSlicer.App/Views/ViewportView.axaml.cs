@@ -1850,7 +1850,7 @@ public partial class ViewportView : UserControl
             }
             _renderer.BackdropBlur     = vm.BackdropBlur;
             _renderer.BackdropOpacity  = vm.BackdropOpacity;
-            _renderer.ShowTcpFrame     = vm.ShowTcpFrame;
+            _renderer.ShowTcpFrame     = vm.ShowTcpFrame && vm.ShowTcpHelpers;
             _renderer.ToolpathLineOpacity = vm.ToolpathLineOpacity;
             _renderer.ToolpathSimProgress = vm.SimRenderProgress;
             _renderer.ToolpathFullAppearance = vm.ViewMode != "Body";
@@ -2455,7 +2455,7 @@ public partial class ViewportView : UserControl
 
     void UpdateTcpAxisTags(int vpW, int vpH)
     {
-        if (_vm is not ViewportViewModel vm || !vm.ShowTcpFrame ||
+        if (_vm is not ViewportViewModel vm || !vm.ShowTcpHelpers || !vm.ShowTcpFrame ||
             (_renderer.TcpFrameMatrix is null && _renderer.FlangeFrameMatrix is null))
         {
             PostTcpAxisTags(null);
@@ -10322,8 +10322,8 @@ public partial class ViewportView : UserControl
         limit = 0;
         if (!vm.IsSlicePlaneViewerActive || !vm.IsPaintEditOpen) return false;
 
-        int[]? ends = vm.ScrubLayerEnds;
-        if ((ends is null || ends.Length == 0) && vm.ActiveScrubToolpath is { Layers.Count: > 0 } tp)
+        int[]? ends = null;
+        if (vm.ActiveScrubToolpath is { Layers.Count: > 0 } tp)
         {
             ends = new int[tp.Layers.Count];
             int acc = 0;
@@ -10333,10 +10333,13 @@ public partial class ViewportView : UserControl
                 ends[i] = acc;
             }
         }
+        else
+            ends = vm.ScrubLayerEnds;
 
         if (ends is null || ends.Length == 0) return false;
         (start, limit) = SlicePlanePick.Window(
-            vm.CurrentScrubLayerIndex, ends, vm.SlicePlaneGhostLayers);
+            vm.CurrentScrubLayerIndex, ends, vm.SlicePlaneGhostLayers,
+            vm.SlicePlaneShowAllGhosts);
         return limit > start;
     }
 
@@ -12139,6 +12142,8 @@ public partial class ViewportView : UserControl
         if (beadMm < 0.5f) beadMm = 6f;
         // Screen pick radius — generous so thin centre-lines in path-edit mode are hittable.
         float pickPx = MathF.Max(36f, MathF.Min(64f, beadMm * 5f));
+        if (vmPick is { IsSlicePlaneViewerActive: true, IsPaintEditOpen: true })
+            pickPx = MathF.Max(pickPx, 72f);
         // Midpoint early-out: must be wide enough that clicks near either END of a long
         // projected bead still reach the full segment test. The old pickPx*3 gate
         // rejected most zoomed-in wall clicks (midpoint hundreds of px from the tip).

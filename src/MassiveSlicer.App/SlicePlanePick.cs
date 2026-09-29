@@ -9,11 +9,12 @@ namespace MassiveSlicer.App;
 /// </summary>
 public static class SlicePlanePick
 {
-    public static (int Start, int Limit) Window(int currentLayer, int[] ends, int belowCount)
+    public static (int Start, int Limit) Window(
+        int currentLayer, int[]? ends, int belowCount, bool allBelow = false)
     {
-        if (ends.Length == 0) return (0, 0);
+        if (ends is null || ends.Length == 0) return (0, 0);
         int cur = Math.Clamp(currentLayer, 0, ends.Length - 1);
-        int lo = Math.Max(0, cur - Math.Max(0, belowCount));
+        int lo = allBelow ? 0 : Math.Max(0, cur - Math.Max(0, belowCount));
         int start = lo <= 0 ? 0 : ends[lo - 1];
         return (start, ends[cur]);
     }

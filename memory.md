@@ -522,6 +522,11 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 ## Session changelog (reverse chronological)
 
+### 2026-09-28 — 2D edit: hide TCP helpers, pick still on the drawn line
+
+- TCP triad, axis labels, and timeline keyframe buttons hide while 2D slice edit is open. They come back when you leave 2D.
+- Pick uses the live toolpath layer ends (same window the 2D draw uses) and a wider screen radius. The Mac process that was running did not have the previous pick fix in its DLL.
+
 ### 2026-09-28 — 2D edit: sidebar returns, lines and points select
 
 - Symptom: enter 2D slice (pencil, layers-triple on by default), Exit, right column gone. In 2D, clicks on lines and points select nothing.

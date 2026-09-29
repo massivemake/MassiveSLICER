@@ -1943,6 +1943,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 IsSlicePlaneViewerActive = true;
             }
             RealtimeSlicingPaused = value;   // collapse → deferred re-slice fires
+            OnPropertyChanged(nameof(ShowTcpHelpers));
+            OnPropertyChanged(nameof(ShowClearTcpKeyframes));
             // Edit mode borrows the Toolpath view's display profile (dark,
             // line-oriented); leaving restores the active view's own profile.
             ApplyViewDisplayProfile();
@@ -1986,11 +1988,19 @@ public sealed partial class ViewportViewModel : ViewModelBase
             if (value && !IsPaintEditOpen) value = false;
             if (!SetField(ref _isSlicePlaneViewerActive, value)) return;
             OnPropertyChanged(nameof(ShowSlicePlaneStatsOverlay));
+            OnPropertyChanged(nameof(ShowTcpHelpers));
+            OnPropertyChanged(nameof(ShowClearTcpKeyframes));
             RefreshSlicePlaneStats();
             OnSlicePlaneViewerChanged?.Invoke(value);
             NotifyRenderNeeded();
         }
     }
+
+    /// <summary>TCP triad, axis labels, and keyframe buttons. Hidden in 2D slice edit.</summary>
+    public bool ShowTcpHelpers => !(IsSlicePlaneViewerActive && IsPaintEditOpen);
+
+    /// <summary>Clear-keyframes button: only when helpers are shown and keys exist.</summary>
+    public bool ShowClearTcpKeyframes => ShowTcpHelpers && HasTcpKeyframes;
 
     /// <summary>Camera lock / restore when the 2D slice plane viewer toggles.</summary>
     internal Action<bool>? OnSlicePlaneViewerChanged { get; set; }
@@ -3938,7 +3948,11 @@ public sealed partial class ViewportViewModel : ViewModelBase
     public bool HasTcpKeyframes
     {
         get => _hasTcpKeyframes;
-        internal set => SetField(ref _hasTcpKeyframes, value);
+        internal set
+        {
+            if (!SetField(ref _hasTcpKeyframes, value)) return;
+            OnPropertyChanged(nameof(ShowClearTcpKeyframes));
+        }
     }
 
     private double _keyframeSmoothing = 150;
