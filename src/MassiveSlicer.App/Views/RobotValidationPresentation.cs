@@ -15,7 +15,8 @@ public static class RobotValidationPresentation
         int TotalMoves,
         int CollisionStride,
         float ZLo,
-        float ZHi);
+        float ZHi,
+        int LimitViolations = 0);
 
     /// <summary>
     /// True when the latest completed pass has any operator-facing issue
@@ -33,6 +34,16 @@ public static class RobotValidationPresentation
 
     public static bool BlocksExport(in Counts c)
         => BlocksExport(c.Unreachable, c.Singular);
+
+    /// <summary>
+    /// Axis-speed or software-limit violations the solve could not clear.
+    /// These are controller stops. Export anyway does not apply.
+    /// </summary>
+    public static bool HardBlocksExport(int limitViolations)
+        => limitViolations > 0;
+
+    public static bool AllowsExportAnyway(int limitViolations)
+        => limitViolations <= 0;
 
     /// <summary>
     /// A fully clean pass must replace any prior robot-validation error UI.
@@ -72,7 +83,7 @@ public static class RobotValidationPresentation
     public static string CleanSliceStatus(in Counts c)
         => $"Robot validation: {ReachabilityLabel(c)}.";
 
-    public static int FirstIssueIndex(bool[] reachable, bool[] singularity, bool[]? collision)
+    public static int FirstIssueIndex(bool[] reachable, bool[] singularity, bool[]? collision, bool[]? limits = null)
     {
         int n = reachable.Length;
         for (int i = 0; i < n; i++)
@@ -80,6 +91,7 @@ public static class RobotValidationPresentation
             if (!reachable[i]) return i;
             if (i < singularity.Length && singularity[i]) return i;
             if (collision is not null && i < collision.Length && collision[i]) return i;
+            if (limits is not null && i < limits.Length && limits[i]) return i;
         }
         return -1;
     }

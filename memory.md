@@ -10,7 +10,17 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-29** (LFAM 1 barrel still cooling: plant setpoint is 240, heater output stays off until robot output 7)
+Last updated: **2026-09-29** (axis-speed wrist repath on top of main)
+
+LFAM 1 barrel still cooling: plant setpoint is 240, heater output stays off until robot output 7.
+
+## Axis speed path — `feature/axis-speed-limits`
+
+Shop `Z:\Research\LFAM\MassiveSLICER` does not have this. It is this folder only, and it is not pushed.
+
+A span whose joint rate would trip a rated axis speed is rewritten with a print-neutral nozzle spin on the same bead. A spin that still commands A4 over the limit is rejected. If none stay legal at the requested print speed, export is refused. There is no Export anyway, and print speed is not lowered. The rail is not replanned.
+
+LFAM 1 Rev142 toolhead X was 0 (A 0, B 90, C 0) on almost every line. E1 stayed −1503.45. The stop was a short A walk near Z 1448, not the global X slider.
 
 ---
 

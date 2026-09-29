@@ -177,7 +177,7 @@ public partial class ViewportView : UserControl
     private readonly ConcurrentDictionary<SceneNode, (float BeadWidth, float LayerHeight, NVec3 MaterialColor)> _toolpathMetaByNode = new();
 
     /// <summary>Robot-validation issue summary per toolpath node (unreachable / singularity counts + Z range).</summary>
-    private readonly ConcurrentDictionary<SceneNode, (int Unreachable, int Singular, float ZLo, float ZHi)> _validationIssuesByNode = new();
+    private readonly ConcurrentDictionary<SceneNode, (int Unreachable, int Singular, float ZLo, float ZHi, int LimitViolations)> _validationIssuesByNode = new();
     private readonly ConcurrentDictionary<SceneNode, MergedToolpathRecord> _mergedByNode = new();
     // Pre-smoothing toolpaths keyed by node -- used to re-apply OrientationSmoother live when settings change.
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _rawToolpathByNode    = new();
@@ -15094,7 +15094,8 @@ public partial class ViewportView : UserControl
             }
 
             var counts = new RobotValidationPresentation.Counts(
-                failCount, singCount, collCount, result.Length, collStride, zLo, zHi);
+                failCount, singCount, collCount, result.Length, collStride, zLo, zHi,
+                evaluated.UnrepairableLimits);
             string reachLabel = RobotValidationPresentation.ReachabilityLabel(counts);
 
             Dispatcher.UIThread.Post(() =>
@@ -15109,7 +15110,7 @@ public partial class ViewportView : UserControl
                 _e1MmByNode[node]         = e1PerMove;
                 if (collision is not null) _collisionByNode[node] = collision;
                 else _collisionByNode.TryRemove(node, out _);
-                _validationIssuesByNode[node] = (failCount, singCount, zLo, zHi);
+                _validationIssuesByNode[node] = (failCount, singCount, zLo, zHi, evaluated.UnrepairableLimits);
                 _pendingReachability.Enqueue((node, result));
                 _pendingSingularityPoints.Enqueue((node, singularity));
 
@@ -15121,7 +15122,7 @@ public partial class ViewportView : UserControl
                     vm.IsValidating = false;
                     vm.SetScrubMarkers(result, singularity, collision);
                     vm.FirstValidationIssueIndex = RobotValidationPresentation.FirstIssueIndex(
-                        result, singularity, collision);
+                        result, singularity, collision, evaluated.AxisLimit);
                     if (RobotValidationPresentation.HasIssues(counts))
                     {
                         string collDetail = firstCollHit is { } fh
@@ -18070,11 +18071,16 @@ public partial class ViewportView : UserControl
     /// </summary>
     private async Task<bool> ConfirmExportDespiteValidationAsync(SceneNode node)
     {
-        if (!_validationIssuesByNode.TryGetValue(node, out var vi)
-            || !RobotValidationPresentation.BlocksExport(vi.Unreachable, vi.Singular))
+        if (!_validationIssuesByNode.TryGetValue(node, out var vi))
             return true;
 
-        if (Avalonia.Controls.TopLevel.GetTopLevel(this) is not Window owner) return true;
+        bool hard = RobotValidationPresentation.HardBlocksExport(vi.LimitViolations);
+        bool soft = RobotValidationPresentation.BlocksExport(vi.Unreachable, vi.Singular);
+        if (!hard && !soft)
+            return true;
+
+        if (Avalonia.Controls.TopLevel.GetTopLevel(this) is not Window owner)
+            return !hard;
 
         string zRange = vi.ZLo <= vi.ZHi ? $" between Z {vi.ZLo:0} and {vi.ZHi:0} mm" : "";
         var dlg = new Window
@@ -18087,11 +18093,13 @@ public partial class ViewportView : UserControl
         };
         var msg = new TextBlock
         {
-            Text = $"⚠ This toolpath has {vi.Singular:N0} singularity-risk moves and " +
-                   $"{vi.Unreachable:N0} unreachable moves{zRange} (outside the 5% software-limit envelope or workspace).\n\n" +
-                   "The robot is likely to fault mid-print. " +
-                   "Scrub the timeline to the purple/red markers to inspect, or adjust the toolhead " +
-                   "orientation before exporting.",
+            Text = hard
+                ? $"This path still has {vi.LimitViolations:N0} moves that would trip a speed or software limit. The wrist replan could not get them clear.\n\nExport is refused. The orientation or the rail plan has to change."
+                : $"⚠ This toolpath has {vi.Singular:N0} singularity-risk moves and " +
+                  $"{vi.Unreachable:N0} unreachable moves{zRange} (outside the 5% software-limit envelope or workspace).\n\n" +
+                  "The robot is likely to fault mid-print. " +
+                  "Scrub the timeline to the purple/red markers to inspect, or adjust the toolhead " +
+                  "orientation before exporting.",
             TextWrapping = Avalonia.Media.TextWrapping.Wrap,
             Margin = new Thickness(20, 18, 20, 12),
         };
@@ -18101,19 +18109,23 @@ public partial class ViewportView : UserControl
         exportBtn.Click += (_, _) => dlg.Close(true);
         gotoBtn.Click   += (_, _) => { dlg.Close(false); _vm?.JumpToValidationIssue(); };
         cancelBtn.Click += (_, _) => dlg.Close(false);
+        var buttons = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Spacing = 8,
+            Margin = new Thickness(20, 0, 20, 16),
+        };
+        buttons.Children.Add(cancelBtn);
+        buttons.Children.Add(gotoBtn);
+        if (RobotValidationPresentation.AllowsExportAnyway(vi.LimitViolations))
+            buttons.Children.Add(exportBtn);
         dlg.Content = new StackPanel
         {
             Children =
             {
                 msg,
-                new StackPanel
-                {
-                    Orientation = Avalonia.Layout.Orientation.Horizontal,
-                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
-                    Spacing = 8,
-                    Margin = new Thickness(20, 0, 20, 16),
-                    Children = { cancelBtn, gotoBtn, exportBtn },
-                },
+                buttons,
             },
         };
         return await dlg.ShowDialog<bool?>(owner) == true;

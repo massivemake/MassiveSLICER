@@ -37,6 +37,15 @@ public class RobotValidationPresentationTest
     }
 
     [Fact]
+    public void Axis_limit_blocks_export_even_when_reach_and_singularity_are_clean()
+    {
+        Assert.True(RobotValidationPresentation.HardBlocksExport(1));
+        Assert.False(RobotValidationPresentation.HardBlocksExport(0));
+        Assert.False(RobotValidationPresentation.AllowsExportAnyway(limitViolations: 1));
+        Assert.True(RobotValidationPresentation.AllowsExportAnyway(limitViolations: 0));
+    }
+
+    [Fact]
     public void Collision_only_pass_still_warns_but_matches_current_export_gate()
     {
         var collisions = new RobotValidationPresentation.Counts(0, 0, 4, 100, 8, 10f, 20f);

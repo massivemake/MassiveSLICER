@@ -180,7 +180,9 @@ public static class ToolpathFeasibilityEvaluator
         float[] E1PerMove,
         bool[]? Collision,
         int CollisionStride,
-        CollisionHit? FirstCollisionHit);
+        CollisionHit? FirstCollisionHit,
+        int UnrepairableLimits = 0,
+        bool[]? AxisLimit = null);
 
     /// <summary>
     /// Runs the full feasibility pass. Returns null when the toolpath is empty or the
@@ -352,19 +354,35 @@ public static class ToolpathFeasibilityEvaluator
 
         // Singularity detection: flag moves where |A5| < 5° (wrist singularity).
         var singularity = new bool[total];
+        var speedRisk = new bool[total];
         for (int i = 0; i < total; i++)
+        {
             singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
+            if (i == 0) continue;
+            float dt = MathF.Max(moveTimes[i] / 1000f, 1e-4f);
+            for (int j = 0; j < 6; j++)
+            {
+                var rate = AxisMotionLimits.CheckJointRate(
+                    solutions[i][j] - solutions[i - 1][j],
+                    dt,
+                    AxisMotionLimits.Kr120R3900DegPerSec[j],
+                    j);
+                if (rate.Exceeded)
+                {
+                    speedRisk[i] = true;
+                    break;
+                }
+            }
+        }
 
         // -- TCP auto-rotate repair -------------------------------------------
-        // The nozzle is rotationally symmetric, so spinning it about its own axis
-        // (KUKA C offset) is print-neutral — but it swings the flange/wrist into a
-        // different configuration. For each flagged span, search for the smallest
-        // spin that clears the wrist singularity, ramp it in/out smoothly over
-        // neighbouring moves, and re-solve IK for the affected range.
+        // Print-neutral nozzle spin. Runs for a wrist already under 5° and for
+        // a span whose joint rate would trip an axis speed limit, so the path
+        // is rewritten instead of only flagged.
         {
             bool anyBad = false;
             for (int i = 0; i < total && !anyBad; i++)
-                anyBad = !result[i] || singularity[i];
+                anyBad = !result[i] || singularity[i] || speedRisk[i];
 
             if (anyBad)
             {
@@ -379,7 +397,7 @@ public static class ToolpathFeasibilityEvaluator
                 const int   Ramp  = 60;   // moves over which yaw ramps in/out
                 const float MinA5 = 6f;   // deg of wrist margin required
                 var yawByMove = new float[total];
-                bool Bad(int i) => !result[i] || singularity[i];
+                bool Bad(int i) => !result[i] || singularity[i] || speedRisk[i];
 
                 int s0 = 0;
                 while (s0 < total)
@@ -403,9 +421,15 @@ public static class ToolpathFeasibilityEvaluator
                                     ? solver.TargetRotFromMillNormal(normals[ti], y)
                                     : solver.TargetRotFromGlobalOrientation(
                                         normals[ti], offA, offB, offC + y);
+                                var prev = solutions[Math.Max(0, ti - 1)];
                                 var sol = solver.Solve(targets[ti],
-                                    solutions[Math.Max(0, ti - 1)], rot, maxIterations: 60);
+                                    prev, rot, maxIterations: 60);
                                 if (sol is null || MathF.Abs(sol[4]) < MinA5) { ok = false; break; }
+                                float stepDt = MathF.Max(moveTimes[ti] / 1000f, 1e-4f);
+                                var a4 = AxisMotionLimits.CheckJointRate(
+                                    sol[3] - prev[3], stepDt,
+                                    AxisMotionLimits.Kr120R3900DegPerSec[3], 3);
+                                if (a4.Exceeded) { ok = false; break; }
                             }
                             if (ok) { chosen = y; break; }
                         }
@@ -511,6 +535,9 @@ public static class ToolpathFeasibilityEvaluator
             }
         }
 
+        var (limitCount, limitFlags) = ApplyAxisSpeedRepairs(
+            toolpath, solutions, moveTimes, seed, normals, offA, offB, offC, cellJoints);
+
         return new Result(
             Reachable: result,
             Solutions: solutions,
@@ -520,7 +547,100 @@ public static class ToolpathFeasibilityEvaluator
             E1PerMove: e1PerMove,
             Collision: collision,
             CollisionStride: collStride,
-            FirstCollisionHit: firstCollHit);
+            FirstCollisionHit: firstCollHit,
+            UnrepairableLimits: limitCount,
+            AxisLimit: limitFlags);
+    }
+
+    /// <summary>
+    /// After the wrist replan, flag any span that is still over a speed or
+    /// software limit at print speed. Do not write a slower bead.
+    /// </summary>
+    static (int Unrepairable, bool[] Flags) ApplyAxisSpeedRepairs(
+        Toolpath toolpath,
+        float[][] solutions,
+        float[] moveTimesMs,
+        float[] seed,
+        TkVector3[] normals,
+        float offA,
+        float offB,
+        float offC,
+        IReadOnlyList<JointConfig>? joints)
+    {
+        int total = solutions.Length;
+        var flags = new bool[total];
+        if (total == 0 || moveTimesMs.Length < total) return (0, flags);
+
+        var poses = new float[total + 1][];
+        poses[0] = seed;
+        var dt = new float[total];
+        var orient = new float[total];
+        (float A, float B, float C) prevAbc = default;
+        bool havePrev = false;
+        int fi = 0;
+        foreach (var layer in toolpath.Layers)
+        {
+            foreach (var move in layer.Moves)
+            {
+                if (fi >= total) break;
+                poses[fi + 1] = solutions[fi] ?? seed;
+                dt[fi] = MathF.Max(moveTimesMs[fi] / 1000f, 1e-4f);
+                var n = fi < normals.Length ? normals[fi] : TkVector3.UnitZ;
+                if (n.LengthSquared < 1e-8f) n = TkVector3.UnitZ;
+                var abc = KukaOrientation.AbcFromNormal(
+                    new NVec3(n.X, n.Y, n.Z), offA, offB, offC + move.TcpYawDeg);
+                orient[fi] = havePrev ? AbcDeltaDeg(prevAbc, abc) : 0f;
+                prevAbc = abc;
+                havePrev = true;
+                fi++;
+            }
+        }
+
+        float[]? min = null, max = null;
+        if (joints is { Count: > 0 })
+        {
+            min = new float[joints.Count];
+            max = new float[joints.Count];
+            for (int j = 0; j < joints.Count; j++)
+            {
+                min[j] = joints[j].MinDeg;
+                max[j] = joints[j].MaxDeg;
+            }
+        }
+
+        var scan = AxisMotionLimits.Scan(poses, dt, orient, minDeg: min, maxDeg: max);
+        int bad = 0;
+        fi = 0;
+        foreach (var layer in toolpath.Layers)
+        {
+            for (int mi = 0; mi < layer.Moves.Count; mi++)
+            {
+                if (fi >= scan.Scale.Length) break;
+                if (scan.Scale[fi] < 0.999f)
+                {
+                    flags[fi] = true;
+                    bad++;
+                }
+                fi++;
+            }
+        }
+        return (bad, flags);
+    }
+
+    static float AbcDeltaDeg((float A, float B, float C) a, (float A, float B, float C) b)
+    {
+        float da = NormDeg(b.A - a.A);
+        float db = NormDeg(b.B - a.B);
+        float dc = NormDeg(b.C - a.C);
+        return MathF.Sqrt(da * da + db * db + dc * dc);
+    }
+
+    static float NormDeg(float d)
+    {
+        d %= 360f;
+        if (d > 180f) d -= 360f;
+        else if (d < -180f) d += 360f;
+        return MathF.Abs(d);
     }
 
     /// <summary>Mill T12 uses a different target-rotation convention (cutter along tool +Z into
