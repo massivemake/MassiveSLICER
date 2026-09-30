@@ -298,7 +298,6 @@ public static class KrlExporter
         ;ENDFOLD(CheckFlange)
 
         ;FOLD MAT
-        $OUT[9] = TRUE
         $ANOUT[1] = {{TEMP1_V}} ; T1 = {{TEMP1_C}}C
         $ANOUT[2] = {{TEMP2_V}} ; T2 = {{TEMP2_C}}C
         $ANOUT[3] = {{TEMP3_V}} ; T3 = {{TEMP3_C}}C
@@ -375,7 +374,7 @@ public static class KrlExporter
 
         ; Digital outs idle — do NOT zero T1/T2/T3 (keeps extruder heaters on).
         ; OUT[8] (URM / ultra-responsive) is pulsed only around travels — not latched ON here.
-        ; OUT[9] is the robot-mode gate (MIO_req) — latched ON in MAT below.
+        ; OUT[9] (MIO_req robot-mode gate) is managed by Drive/pendant — not set here.
         $OUT[7] = FALSE
         $OUT[8] = FALSE
         RPM = 0.00
@@ -386,8 +385,7 @@ public static class KrlExporter
 
         ;FOLD MAT out of INI
 
-        ;robot-mode gate (MIO_req) ON for the whole print - CARACOL obeys T/RPM only while high
-        $OUT[9] = TRUE
+        ;robot-mode gate (OUT[9] / MIO_req) is managed by Drive/pendant — not set here.
 
         ;Re-latch guard: ANALOGHANDLER only writes $ANOUT when T changes. A prior program end
         ;can leave $ANOUT at 0 while T still reads the target, so setting the same target does
@@ -466,7 +464,6 @@ public static class KrlExporter
     public const string DefaultFooterTemplate = """
         $OUT[7]=FALSE
         $OUT[8] = FALSE
-        $OUT[9] = FALSE
         END
         """;
 
@@ -483,8 +480,7 @@ public static class KrlExporter
         ;EXTRUDER MOTOR COMMAND
         $OUT[7]=FALSE
         $TIMER_STOP[ 7 ]=TRUE
-        ;ROBOT-MODE GATE OFF
-        $OUT[9] = FALSE
+        ;ROBOT-MODE GATE (OUT[9]) managed by Drive/pendant — not cleared here
         RPM = 0.00
         END
         """;
