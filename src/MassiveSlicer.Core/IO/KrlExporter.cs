@@ -601,11 +601,14 @@ public static class KrlExporter
         var (a0, b0, c0) = KukaAbc(firstLayer.PlaneNormal, s);
         var p0 = ToBase(firstMove.From, s);
         float lastE1 = float.IsNaN(s.HomeE1Mm) ? 0f : s.HomeE1Mm;
+        bool railPlanned = HasPlannedE1(toolpath);
 
         // -- Initial approach -----------------------------------------------------
         string? lastVelText = null;
         WriteVelIfChanged(sb, s.TravelSpeedMps, ref lastVelText);
-        float e1Approach = E1ForBase(p0, s, ref lastE1);
+        // Arrive with the rail where the first print move needs it. Picking it fresh here
+        // put up to 909 mm of rail inside the first bead, with the screw on.
+        float e1Approach = E1ForMove(firstMove, p0, s, ref lastE1);
         sb.AppendLine(";approach");
         // One exact-stop LIN straight from home to the first print point, same ABC as the
         // first LIN — what operators on LFAM 1 and 2 got by hand-deleting the old approach
@@ -685,9 +688,10 @@ public static class KrlExporter
                         sb.AppendLine(";layer change");
                         WriteVelIfChanged(sb, s.TravelSpeedMps, ref lastVelText);
                         var (ga, gb, gc) = lastAbc;
+                        float e1Gap = railPlanned ? lastE1 : E1ForBase(fromB, s, ref lastE1);
                         sb.AppendLine(s.UseTravelStartStop
-                            ? FormatLin(fromB, ga, gb, gc, E1ForBase(fromB, s, ref lastE1))
-                            : FormatLinExact(fromB, ga, gb, gc, E1ForBase(fromB, s, ref lastE1)));
+                            ? FormatLin(fromB, ga, gb, gc, e1Gap)
+                            : FormatLinExact(fromB, ga, gb, gc, e1Gap));
                         lastPos = fromB;
                         needsRpmOn = true;
                     }
@@ -932,7 +936,8 @@ public static class KrlExporter
         sb.AppendLine(";retreat");
         sb.AppendLine(FormatExtruderOff(s, "extruder off"));
         WriteVelIfChanged(sb, s.TravelSpeedMps, ref lastVelText);
-        sb.AppendLine(FormatLinExact(new Vector3(lastPos.X, lastPos.Y, lastPos.Z + s.ApproachZMm), fa, fb, fc, E1ForBase(lastPos, s, ref lastE1)));
+        float e1Retreat = railPlanned ? lastE1 : E1ForBase(lastPos, s, ref lastE1);
+        sb.AppendLine(FormatLinExact(new Vector3(lastPos.X, lastPos.Y, lastPos.Z + s.ApproachZMm), fa, fb, fc, e1Retreat));
         sb.AppendLine();
         WriteFooter(sb, s);
 
@@ -1006,7 +1011,7 @@ public static class KrlExporter
         float lastE1 = float.IsNaN(s.HomeE1Mm) ? 0f : s.HomeE1Mm;
         string? lastVelText = null;
         WriteVelIfChanged(sb, rapidV, ref lastVelText);
-        sb.AppendLine(FormatLinExact(new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm), a0, b0, c0, E1ForBase(p0, s, ref lastE1)));
+        sb.AppendLine(FormatLinExact(new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm), a0, b0, c0, E1ForMove(first.move, p0, s, ref lastE1)));
         sb.AppendLine();
 
         foreach (var layer in toolpath.Layers)
@@ -1458,6 +1463,18 @@ public static class KrlExporter
             e1, home, s.E1YPlusMm, s.E1YMinusMm, s.RailMinMm, s.RailMaxMm);
         lastE1 = e1;
         return e1;
+    }
+
+    /// <summary>
+    /// True when the viewport baked a rail plan onto the moves. Lines the planner never saw
+    /// (layer-change gap, retreat) then hold the rail instead of re-picking it per point.
+    /// </summary>
+    private static bool HasPlannedE1(Toolpath toolpath)
+    {
+        foreach (var layer in toolpath.Layers)
+            foreach (var m in layer.Moves)
+                if (!float.IsNaN(m.E1Mm)) return true;
+        return false;
     }
 
     private static float E1ForBase(Vector3 basePt, KrlExportSettings s, ref float lastE1)

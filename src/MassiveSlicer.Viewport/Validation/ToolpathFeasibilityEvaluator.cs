@@ -149,6 +149,28 @@ public static class ToolpathFeasibilityEvaluator
         return null;
     }
 
+    /// <summary>
+    /// One pose, the way validation decides it: position-first DLS from
+    /// <paramref name="seed"/>, then a 6D refine that must match the tool orientation (print)
+    /// and stay inside the joint envelope. Null = not reachable. Public so the E1 rail
+    /// planner asks exactly this question instead of keeping its own copy.
+    /// </summary>
+    public static float[]? SolvePose(
+        GltfNumericalIkSolver solver, TkVector3 target, float[] seed,
+        (TkVector3 r0, TkVector3 r1, TkVector3 r2) rot,
+        IReadOnlyList<JointConfig>? joints, bool millPath, int maxIterations)
+    {
+        var pos = solver.Solve(target, seed, maxIterations: maxIterations);
+        if (pos is null || (joints is not null && !JointLimitEnvelope.JointsInside(pos, joints)))
+            return null;
+        var sol = solver.Solve(target, pos, rot, maxIterations: maxIterations,
+            requireOrientation: !millPath);
+        if (sol is not null && (joints is not null && !JointLimitEnvelope.JointsInside(sol, joints)))
+            sol = null;
+        float orientErr = sol is not null ? solver.OrientationError(sol, rot) : float.MaxValue;
+        return PreferOrientedPrintSolution(sol, pos, orientErr, millPath);
+    }
+
     /// <summary>Try <paramref name="seed"/> first, then each fallback. Null only if all fail.</summary>
     public static float[]? SolveWithPrintFallback(
         float[] seed,
@@ -279,17 +301,7 @@ public static class ToolpathFeasibilityEvaluator
 
         float[]? SolveReach(TkVector3 target, float[] walkSeed,
             (TkVector3 r0, TkVector3 r1, TkVector3 r2) rot, int maxIterations)
-        {
-            var pos = solver.Solve(target, walkSeed, maxIterations: maxIterations);
-            if (pos is null || (cellJoints is not null && !JointLimitEnvelope.JointsInside(pos, cellJoints)))
-                return null;
-            var sol = solver.Solve(target, pos, rot, maxIterations: maxIterations,
-                requireOrientation: !millPath);
-            if (sol is not null && (cellJoints is not null && !JointLimitEnvelope.JointsInside(sol, cellJoints)))
-                sol = null;
-            float orientErr = sol is not null ? solver.OrientationError(sol, rot) : float.MaxValue;
-            return PreferOrientedPrintSolution(sol, pos, orientErr, millPath);
-        }
+            => SolvePose(solver, target, walkSeed, rot, cellJoints, millPath, maxIterations);
 
         try
         {

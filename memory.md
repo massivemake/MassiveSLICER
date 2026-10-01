@@ -522,6 +522,13 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 ## Session changelog (reverse chronological)
 
+### 2026-09-29 — E1 rail smoothing (`feature/e1-rail-smoothing`, not on main)
+- Rail plan per layer: hold one E1 when it covers the layer; otherwise the shortest rail path through the band of passing E1 at each point (`RailE1Planner.PlanCorridor`), steps faster than the tool spread into ramps.
+- A pose passes only with a full IK solve (toolhead orientation, joint envelope, |A5| >= 5) and the elbow 10° from straight where the rail allows (`MinElbowBendDeg`).
+- KRL approach / layer-change gap / retreat hold the planned E1 instead of re-picking it (was up to 909 mm of rail inside the first bead).
+- Console: `reach-report` (elbow bend, |A5|, joint margins of the last validation). `[E1]` export line prints plan timing.
+- Key files: `RailE1Planner.cs`, `RailE1PlannerTest.cs`, `ViewportView.axaml.cs`, `KrlExporter.cs`, `GltfNumericalIkSolver.cs`.
+
 ### 2026-09-29 — Send to MassiveDRIVE does not ask for a Samba password
 
 - Symptom: a new Windows login (`jhala`) got "The user name or password is incorrect" on `\\192.168.0.189\MassiveDRIVE-LFAM1\var\jobs`. The job landed in that user's AppData. Drive never saw it.

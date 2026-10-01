@@ -2845,6 +2845,15 @@ public sealed partial class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "reach-report",
+            Aliases = ["reach"],
+            Description = "How close the validated toolpath runs the arm to its limits: elbow bend from straight, |A5|, and each joint's margin",
+            Usage = "reach-report",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.ReachReport?.Invoke() ?? "[reach] viewport not ready"),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "speed-check-src",
             Description = "Offline joint-speed check of an exported .src on the active cell; writes <src>.speed.txt",
             Usage = "speed-check-src <path.src>",
