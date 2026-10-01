@@ -248,7 +248,13 @@ public static class RailE1Planner
         prev = ClampToAllowance(prev, homeE1Mm, yPlusMm, yMinusMm, bounds.RailMin, bounds.RailMax);
         var s = PathLength(worldPoints);
 
-        if (CoversAll(worldPoints, prev, poseOk))
+        // Hold only with room to spare: the rail must still pass ParkMarginMm either side of
+        // where it sits (and stay inside the allowance). Sitting on the edge of what passes
+        // makes the next layer up move it again; the corridor below parks it inside instead.
+        if (prev - ParkMarginMm >= bounds.Lo && prev + ParkMarginMm <= bounds.Hi
+            && CoversAll(worldPoints, prev, poseOk)
+            && CoversAll(worldPoints, prev - ParkMarginMm, poseOk)
+            && CoversAll(worldPoints, prev + ParkMarginMm, poseOk))
         {
             Array.Fill(e1, prev);
             return new LayerRailPlan(e1, 0);
@@ -328,6 +334,13 @@ public static class RailE1Planner
     const float BandReachMm = 400f;
 
     /// <summary>
+    /// Rail distance (mm) a parked or gliding carriage keeps from the edge of the E1 range
+    /// that passes. A preference inside what is allowed, not a limit: a band narrower than
+    /// 2× this keeps its middle 20%, so it never makes a point unreachable. Jeff 2026-10-01.
+    /// </summary>
+    public const float ParkMarginMm = 100f;
+
+    /// <summary>
     /// Rail for a layer one E1 cannot hold. At samples along the path, find the band of E1
     /// that passes; the rail is then the shortest path through those bands (a taut string).
     /// It moves only where a band forces it, in straight constant-speed runs, and turns back
@@ -363,6 +376,11 @@ public static class RailE1Planner
                 if (!Band(pts[idx[k]], reference, bounds, homeE1, yPlus, yMinus, poseOk, out lo[k], out hi[k]))
                     continue;
                 has[k] = true;
+                // Keep the path ParkMarginMm off each edge of the band; a narrow band keeps
+                // its middle 20% so the path is not pinned to one point per sample.
+                float pad = MathF.Min(ParkMarginMm, 0.4f * (hi[k] - lo[k]));
+                lo[k] += pad;
+                hi[k] -= pad;
                 reference = Math.Clamp(reference, lo[k], hi[k]);
             }
 

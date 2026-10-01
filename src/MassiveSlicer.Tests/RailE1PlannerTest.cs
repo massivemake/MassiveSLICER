@@ -125,7 +125,8 @@ public sealed class RailE1PlannerTest
 
         Assert.Equal(0, plan.GlideCount);
         foreach (float e in plan.E1Mm)
-            Assert.InRange(e, 600.5f, 610f);
+            // Nearest covering E1 is ~600; the rail parks ParkMarginMm inside that edge.
+            Assert.InRange(e, 600.5f + RailE1Planner.ParkMarginMm, 610f + RailE1Planner.ParkMarginMm);
         AssertAllReachable(pts, plan.E1Mm, ReachWindow(home, 200f));
     }
 
@@ -236,9 +237,32 @@ public sealed class RailE1PlannerTest
         AssertAllReachable(pts, plan.E1Mm, ok);
         float travel = 0f;
         for (int i = 1; i < plan.E1Mm.Length; i++) travel += MathF.Abs(plan.E1Mm[i] - plan.E1Mm[i - 1]);
-        // Out 800 -> 2400 and back 2400 -> 1600 is the least the rail can do: 2400 mm.
-        Assert.True(plan.E1Mm.Max() < 2450f, $"rail went to {plan.E1Mm.Max():0}, the far end needs 2400");
-        Assert.True(travel < 2450f, $"rail travelled {travel:0} mm, 2400 is enough");
+        // Least motion while keeping ParkMarginMm off each edge: out 800 -> 2400+M, back to
+        // 1600-M. With M = 100: 1700 + 1000 = 2700 mm.
+        float m = RailE1Planner.ParkMarginMm;
+        Assert.True(plan.E1Mm.Max() < 2400f + m + 50f, $"rail went to {plan.E1Mm.Max():0}, the far end needs {2400f + m:0}");
+        float least = (2400f + m - 800f) + ((2400f + m) - (1600f - m));
+        Assert.True(travel < least + 50f, $"rail travelled {travel:0} mm, {least:0} is enough");
+    }
+
+    [Fact]
+    public void PlanLayer_ParksInsideTheEdge_NotOnIt()
+    {
+        // Every E1 in -200..600 covers this layer. Starting 10 mm from the top edge, the old
+        // rule held there; the rail must instead park ParkMarginMm inside the edge.
+        var rail = YRail(min: -2000, max: 2000);
+        var home = new Vector3(0, 0, 0);
+        var pts = new List<Vector3>();
+        for (int y = 0; y <= 400; y += 20) pts.Add(new Vector3(0, y, 100));
+        var ok = ReachWindow(home, 600f);
+
+        var plan = RailE1Planner.PlanLayer(
+            pts, home, rail, homeE1Mm: 0, yPlusMm: 1500, yMinusMm: 1500,
+            prevE1Mm: 590f, poseOk: ok);
+
+        AssertAllReachable(pts, plan.E1Mm, ok);
+        Assert.All(plan.E1Mm, e => Assert.True(e <= 600f - RailE1Planner.ParkMarginMm + 0.5f,
+            $"rail parked at {e:0}, within {600f - e:0} mm of the 600 edge"));
     }
 
     [Fact]
