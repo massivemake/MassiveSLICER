@@ -438,6 +438,8 @@ public partial class ViewportView : UserControl
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
             vm.OnRpmReportRequested  = () => BuildRpmReport(vm);
             vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
+            vm.SpeedCheckSrc = p => StartSpeedCheckSrc(vm, p);
+            vm.DumpValidationJoints = p => DumpValidationJoints(p);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
             vm.OnSequenceToggleRequested = node => ToggleSequenceSelection(vm, node);
