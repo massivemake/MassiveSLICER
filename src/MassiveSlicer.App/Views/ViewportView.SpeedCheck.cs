@@ -157,6 +157,10 @@ public partial class ViewportView
 
         // ── Report ─────────────────────────────────────────────────────────────
         var sb = new StringBuilder();
+        sb.AppendLine("UNVALIDATED — do not use as a print go/no-go.");
+        sb.AppendLine("SRC→joint conversion does not yet match the controller.");
+        sb.AppendLine("See commit c10244b message for validation steps before trusting these numbers.");
+        sb.AppendLine();
         sb.AppendLine($"speed check: {Path.GetFileName(path)}");
         sb.AppendLine($"LIN points {n:N0}, unsolved {unsolved:N0}");
         for (int j = 0; j < 6; j++)
