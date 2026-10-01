@@ -154,5 +154,12 @@ public sealed record ErpPresetsBundle(
 /// <summary>
 /// Result of POST /api/slicer/v1/login (email + password). The token is the same
 /// bearer used on every other slicer route (Settings → Slicer Access today).
+/// DriveTokens are cell-id → upload token from the login response; cached in memory
+/// so Send works without any installer or file on disk.
 /// </summary>
-public sealed record ErpLoginResult(string Token, string? Email, string? DisplayName, DateTime? ExpiresAt);
+public sealed record ErpLoginResult(
+    string Token,
+    string? Email,
+    string? DisplayName,
+    DateTime? ExpiresAt,
+    IReadOnlyDictionary<string, string>? DriveTokens = null);

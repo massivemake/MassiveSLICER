@@ -65,6 +65,58 @@ public sealed class MassiveDriveClient : IDisposable
         CancellationToken ct = default)
         => UploadPackagePointerAsync(pointer.ToDict(), ct);
 
+    public async Task<MassiveDriveUploadCaps> UploadCapsAsync(CancellationToken ct = default)
+    {
+        using var doc = await HealthAsync(ct);
+        return MassiveDriveUploadCaps.FromHealth(doc.RootElement);
+    }
+
+    /// <summary>
+    /// Stream a v2 job directory to Drive. Drive writes it on its own disk.
+    /// Does not open the Samba share and does not start the robot.
+    /// </summary>
+    public async Task<JsonDocument> UploadJobDirectoryAsync(
+        MassiveDriveJobV2WriteResult written,
+        string name,
+        string token,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            throw new ArgumentException("upload token is required", nameof(token));
+
+        var files = new (string Field, string Path)[]
+        {
+            (MassiveDriveJobV2.ManifestFileName, written.ManifestPath),
+            (MassiveDriveJobV2.SegmentsFileName, written.SegmentsPath),
+            (MassiveDriveJobV2.PreviewFileName, written.PreviewPath),
+            (MassiveDriveJobV2.SummaryFileName, written.SummaryPath),
+        };
+
+        using var form = new MultipartFormDataContent();
+        form.Add(new StringContent(written.JobId), "job_id");
+        form.Add(new StringContent(name), "name");
+        form.Add(new StringContent(written.Sha256), "sha256");
+        foreach (var (field, path) in files)
+        {
+            var stream = File.OpenRead(path);
+            var content = new StreamContent(stream);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            form.Add(content, field, field);
+        }
+
+        using var req = new HttpRequestMessage(
+            HttpMethod.Post, new Uri(new Uri(BaseUrl), MassiveDriveJobV2.UploadApiPath))
+        {
+            Content = form,
+        };
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        if (!resp.IsSuccessStatusCode)
+            throw new MassiveDriveClientException((int)resp.StatusCode, body);
+        return JsonDocument.Parse(body);
+    }
+
     public async Task<JsonDocument> StartPackageAsync(
         string packageId,
         string? name = null,

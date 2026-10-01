@@ -162,6 +162,7 @@ public sealed class ErpViewModel : ViewModelBase
     {
         _client?.Dispose();
         _client = null;
+        MassiveSlicer.Core.IO.MassiveDriveUploadToken.ClearLoginCache();
         if (ConnectionState == ErpConnectionState.Connected)
         {
             ConnectionState = ErpConnectionState.Disconnected;
@@ -237,8 +238,11 @@ public sealed class ErpViewModel : ViewModelBase
                 }
 
                 ApiToken = login.Value!.Token;
+                MassiveSlicer.Core.IO.MassiveDriveUploadToken.CacheFromLogin(login.Value.DriveTokens);
                 var who = login.Value.DisplayName ?? login.Value.Email ?? _email.Trim();
                 _log?.Invoke($"[erp] signed in as {who}");
+                if (login.Value.DriveTokens is { Count: > 0 } dt)
+                    _log?.Invoke($"[erp] drive tokens received for: {string.Join(", ", dt.Keys)}");
             }
 
             _client?.Dispose();

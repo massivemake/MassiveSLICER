@@ -31,4 +31,26 @@ public class ViewportPointerPolicyTest
         Assert.True(ViewportPointerPolicy.IsClickSelectRelease(sawLeftPress: true, leftDragged: false));
         Assert.False(ViewportPointerPolicy.ConsumeOrbitPanRelease(isOrbitOrPanButton: false, leftDragged: false));
     }
+
+    [Fact]
+    public void Slice_edit_click_keeps_the_hovered_span()
+    {
+        Assert.True(ViewportPointerPolicy.SliceEditClickSelects(
+            sliceEdit: true, hand: false, regionSelect: false, lineSelectArmed: true));
+        Assert.False(ViewportPointerPolicy.SliceEditClickSelects(
+            sliceEdit: true, hand: true, regionSelect: false, lineSelectArmed: true));
+        Assert.False(ViewportPointerPolicy.SliceEditClickSelects(
+            sliceEdit: true, hand: false, regionSelect: true, lineSelectArmed: true));
+    }
+
+    [Fact]
+    public void Mill_area_does_not_steal_2d_edit_clicks()
+    {
+        Assert.False(ViewportPointerPolicy.MillPaintCapturesPointer(
+            areaToolArmed: true, millStepActive: false, sliceEditOpen: true));
+        Assert.False(ViewportPointerPolicy.MillPaintCapturesPointer(
+            areaToolArmed: true, millStepActive: true, sliceEditOpen: true));
+        Assert.True(ViewportPointerPolicy.MillPaintCapturesPointer(
+            areaToolArmed: true, millStepActive: true, sliceEditOpen: false));
+    }
 }
