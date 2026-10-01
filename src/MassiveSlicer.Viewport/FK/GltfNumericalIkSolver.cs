@@ -101,7 +101,26 @@ public sealed class GltfNumericalIkSolver
         }
         _minReachFromShoulder = minD;
         _maxReachFromShoulder = maxD;
+
+        // A3 where the wrist centre is farthest from the shoulder: the arm is straight and
+        // the elbow is singular. A frame's origin does not depend on its own joint angle, so
+        // partial FK 2 is the A2 pivot and 5 is the A5 pivot (wrist centre).
+        var t = new float[6];
+        float bestA3 = 0f, bestD = -1f;
+        for (float a3 = _jcfg[2].MinDeg; a3 <= _jcfg[2].MaxDeg; a3 += 0.25f)
+        {
+            t[2] = a3;
+            float d = (ComputePartialFkPos(t, 5) - ComputePartialFkPos(t, 2)).Length;
+            if (d > bestD) { bestD = d; bestA3 = a3; }
+        }
+        StraightElbowA3Deg = bestA3;
     }
+
+    /// <summary>A3 (deg) at which the arm is fully straight — elbow singularity.</summary>
+    public float StraightElbowA3Deg { get; private set; }
+
+    /// <summary>How far (deg) a solution's elbow is from straight. Small = arm at full stretch.</summary>
+    public float ElbowBendDeg(ReadOnlySpan<float> krl) => MathF.Abs(krl[2] - StraightElbowA3Deg);
 
     /// <summary>Returns the scene-space position after applying the first <paramref name="joints"/> FK steps at the given KRL angles.</summary>
     private Vector3 ComputePartialFkPos(float[] krl, int joints)

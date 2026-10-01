@@ -438,6 +438,7 @@ public partial class ViewportView : UserControl
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
             vm.OnRpmReportRequested  = () => BuildRpmReport(vm);
             vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
+            vm.ReachReport = () => BuildReachReport(vm);
             vm.SpeedCheckSrc = p => StartSpeedCheckSrc(vm, p);
             vm.DumpValidationJoints = p => DumpValidationJoints(p);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
@@ -18160,6 +18161,48 @@ public partial class ViewportView : UserControl
 
     /// <summary>Writes the active toolpath's KRL into <paramref name="dir"/> named after
     /// the source geometry; returns the path or null when no toolpath is active.</summary>
+    /// <summary>
+    /// How close the last validated solutions sit to the arm's limits: elbow bend from
+    /// straight (full stretch), A5 from flat, and each joint's margin to its usable range.
+    /// </summary>
+    private string BuildReachReport(ViewportViewModel vm)
+    {
+        var solver = _ikSolver;
+        var joints = vm.ActiveCell?.Robot.Joints;
+        if (solver is null || joints is not { Count: >= 6 }) return "[reach] no IK solver / cell joints";
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"[reach] straight elbow at A3 {solver.StraightElbowA3Deg:0.##}°");
+        foreach (var (node, sols) in _ikSolutionsByNode)
+        {
+            if (sols.Length == 0) continue;
+            var bend = new float[sols.Length];
+            var a5 = new float[sols.Length];
+            int straightest = 0;
+            var margin = new float[6];
+            var worstAt = new int[6];
+            Array.Fill(margin, float.MaxValue);
+            for (int i = 0; i < sols.Length; i++)
+            {
+                var q = sols[i];
+                bend[i] = solver.ElbowBendDeg(q);
+                if (bend[i] < bend[straightest]) straightest = i;
+                a5[i] = MathF.Abs(q[4]);
+                for (int j = 0; j < 6; j++)
+                {
+                    float m = MathF.Min(q[j] - joints[j].UsableMinDeg, joints[j].UsableMaxDeg - q[j]);
+                    if (m < margin[j]) { margin[j] = m; worstAt[j] = i; }
+                }
+            }
+            float P(float[] v, double f) { var c = (float[])v.Clone(); Array.Sort(c); return c[(int)(f * (c.Length - 1))]; }
+            sb.Append($"\n  {node.Name}: {sols.Length:N0} moves");
+            sb.Append($"\n  elbow bend from straight (deg): min {P(bend, 0):0.0}  p1 {P(bend, .01):0.0}  p5 {P(bend, .05):0.0}  p50 {P(bend, .5):0.0}  (straightest: move {straightest:N0}, A2 {sols[straightest][1]:0.0} A3 {sols[straightest][2]:0.0})");
+            sb.Append($"\n  |A5| (deg): min {P(a5, 0):0.0}  p1 {P(a5, .01):0.0}  p50 {P(a5, .5):0.0}");
+            for (int j = 0; j < 6; j++)
+                sb.Append($"\n  A{j + 1} closest to usable limit: {margin[j]:0.0}° (move {worstAt[j]:N0}, range {joints[j].UsableMinDeg:0.#}..{joints[j].UsableMaxDeg:0.#})");
+        }
+        return sb.ToString();
+    }
+
     private async Task<string?> ExportKrlToDirectoryAsync(ViewportViewModel vm, string dir, int rev)
     {
         var toolpath = vm.ActiveScrubToolpath;
@@ -18587,9 +18630,9 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// For each move endpoint, sample E1 across the Y+/Y− allowance and pick the
-    /// carriage position that keeps the TCP in the arm workspace (prefer mid-reach).
-    /// Bakes <see cref="ToolpathMove.E1Mm"/> for the KRL exporter.
+    /// Per layer: hold one E1 when it covers the layer, otherwise one constant-speed
+    /// glide to the next pose the arm needs. Bakes <see cref="ToolpathMove.E1Mm"/>.
+    /// Every pose the planner accepts passes the same IK check as robot validation.
     /// </summary>
     private void PlanRailE1ForExport(
         Toolpath toolpath,
@@ -18609,146 +18652,185 @@ public partial class ViewportView : UserControl
             cell.Robot.WorldPosition.Y,
             cell.Robot.WorldPosition.Z);
 
-        // Collect world-space move endpoints in export order.
-        var worlds = new List<NVec3>(4096);
-        var moves  = new List<ToolpathMove>(4096);
-        foreach (var layer in toolpath.Layers)
-        {
-            foreach (var move in layer.Moves)
-            {
-                float lx = move.To.X - origin.X, ly = move.To.Y - origin.Y, lz = move.To.Z - origin.Z;
-                var world = new NVec3(
-                    lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
-                    lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
-                    lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
-                worlds.Add(world);
-                moves.Add(move);
-            }
-        }
-        if (worlds.Count == 0) return;
-
-        // Prefer mid-reach from the live IK envelope when available; else ~900 mm.
-        float prefReach = 900f;
-        Func<NVec3, bool>? inWs = null;
         var solver = _ikSolver;
-        if (solver is not null)
-        {
-            prefReach = solver.PreferredHorizontalReachMm;
-            // Envelope is translation-invariant for pure rail travel — evaluate TCP
-            // relative to a virtual base at candidate E1 (no UpdateSceneBase needed).
-            inWs = rel => solver.IsInWorkspace(new TkVector3(rel.X, rel.Y, rel.Z));
-        }
-
-        // Subsample dense paths for speed: plan every keyframe, interpolate between.
-        const float KeyMm = 40f;
-        var keyIdx = new List<int> { 0 };
-        float acc = 0f;
-        for (int i = 1; i < worlds.Count; i++)
-        {
-            acc += NVec3.Distance(worlds[i - 1], worlds[i]);
-            if (acc >= KeyMm)
-            {
-                keyIdx.Add(i);
-                acc = 0f;
-            }
-        }
-        if (keyIdx[^1] != worlds.Count - 1)
-            keyIdx.Add(worlds.Count - 1);
-
-        var keyWorlds = new List<NVec3>(keyIdx.Count);
-        foreach (int i in keyIdx)
-            keyWorlds.Add(worlds[i]);
-
-        float[] keyE1 = RailE1Planner.PlanPath(
-            keyWorlds, homeWorld, rail, homeE1, yPlus, yMinus,
-            prefReach, inWs, gridCount: 11, smoothBlend: 0.45f);
-
-        // Interpolate key E1 → every move; sparse full-IK refinement on unreachable keys.
-        if (solver is not null)
-            RefineKeyE1WithIk(keyWorlds, keyE1, homeWorld, rail, homeE1, yPlus, yMinus, solver, settings);
-
-        // Paint onto moves
-        int k = 0;
-        for (int i = 0; i < moves.Count; i++)
-        {
-            while (k + 1 < keyIdx.Count && i > keyIdx[k + 1]) k++;
-            float e1;
-            if (k + 1 < keyIdx.Count && keyIdx[k + 1] != keyIdx[k])
-            {
-                float t = (i - keyIdx[k]) / (float)(keyIdx[k + 1] - keyIdx[k]);
-                e1 = keyE1[k] * (1f - t) + keyE1[k + 1] * t;
-            }
-            else
-                e1 = keyE1[Math.Min(k, keyE1.Length - 1)];
-
-            e1 = RailE1Planner.ClampToAllowance(e1, homeE1, yPlus, yMinus, rail.MinMm, rail.MaxMm);
-            moves[i].E1Mm = e1;
-        }
-    }
-
-    /// <summary>
-    /// For keyframes still outside the workspace envelope at their planned E1, try a few
-    /// more E1 samples with a cheap position-only IK solve (serial — no Parallel.For).
-    /// </summary>
-    private static void RefineKeyE1WithIk(
-        List<NVec3> keyWorlds,
-        float[] keyE1,
-        NVec3 homeWorld,
-        RobotRailCellConfig rail,
-        float homeE1,
-        float yPlus,
-        float yMinus,
-        GltfNumericalIkSolver solver,
-        AdditiveSettingsViewModel settings)
-    {
+        var joints = cell.Robot.Joints is { Count: >= 6 } j ? j : null;
         float offA = (float)settings.ToolheadA;
         float offB = (float)settings.ToolheadB;
         float offC = (float)settings.ToolheadC;
-        var seed = new float[6]; // home-ish zeros; Solve will iterate
+        var seed = new float[] { 0f, -90f, 90f, 0f, 0f, 15f };
+        if (homeWorld.X != 0f || homeWorld.Y != 0f)
+            seed[0] = MathF.Atan2(homeWorld.Y, homeWorld.X) * (180f / MathF.PI);
 
-        for (int i = 0; i < keyWorlds.Count; i++)
+        NVec3 ToWorld(float x, float y, float z)
         {
-            var w = keyWorlds[i];
-            var baseW = RailE1Planner.BaseWorld(homeWorld, rail, keyE1[i]);
-            var rel = w - baseW;
-            if (solver.IsInWorkspace(new TkVector3(rel.X, rel.Y, rel.Z)))
-                continue;
-
-            // Failed envelope at planned E1 — re-pick using full sample set + quick Solve.
-            var candidates = RailE1Planner.BuildCandidates(
-                w, homeWorld, rail, homeE1, yPlus, yMinus, gridCount: 11);
-            float best = keyE1[i];
-            float bestScore = float.MaxValue;
-            var normal = TkVector3.UnitZ;
-            var rot = solver.TargetRotFromGlobalOrientation(normal, offA, offB, offC);
-
-            foreach (float e1 in candidates)
-            {
-                var b = RailE1Planner.BaseWorld(homeWorld, rail, e1);
-                var r = w - b;
-                var tgt = new TkVector3(r.X, r.Y, r.Z);
-                bool env = solver.IsInWorkspace(tgt);
-                // Position-only solve (faster) as quality check when in envelope
-                float[]? sol = env
-                    ? solver.Solve(tgt, seed, maxIterations: 25, finalTolerance: 15f)
-                    : null;
-                float dxy = MathF.Sqrt(r.X * r.X + r.Y * r.Y);
-                float score = (sol is not null ? 0f : env ? 50_000f : 1_000_000f)
-                    + MathF.Abs(dxy - solver.PreferredHorizontalReachMm)
-                    + 0.1f * MathF.Abs(e1 - homeE1);
-                if (score < bestScore)
-                {
-                    bestScore = score;
-                    best = e1;
-                    if (sol is not null) Array.Copy(sol, seed, 6);
-                }
-            }
-            keyE1[i] = best;
+            float lx = x - origin.X, ly = y - origin.Y, lz = z - origin.Z;
+            return new NVec3(
+                lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
+                lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
+                lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
         }
+
+        bool Envelope(NVec3 world, float e1)
+        {
+            var rel = world - RailE1Planner.BaseWorld(homeWorld, rail, e1);
+            if (solver is not null)
+                return solver.IsInWorkspace(new TkVector3(rel.X, rel.Y, rel.Z));
+            float ideal = RailE1Planner.IdealE1(world, homeWorld, rail, homeE1, yPlus, yMinus);
+            return MathF.Abs(e1 - ideal) <= 900f;
+        }
+
+        // Same verdict as ToolpathFeasibilityEvaluator: an IK solve with the toolhead
+        // orientation, inside the joint limits, wrist not flat. The envelope alone is a
+        // reach-radius shell with no orientation — holding on it parked the rail where
+        // 3,922 Cow Column points could not be solved.
+        var rotByWorld = new Dictionary<NVec3, (TkVector3, TkVector3, TkVector3)>();
+        var lastRot = solver?.TargetRotFromGlobalOrientation(WorldNormal(NVec3.UnitZ), offA, offB, offC)
+                      ?? default;
+        var verdicts = new Dictionary<(NVec3, int), bool>();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        long solveTicks = 0;
+        int solves = 0, hits = 0, glideLayers = 0;
+
+        TkVector3 WorldNormal(NVec3 n)
+        {
+            var w = new TkVector3(
+                n.X * wt.M11 + n.Y * wt.M21 + n.Z * wt.M31,
+                n.X * wt.M12 + n.Y * wt.M22 + n.Z * wt.M32,
+                n.X * wt.M13 + n.Y * wt.M23 + n.Z * wt.M33);
+            return w.LengthSquared > 1e-12f ? TkVector3.Normalize(w) : TkVector3.UnitZ;
+        }
+
+        // Stretch padding: a passing pose must keep the elbow MinElbowBendDeg from straight,
+        // unless no rail position in the allowance can give this point that much bend — then
+        // the unpadded pose stands, so padding never turns a reachable layer into a rail hop.
+        var (railLo, railHi) = JointLimitEnvelope.Inset(rail.MinMm, rail.MaxMm);
+        railLo = RailE1Planner.ClampToAllowance(railLo, homeE1, yPlus, yMinus, rail.MinMm, rail.MaxMm);
+        railHi = RailE1Planner.ClampToAllowance(railHi, homeE1, yPlus, yMinus, rail.MinMm, rail.MaxMm);
+        var paddingPossible = new Dictionary<NVec3, bool>();
+        int unpaddable = 0;
+
+        // Reachable means what validation says it means: ToolpathFeasibilityEvaluator.SolvePose
+        // (print tool orientation must match, joint envelope) from the last good pose, then the
+        // same fallback seeds validation retries with. A copy of the solve drifted once already.
+        float[]? SolvePose(NVec3 world, float e1)
+        {
+            var rel = world - RailE1Planner.BaseWorld(homeWorld, rail, e1);
+            var tgt = new TkVector3(rel.X, rel.Y, rel.Z);
+            if (rotByWorld.TryGetValue(world, out var r)) lastRot = r;
+            var rot = lastRot;
+            var sol = ToolpathFeasibilityEvaluator.SolveWithPrintFallback(
+                seed,
+                w => ToolpathFeasibilityEvaluator.SolvePose(solver!, tgt, w, rot, joints, millPath: false, maxIterations: 80),
+                ToolpathFeasibilityEvaluator.PrintIkFallbackSeeds(tgt.X, tgt.Y));
+            if (sol is null) return null;
+            if (MathF.Abs(sol[4]) < 5f) return null;
+            Array.Copy(sol, seed, 6);
+            return sol;
+        }
+
+        bool PaddingPossible(NVec3 world)
+        {
+            if (paddingPossible.TryGetValue(world, out bool known)) return known;
+            bool any = false;
+            for (float e = railLo; e <= railHi + 0.1f && !any; e += 40f)
+            {
+                float ee = MathF.Min(e, railHi);
+                if (!Envelope(world, ee)) continue;
+                if (SolvePose(world, ee) is { } q && solver!.ElbowBendDeg(q) >= MinElbowBendDeg) any = true;
+            }
+            if (!any) unpaddable++;
+            paddingPossible[world] = any;
+            return any;
+        }
+
+        bool SolveOk(NVec3 world, float e1)
+        {
+            if (solver is null) return true;
+            if (SolvePose(world, e1) is not { } sol) return false;
+            if (solver.ElbowBendDeg(sol) >= MinElbowBendDeg) return true;
+            return !PaddingPossible(world);
+        }
+
+        bool PoseOk(NVec3 world, float e1)
+        {
+            if (!Envelope(world, e1)) return false;
+            var key = (world, (int)MathF.Round(e1 * 2f));
+            if (verdicts.TryGetValue(key, out bool known)) { hits++; return known; }
+            if (verdicts.Count > 4_000_000) verdicts.Clear();
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            bool ok = SolveOk(world, e1);
+            solveTicks += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+            solves++;
+            verdicts[key] = ok;
+            return ok;
+        }
+
+        float Clamp(float e1) =>
+            RailE1Planner.ClampToAllowance(e1, homeE1, yPlus, yMinus, rail.MinMm, rail.MaxMm);
+
+        float prev = homeE1;
+        List<ToolpathMove>? prevMoves = null;
+        float[]? prevPlan = null;
+        List<NVec3>? prevWorlds = null;
+        var lastNormal = NVec3.UnitZ; // travel holds the last extrude normal, as validation does
+
+        foreach (var layer in toolpath.Layers)
+        {
+            if (layer.Moves.Count == 0) continue;
+            var layerMoves = new List<ToolpathMove>(layer.Moves.Count);
+            var layerWorlds = new List<NVec3>(layer.Moves.Count);
+            foreach (var move in layer.Moves)
+            {
+                var world = ToWorld(move.To.X, move.To.Y, move.To.Z);
+                layerMoves.Add(move);
+                layerWorlds.Add(world);
+                if (move.Kind != MoveKind.Travel && !move.IsLayerStitch)
+                    lastNormal = move.Normal.LengthSquared() > 1e-6f ? move.Normal : NVec3.UnitZ;
+                if (solver is not null)
+                    rotByWorld[world] = solver.TargetRotFromGlobalOrientation(
+                        WorldNormal(lastNormal), offA, offB, offC);
+            }
+
+            var plan = RailE1Planner.PlanLayer(
+                layerWorlds, homeWorld, rail, homeE1, yPlus, yMinus, prev, PoseOk);
+            if (prevMoves is not null && prevPlan is not null && prevWorlds is not null && plan.E1Mm.Length > 0
+                && RailE1Planner.TryPullGlideBack(prevPlan, prevWorlds, plan.E1Mm[0], PoseOk))
+            {
+                for (int i = 0; i < prevMoves.Count; i++)
+                    prevMoves[i].E1Mm = Clamp(prevPlan[i]);
+            }
+
+            for (int i = 0; i < layerMoves.Count && i < plan.E1Mm.Length; i++)
+                layerMoves[i].E1Mm = Clamp(plan.E1Mm[i]);
+            if (plan.GlideCount > 0) glideLayers++;
+
+            if (plan.E1Mm.Length == 0) continue;
+            prev = plan.E1Mm[^1];
+            prevMoves = layerMoves;
+            prevPlan = plan.E1Mm;
+            prevWorlds = layerWorlds;
+        }
+        LastE1PlanStats =
+            $"{clock.ElapsedMilliseconds} ms, {solves:N0} IK solves " +
+            $"({solveTicks * 1000 / System.Diagnostics.Stopwatch.Frequency} ms), {hits:N0} cached, " +
+            $"{glideLayers} of {toolpath.Layers.Count} layers glide, elbow ≥ {MinElbowBendDeg:0}° from straight " +
+            $"({unpaddable:N0} points can't get that anywhere on the rail)";
     }
 
+    /// <summary>
+    /// Stretch padding for the rail plan: how far (deg) the elbow must stay from fully
+    /// straight. Joint limits alone let the planner park the rail and run the arm at full
+    /// extension (large E1 test part: 1% of moves within 0.7° of straight).
+    /// </summary>
+    internal const float MinElbowBendDeg = 10f;
+
+    /// <summary>Timing of the last <see cref="PlanRailE1ForExport"/> run, for the [E1] export line.</summary>
+    internal static string LastE1PlanStats { get; private set; } = "";
+
+    /// <summary>
     /// RPM inputs each toolpath's highlight was last built from. Keyed by node so a re-slice
     /// or a settings edit re-runs exactly the toolpaths that changed, and nothing else.
+    /// </summary>
     private readonly Dictionary<SceneNode, (Toolpath Tp, float Base, float FirstRpm, float FirstSpeed)>
         _rpmApplied = new();
 
@@ -19005,7 +19087,7 @@ public partial class ViewportView : UserControl
                 var mvm = TopLevel.GetTopLevel(this)?.DataContext as MainWindowViewModel;
                 mvm?.Console.Log(
                     $"[E1] Reachability plan: {nSet} points, E1 range [{eMin:0.#} … {eMax:0.#}] mm " +
-                    $"(home ± Y+={settings.E1YPlusMm:0}/Y−={settings.E1YMinusMm:0})");
+                    $"(home ± Y+={settings.E1YPlusMm:0}/Y−={settings.E1YMinusMm:0}) — {LastE1PlanStats}");
             }
         }
 
