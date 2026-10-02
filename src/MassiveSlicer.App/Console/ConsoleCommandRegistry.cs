@@ -2845,6 +2845,31 @@ public sealed partial class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "reach-report",
+            Aliases = ["reach"],
+            Description = "How close the validated toolpath runs the arm to its limits: elbow bend from straight, |A5|, and each joint's margin",
+            Usage = "reach-report",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.ReachReport?.Invoke() ?? "[reach] viewport not ready"),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "speed-check-src",
+            Description = "Offline joint-speed check of an exported .src on the active cell; writes <src>.speed.txt",
+            Usage = "speed-check-src <path.src>",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.SpeedCheckSrc?.Invoke(args.Trim().Trim('"')) ?? "[speed] viewport not ready"),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "ik-dump",
+            Description = "Write every 50th validated joint solution of the active toolpath to a CSV",
+            Usage = "ik-dump <path.csv>",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.DumpValidationJoints?.Invoke(args.Trim().Trim('"')) ?? "[speed] viewport not ready"),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "export-src",
             Aliases = ["exportsrc", "export-krl"],
             Description = "Write the active toolpath's .src into a folder — same writer as Export KRL, so it uses the active robot's KRL recipe",

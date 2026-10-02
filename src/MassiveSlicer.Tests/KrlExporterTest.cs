@@ -585,6 +585,48 @@ public sealed class KrlExporterTest
     }
 
     [Fact]
+    public void Export_approach_gap_and_retreat_hold_the_planned_rail()
+    {
+        // Regression: approach, layer-change gap and retreat re-picked E1 with the old
+        // per-point scorer. On a 4.1 m LFAM 1 part the approach sat 909 mm off the plan,
+        // so the rail ran back inside the first 8 mm bead with the screw on.
+        var tp = new Toolpath();
+        var l0 = new ToolpathLayer(0, 3f) { Height = 3f, PlaneNormal = Vector3.UnitZ };
+        l0.Moves.Add(new ToolpathMove(new Vector3(0, 2000, 3), new Vector3(0, 2400, 3), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ, E1Mm = -1588.9f });
+        var l1 = new ToolpathLayer(1, 7f) { Height = 4f, PlaneNormal = Vector3.UnitZ };
+        l1.Moves.Add(new ToolpathMove(new Vector3(600, 3500, 7), new Vector3(600, 3900, 7), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ, E1Mm = -1561.4f });
+        tp.Layers.Add(l0);
+        tp.Layers.Add(l1);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName      = "rail_plan_hold",
+            HomeE1Mm         = -2498.3f,
+            E1MotionEnabled  = true,
+            E1YPlusMm        = 3000f,
+            E1YMinusMm       = 3000f,
+            RailAxis         = "Y",
+            RailE1Sign       = -1f,
+            RailMinMm        = -4641f,
+            RailMaxMm        = 150f,
+            RobrootWorldPos  = new Vector3(0f, 0f, 500f),
+            BeadWidthMm      = 8f,
+        });
+
+        var e1s = krl.Split('\n')
+            .Where(l => l.TrimStart().StartsWith("LIN "))
+            .Select(l => float.Parse(Regex.Match(l, @"E1 (-?\d+\.\d+)").Groups[1].Value, CultureInfo.InvariantCulture))
+            .ToList();
+        Assert.Equal(-1588.9f, e1s[0], 1);     // approach arrives where the first bead needs it
+        foreach (float e in e1s)                // nothing but the two planned values anywhere
+            Assert.True(MathF.Abs(e + 1588.9f) < 0.1f || MathF.Abs(e + 1561.4f) < 0.1f,
+                $"unplanned rail position E1 {e}");
+        Assert.Equal(-1561.4f, e1s[^1], 1);    // retreat lifts without moving the rail
+    }
+
+    [Fact]
     public void Export_lfam1_home_ptp_includes_e1_rail_position()
     {
         var tp = new Toolpath();

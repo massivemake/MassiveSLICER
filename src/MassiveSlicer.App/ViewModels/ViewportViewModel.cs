@@ -854,6 +854,15 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// no toolpath is active. Wired by the viewport view.</summary>
     internal Func<string, int, Task<string?>>? ExportKrlToDirectory { get; set; }
 
+    /// <summary>Joint-margin / elbow-stretch summary of the last robot validation (console <c>reach-report</c>).</summary>
+    internal Func<string>? ReachReport { get; set; }
+
+    /// <summary>Offline joint-speed check of an exported .src (console <c>speed-check-src</c>).</summary>
+    internal Func<string, string>? SpeedCheckSrc { get; set; }
+
+    /// <summary>Every 50th validated joint solution to a CSV (console <c>ik-dump</c>).</summary>
+    internal Func<string, string>? DumpValidationJoints { get; set; }
+
     /// <summary>File path of the active cell JSON. Set alongside <see cref="ActiveCell"/>.</summary>
     public string? ActiveCellPath { get; set; }
 
