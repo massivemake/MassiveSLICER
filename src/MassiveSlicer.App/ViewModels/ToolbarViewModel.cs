@@ -112,6 +112,9 @@ public sealed class ToolbarViewModel : ViewModelBase
     /// <summary>Opens a file-picker dialog to import a KRL .src program.</summary>
     public ICommand ImportKrlCommand { get; }
 
+    /// <summary>Imports a reduced-scale desktop gcode and scales it back to 100%.</summary>
+    public ICommand ImportScaledToolpathCommand { get; }
+
     /// <summary>Saves the active toolpath as a Blender OBJ polyline.</summary>
     public ICommand ExportPolylineCommand { get; }
 
@@ -162,6 +165,7 @@ public sealed class ToolbarViewModel : ViewModelBase
         SaveWorkspaceCommand    = new RelayCommand(SaveWorkspace);
         SaveWorkspaceAsCommand  = new RelayCommand(SaveWorkspaceAs);
         ImportKrlCommand        = new RelayCommand(ImportKrl);
+        ImportScaledToolpathCommand = new RelayCommand(ImportScaledToolpath);
         ExportPolylineCommand   = new RelayCommand(ExportPolyline);
 OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
         SetPrepareModeCommand   = new RelayCommand(() => ActiveMode = AppMode.Prepare);
@@ -244,6 +248,9 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
     /// <summary>Raised when the user triggers Import KRL.</summary>
     public event EventHandler? ImportKrlRequested;
 
+    /// <summary>Raised when the user triggers Import Scaled Toolpath.</summary>
+    public event EventHandler? ImportScaledToolpathRequested;
+
     /// <summary>Raised when the user triggers Export Polyline (Blender OBJ).</summary>
     public event EventHandler? ExportPolylineRequested;
 
@@ -255,6 +262,7 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
     private void SaveWorkspace()   => SaveWorkspaceRequested?.Invoke(this, EventArgs.Empty);
     private void SaveWorkspaceAs() => SaveWorkspaceAsRequested?.Invoke(this, EventArgs.Empty);
     private void ImportKrl() => ImportKrlRequested?.Invoke(this, EventArgs.Empty);
+    private void ImportScaledToolpath() => ImportScaledToolpathRequested?.Invoke(this, EventArgs.Empty);
     private void ExportPolyline() => ExportPolylineRequested?.Invoke(this, EventArgs.Empty);
     private void Undo()      => _undoRedo?.Undo();
     private void Redo()      => _undoRedo?.Redo();

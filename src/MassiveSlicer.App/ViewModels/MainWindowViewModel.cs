@@ -3632,6 +3632,60 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Imports a desktop gcode / .gcode.3mf that was sliced at
+    /// <paramref name="sourcePercent"/> of full size, scales it to 100%, and
+    /// drops it on the print bed. Select it, then Send to MassiveDRIVE.
+    /// </summary>
+    public bool ImportScaledToolpath(string path, float sourcePercent)
+    {
+        try
+        {
+            path = System.IO.Path.GetFullPath(path);
+            if (!System.IO.File.Exists(path))
+            {
+                Console.LogError($"[scaled] File not found: {path}");
+                return false;
+            }
+            if (!MassiveSlicer.Core.IO.ScaledGcodeImporter.IsSupportedPath(path))
+            {
+                Console.LogError($"[scaled] Use a .gcode or .gcode.3mf file: {System.IO.Path.GetFileName(path)}");
+                return false;
+            }
+
+            var off = System.Numerics.Vector3.Zero;
+            if (Viewport.ActiveCell is { } cell)
+            {
+                var m = cell.Bed.BaseMarkerWorld(cell.Robot.WorldPosition);
+                off = new System.Numerics.Vector3(m.X, m.Y, m.Z);
+            }
+            else
+                Console.Log("[scaled] No active cell — placing the toolpath at the bed origin.");
+
+            var text = MassiveSlicer.Core.IO.ScaledGcodeImporter.ReadGcodeText(path);
+            var result = MassiveSlicer.Core.IO.ScaledGcodeImporter.Import(text, sourcePercent, off);
+            if (result.MoveCount == 0)
+            {
+                Console.LogError($"[scaled] No print moves in {System.IO.Path.GetFileName(path)}.");
+                return false;
+            }
+
+            var name = $"Scaled: {System.IO.Path.GetFileNameWithoutExtension(path)}";
+            Viewport.AddImportedToolpath(result.Toolpath, name, result.BeadWidthMm, result.LayerHeightMm);
+            Console.Log(
+                $"[scaled] Imported {result.MoveCount} moves, {result.LayerCount} layers from " +
+                $"{System.IO.Path.GetFileName(path)} at {sourcePercent:0.##}% → ×{result.ScaleFactor:0.##}. " +
+                $"Size {result.SizeMm.X:0} × {result.SizeMm.Y:0} × {result.SizeMm.Z:0} mm. " +
+                "Select it in the outliner, then Send to MassiveDRIVE. The robot was not started.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.LogError($"[scaled] Failed to import {System.IO.Path.GetFileName(path)}: {ex.Message}");
+            return false;
+        }
+    }
+
     public bool ReloadOutlinerModel(MassiveSlicer.Viewport.Scene.SceneNode node)
     {
         var path = OutlinerModelOps.ResolveSourceFilePath(node);

@@ -258,6 +258,30 @@ public partial class MainWindow : Window
             vm.ImportKrlToolpath(path);
         };
 
+        vm.Toolbar.ImportScaledToolpathRequested += async (_, _) =>
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title          = "Import Scaled Toolpath",
+                AllowMultiple  = false,
+                FileTypeFilter =
+                [
+                    new("Desktop toolpath") { Patterns = ["*.gcode.3mf", "*.gcode", "*.gco", "*.3mf"] },
+                    new("All Files") { Patterns = ["*.*"] },
+                ],
+            });
+            if (files.Count == 0) return;
+
+            var path = files[0].TryGetLocalPath();
+            if (path is null) return;
+
+            var ask = new Views.ScaledToolpathImportWindow();
+            await ask.ShowDialog(this);
+            if (ask.SourcePercent is not float percent) return;
+
+            vm.ImportScaledToolpath(path, percent);
+        };
+
         vm.Toolbar.ExportPolylineRequested += async (_, _) =>
         {
             await Viewport.ExportPolylineAsync();

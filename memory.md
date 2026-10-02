@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-09-29** (Drive job upload over HTTP, no Samba login)
+Last updated: **2026-10-02** (File → Import Scaled Toolpath)
 
 ---
 
@@ -521,6 +521,12 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-10-02 — Import Scaled Toolpath
+
+- File → Import Scaled Toolpath… reads a desktop `.gcode` or `.gcode.3mf` (Bambu / Orca plate gcode).
+- Dialog asks the sliced percent (default 10). Geometry is scaled by 100 / that percent, centered on the print bed, so Send to MassiveDRIVE uses the full-size path.
+- Prime lines and nozzle wipes are not imported. Arcs are tessellated. The robot is not started.
 
 ### 2026-09-29 — Send to MassiveDRIVE does not ask for a Samba password
 

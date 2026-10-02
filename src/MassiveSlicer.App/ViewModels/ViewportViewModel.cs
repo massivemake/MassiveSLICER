@@ -7446,7 +7446,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// or rotary-bed group (same nesting as slice-generated toolpaths). Must be called on the UI thread.
     /// </summary>
     public void AddImportedToolpath(MassiveSlicer.Core.Models.Toolpath tp, string name, float beadWidth = 6f,
-        OutlinerToolpathKind? kind = null)
+        float layerHeight = 3f, OutlinerToolpathKind? kind = null)
     {
         var node = new SceneNode { Name = name, Selectable = true };
         RegisterToolpathInOutliner(node, ResolveToolpathParentOutlinerItem(),
@@ -7457,7 +7457,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             RawToolpath   = tp,
             Node          = node,
             BeadWidth     = beadWidth,
-            LayerHeight   = 3f,
+            LayerHeight   = layerHeight,
             MaterialColor = new System.Numerics.Vector3(0.95f, 0.95f, 0.95f),
         });
         NotifyRenderNeeded();
