@@ -526,7 +526,7 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 - File → Import Scaled Toolpath… reads a desktop `.gcode` or `.gcode.3mf` (Bambu / Orca plate gcode).
 - Dialog asks the sliced percent (default 10). Geometry is scaled by 100 / that percent, centered on the print bed, so Send to MassiveDRIVE uses the full-size path.
-- Prime lines and nozzle wipes are not imported. Arcs are tessellated. The robot is not started.
+- Prime lines, nozzle wipes, and the purge-chute hop before the first layer are not imported. Arcs are tessellated. The robot is not started.
 
 ### 2026-09-29 — E1 rail smoothing
 

@@ -73,6 +73,7 @@ public static class ScaledGcodeImporter
         float factor = 100f / sourcePercent;
 
         var raw = Parse(gcode);
+        TrimMachineTravels(raw);
         if (raw.Moves.Count == 0)
             return new Result(new Toolpath(), 0, 0, factor, 0, 0, Vector3.Zero);
 
@@ -166,6 +167,57 @@ public static class ScaledGcodeImporter
         bool ZHop,
         bool Brim,
         int Layer);
+
+    /// <summary>
+    /// Desktop slicers park the nozzle at a purge chute before the first layer.
+    /// That pose is not part of the print. Drop travels that leave the printed
+    /// outline, then start the path on the first extrusion.
+    /// </summary>
+    static void TrimMachineTravels(Raw raw)
+    {
+        if (raw.Moves.Count == 0)
+            return;
+
+        float minX = float.PositiveInfinity, minY = float.PositiveInfinity;
+        float maxX = float.NegativeInfinity, maxY = float.NegativeInfinity;
+        bool any = false;
+        foreach (var m in raw.Moves)
+        {
+            if (!m.Extrude) continue;
+            any = true;
+            Acc(m.From);
+            Acc(m.To);
+        }
+        if (!any)
+            return;
+
+        float margin = Math.Max(5f, raw.BeadWidthMm * 4f);
+        bool Outside(Vector3 p)
+            => p.X < minX - margin || p.X > maxX + margin
+            || p.Y < minY - margin || p.Y > maxY + margin;
+
+        raw.Moves.RemoveAll(m => !m.Extrude && (Outside(m.From) || Outside(m.To)));
+        while (raw.Moves.Count > 0 && !raw.Moves[0].Extrude)
+            raw.Moves.RemoveAt(0);
+
+        for (int i = 1; i < raw.Moves.Count; i++)
+        {
+            var prev = raw.Moves[i - 1];
+            var next = raw.Moves[i];
+            if ((next.From - prev.To).LengthSquared() <= 0.01f)
+                continue;
+            raw.Moves.Insert(i, new RawMove(prev.To, next.From, false, false, false, false, next.Layer));
+            i++;
+        }
+
+        void Acc(Vector3 p)
+        {
+            if (p.X < minX) minX = p.X;
+            if (p.Y < minY) minY = p.Y;
+            if (p.X > maxX) maxX = p.X;
+            if (p.Y > maxY) maxY = p.Y;
+        }
+    }
 
     static bool IsToolpathEnd(string s)
         => s.StartsWith("; MACHINE_END_GCODE_START", StringComparison.OrdinalIgnoreCase)

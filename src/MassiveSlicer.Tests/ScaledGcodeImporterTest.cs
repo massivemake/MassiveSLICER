@@ -89,6 +89,27 @@ public class ScaledGcodeImporterTest
     }
 
     [Fact]
+    public void Purge_chute_before_the_first_layer_is_not_imported()
+    {
+        const string gcode = """
+            G90
+            M83
+            G1 X20 Y-3 Z0.4 F12000
+            ; CHANGE_LAYER
+            ; Z_HEIGHT: 0.2
+            ; LAYER_HEIGHT: 0.2
+            G1 Z0.4
+            G1 X10 Y10 Z0.2
+            G1 X30 Y10 E0.4
+            G1 X30 Y30 E0.4
+            """;
+        var result = ScaledGcodeImporter.Import(gcode, 10f, Vector3.Zero);
+        var pts = result.Toolpath.Layers.SelectMany(l => l.Moves).SelectMany(m => new[] { m.From, m.To });
+        Assert.DoesNotContain(pts, p => MathF.Abs(p.Y + 130f) < 5f || p.Y < -200f);
+        Assert.Contains(result.Toolpath.Layers.SelectMany(l => l.Moves), m => m.Kind == MoveKind.Extrude);
+    }
+
+    [Fact]
     public void Real_gcode_3mf_scales_back_to_full_size_when_present()
     {
         var path = Environment.GetEnvironmentVariable("SCALED_GCODE_3MF");
