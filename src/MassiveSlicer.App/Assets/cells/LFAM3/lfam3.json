@@ -183,14 +183,14 @@
     "modelPath": "assets/cells/LFAM3/lfam3_HeatedBed.glb",
     "krlBaseIndex": 6,
     "basePos": [
-      1065.37,
-      1515.7982,
-      -873.757
+      1260.07,
+      1333.10,
+      -857.03
     ],
     "baseAbc": [
-      -0.087,
-      0.11306581,
-      0.093820065
+      -0.15,
+      0.21,
+      0.10
     ]
   },
   "t1TcpEnvelope": {
