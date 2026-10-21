@@ -384,6 +384,7 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.PbrMaterial)         or
                     nameof(ViewportViewModel.ShowExtrusionMoves)  or
                     nameof(ViewportViewModel.ShowTravelMoves)     or
+                    nameof(ViewportViewModel.ShowZHopMoves)       or
                     nameof(ViewportViewModel.ShowLightningMoves)  or
                     nameof(ViewportViewModel.ShowWipeMoves)       or
                     nameof(ViewportViewModel.ShowSeam)               or
@@ -804,7 +805,16 @@ public partial class ViewportView : UserControl
         // User imports/scans are exempt: they live UNDER the bed node (to ride E1).
         _renderer.SelectionFilter = n => vm.IsDevMode
             || vm.IsUserModelSceneNode(n)
+            || vm.IsTcpAttractorNode(n)
             || FindDevNodeRoot(n) is null;
+        vm.RequestSelectNode = node =>
+        {
+            _renderer.Select(node);
+            vm.SetOutlinerSelection(node);
+            if (vm.ActiveGizmoModeInternal == GizmoMode.None || vm.ActiveGizmoModeInternal == GizmoMode.Scale)
+                vm.ActiveGizmoModeInternal = GizmoMode.Translate;
+            GlCanvas.RequestNextFrameRendering();
+        };
         vm.DebugPickAtViewport = (fx, fy) => DebugPickAtViewport(vm, fx, fy);
         vm.OnSaveDevTransformRequested     = () => SaveDevTransform(vm);
         vm.OnSaveAllDevTransformsRequested = () => SaveAllDevTransforms(vm);
@@ -920,6 +930,7 @@ public partial class ViewportView : UserControl
             MirrorTypedTransformDelta(vm, node, old);
             ApplyBedRules(node, wasResting, BedEdit.Move);
             vm.ConstrainModifierPlanesUnder(node);
+            AfterTcpAttractorTransform(vm, node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SchedulePanelTransformUndo(vm, node, "Move", old);
@@ -952,6 +963,7 @@ public partial class ViewportView : UserControl
             MirrorTypedTransformDelta(vm, node, old);
             ApplyBedRules(node, wasResting, BedEdit.Rotate);
             vm.ConstrainModifierPlanesUnder(node);
+            AfterTcpAttractorTransform(vm, node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SchedulePanelTransformUndo(vm, node, "Rotate", old);
@@ -978,6 +990,8 @@ public partial class ViewportView : UserControl
             if (!isScale) MirrorTypedTransformDelta(vm, node, oldLocal);
             ApplyBedRules(node, wasRestingBefore, edit);
             vm.ConstrainModifierPlanesUnder(node);
+            if (vm.IsTcpAttractorNode(node))
+                vm.SyncTcpAttractorReadout(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             // remember: false — this refresh must not advance the undo baseline. Doing so left the
@@ -1010,11 +1024,17 @@ public partial class ViewportView : UserControl
                     vm.OnModelGeometryChanged?.Invoke();
                 }
             }
+            else if (vm.IsTcpAttractorNode(node))
+            {
+                // A move or a rotate of the handle changes where the extruder leans.
+                vm.OnModelGeometryChanged?.Invoke();
+            }
             SchedulePanelTransformUndo(vm, node, label, oldLocal);
         };
         vm.OnSelectionScaled = (sx, sy, sz) =>
         {
             if (_renderer.SelectedNode is not { } node) return;
+            if (vm.IsTcpAttractorNode(node)) return;
             if (node.Placement is not { } p) return;
             var old = node.LocalTransform;
             bool wasResting = IsRestingOnBed(node);
@@ -1057,7 +1077,10 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.FirstLayerHeight)
                                     or nameof(AdditiveSettingsViewModel.AdaptiveLayerHeight)
                                     or nameof(AdditiveSettingsViewModel.AdaptiveQuality)
-                                    or nameof(AdditiveSettingsViewModel.MinLayerHeight))
+                                    or nameof(AdditiveSettingsViewModel.MinLayerHeight)
+                                    or nameof(AdditiveSettingsViewModel.Method)
+                                    or nameof(AdditiveSettingsViewModel.TiltAngle)
+                                    or nameof(AdditiveSettingsViewModel.TiltAngleX))
                 {
                     if (additive.ShowLayerPreview)
                         _ = ComputeLayerPreviewAsync(vm);
@@ -1679,6 +1702,7 @@ public partial class ViewportView : UserControl
             _renderer.CavityWorldDistance     = vm.CavityWorldDistance;
             _renderer.ShowExtrusionMoves = vm.ShowExtrusionMoves;
             _renderer.ShowTravelMoves    = vm.ShowTravelMoves;
+            _renderer.ShowZHopMoves      = vm.ShowZHopMoves;
             _renderer.ShowLightningMoves = vm.ShowLightningMoves;
             _renderer.ShowWipeMoves      = vm.ShowWipeMoves;
             _renderer.ShowSeam           = vm.ShowSeam;
@@ -1883,7 +1907,7 @@ public partial class ViewportView : UserControl
                 GlCanvas.RequestNextFrameRendering();
 
             while (vm.PendingLayerPreview.TryDequeue(out var lp))
-                _renderer.SetLayerPreview(lp.zBounds, lp.heights);
+                _renderer.SetLayerPreview(lp.zBounds, lp.heights, lp.axis);
 
             while (vm.PendingModelRefresh.TryDequeue(out var refreshed))
             {
@@ -1942,6 +1966,8 @@ public partial class ViewportView : UserControl
             while (vm.PendingNodes.TryDequeue(out var incoming))
             {
                 MarkUserImportSubtree(incoming);
+                if (vm.IsTcpAttractorNode(incoming))
+                    RestoreTcpAttractorPick(incoming);
                 AttachUserImportToCell(incoming);
                 UploadPendingMeshes(incoming);
                 MarkUserImportSubtree(incoming);
@@ -2779,7 +2805,7 @@ public partial class ViewportView : UserControl
         var tcpLocal = ResolveIkTcpLocal(totalRoll);
         var (tcpA, tcpB, tcpC) = ResolveMillToolAbc(vm);
 
-        _ikSolver = new GltfNumericalIkSolver(
+        _ikSolver = new NewtonIkSolver(
             _fkController.RestPoses,
             _fkController.LiveChainRootTransform(),
             GetLiveRobrootWorldPos(),
@@ -3095,6 +3121,18 @@ public partial class ViewportView : UserControl
             AttachUserImportToCell(node, heated);
         }
 
+        foreach (var attractor in vm.TcpAttractors)
+        {
+            var node = attractor.Node;
+            if (slide)
+            {
+                var world = node.WorldTransform * tDelta;
+                node.Parent?.RemoveChild(node);
+                node.LocalTransform = world;
+            }
+            AttachUserImportToCell(node, heated);
+        }
+
         foreach (var tpItem in vm.EnumerateToolpathItems())
             ParkToolpathOnSceneRoot(tpItem.Node, delta);
 
@@ -3154,6 +3192,12 @@ public partial class ViewportView : UserControl
         {
             if (item.IsToolpath) continue; // GPU + node handled by SnapshotToolpathsForCellSwap
             var node = item.Node;
+            preserved.Add(new PreservedUserModel(node, node.WorldTransform));
+            node.Parent?.RemoveChild(node);
+        }
+        foreach (var attractor in vm.TcpAttractors)
+        {
+            var node = attractor.Node;
             preserved.Add(new PreservedUserModel(node, node.WorldTransform));
             node.Parent?.RemoveChild(node);
         }
@@ -4750,6 +4794,13 @@ public partial class ViewportView : UserControl
                         // (no re-slice — the adjustment lives on the toolpath timeline).
                         AddTcpKeyframeAtCurrentIndex(vmGz2);
                     }
+                    else if (_renderer.SelectedNode is { } tcpNode && vmGz2.IsTcpAttractorNode(tcpNode))
+                    {
+                        // The sphere and the cylinder are the effect. Moving or aiming either one
+                        // changes the extruder angle on the next slice.
+                        vmGz2.SyncTcpAttractorReadout(tcpNode);
+                        vmGz2.OnModelGeometryChanged?.Invoke();
+                    }
                     else if (scaled || tilted)
                     {
                         // Scale or a real WORLD tilt (not a move, not a Z-spin, not a rotary→heated
@@ -5417,7 +5468,7 @@ public partial class ViewportView : UserControl
         return mapped;
     }
 
-    private static SliceSettings BuildSliceSettings(AdditiveSettingsViewModel? additive)
+    private static SliceSettings BuildSliceSettings(AdditiveSettingsViewModel? additive, float bedZ = 0f)
     {
         if (additive is not { } s) return new SliceSettings();
         var slicingMode = s.SlicingMode == "Surface" ? SlicingMode.Surface : SlicingMode.Normal;
@@ -5427,6 +5478,7 @@ public partial class ViewportView : UserControl
             LayerHeight      = (float)s.LayerHeight,
             FirstLayerHeight = (float)s.FirstLayerHeight,
             BeadWidth        = (float)s.BeadWidth,
+            WallCount        = s.WallCount,
             PrintSpeedMps    = (float)(s.PrintSpeed / 1000.0),
             TravelSpeed      = (float)(s.TravelSpeed / 1000.0),
             ApproachZ        = (float)s.ApproachZ,
@@ -5522,11 +5574,13 @@ public partial class ViewportView : UserControl
             LightningPreferInteriorMouths  = s.LightningPreferInteriorMouths,
             LightningTargetSupportSelections = s.LightningTargetSupportSelections,
             ZHopMm          = (float)s.ZHopMm,
+            BedZ            = bedZ,
             WipeMode        = s.WipeModeDisplay switch
             {
                 "Retrace"        => WipeMode.Retrace,
                 "Same-Direction" => WipeMode.SameDirection,
                 "Natural" or "Normal" => WipeMode.SameDirection,
+                "90-Degree" or "90 Degree" or "Perpendicular" => WipeMode.Perpendicular,
                 _                => WipeMode.None,
             },
             WipeLengthMm = (float)s.WipeLengthMm,
@@ -5641,6 +5695,8 @@ public partial class ViewportView : UserControl
             {
                 SliceMethod.Curved   => "Curved (Sweep): computing boundaries and layers…",
                 SliceMethod.Geodesic => "Geodesic: computing surface-distance layers…",
+                SliceMethod.SignedDistance => "Signed Distance: building offset shells…",
+                SliceMethod.ContinuousPlanar => "Continuous Planar Field: stitching one curve per layer…",
                 SliceMethod.Angled   => "Angled: intersecting tilted planes…",
                 SliceMethod.MultiPlanar => "Multi-Planar: interpolating guide planes…",
                 _                    => "Planar: intersecting layers…",
@@ -5660,6 +5716,8 @@ public partial class ViewportView : UserControl
             else if (method == SliceMethod.MultiPlanar) tp = AngledPlanarSlicer.SliceMultiPlanar(flatMeshes, settings);
             else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings, SlicePct);
             else if (method == SliceMethod.Curved)   tp = CurvedSlicer.Slice(flatMeshes, settings);
+            else if (method == SliceMethod.SignedDistance) tp = SignedDistanceSlicer.Slice(flatMeshes, settings, SlicePct);
+            else if (method == SliceMethod.ContinuousPlanar) tp = ContinuousPlanarSlicer.Slice(flatMeshes, settings, SlicePct);
             else                                     tp = PlanarSlicer.Slice(flatMeshes, settings, SlicePct);
             ThrowIfCancel();
             int lightningMoves = 0;
@@ -5723,6 +5781,7 @@ public partial class ViewportView : UserControl
             ThrowIfCancel();
 
             var smoothed = OrientationSmoother.Apply(toSmooth, settings);
+            smoothed = TcpAttractorEffect.Apply(smoothed, settings.TcpAttractors);
             SliceLogger.Step("OrientationSmoother done");
 
             ThermalSimulator.StampLayerTemps(smoothed, settings);
@@ -5745,12 +5804,15 @@ public partial class ViewportView : UserControl
 
     private Toolpath RebuildProcessedToolpath(Toolpath raw, AdditiveSettingsViewModel s)
     {
-        var settings = BuildSliceSettings(s);
+        var settings = BuildSliceSettings(s, _renderer.BedZ);
+        if (DataContext is ViewportViewModel tcpVm)
+            ApplyTcpAttractorSettings(tcpVm, settings);
         var withLayerSpeed = LayerSpeedPostProcessor.Apply(ToolpathClone.Copy(raw), settings);
         var toSmooth       = ToolpathClone.Copy(withLayerSpeed);
         OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength, settings.OrientationMaxTiltDeg, settings.FirstLayerZeroTilt);
             LayerLeanOrienter.ApplyInPlace(toSmooth, settings.LayerLeanStrength, settings.LayerLeanMaxTiltDeg, settings.BeadWidth);
         var smoothed = OrientationSmoother.Apply(toSmooth, settings);
+        smoothed = TcpAttractorEffect.Apply(smoothed, settings.TcpAttractors);
         ThermalSimulator.StampLayerTemps(smoothed, settings);
         return smoothed;
     }
@@ -6105,6 +6167,8 @@ public partial class ViewportView : UserControl
     {
         SliceMethod.Curved   => "Curved (Sweep)",
         SliceMethod.Geodesic => "Geodesic",
+        SliceMethod.SignedDistance => "Signed Distance",
+        SliceMethod.ContinuousPlanar => "Continuous Planar Field",
         SliceMethod.Angled   => "Angled",
         _                    => "Planar",
     };
@@ -6176,8 +6240,9 @@ public partial class ViewportView : UserControl
 
             cancel.ThrowIfCancellationRequested();
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
-            var settings = BuildSliceSettings(vm.AdditiveSettings);
+            var settings = BuildSliceSettings(vm.AdditiveSettings, _renderer.BedZ);
             ApplyEffectorSettings(vm, settings);
+            ApplyTcpAttractorSettings(vm, settings);
             SetSliceStatus(vm, $"{SliceMethodLabel(method)}: slicing…");
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
                 meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
@@ -6361,6 +6426,10 @@ public partial class ViewportView : UserControl
             ? MassiveSlicer.Core.Models.EffectorMode.Amplify
             : MassiveSlicer.Core.Models.EffectorMode.Erase;
     }
+
+    /// <summary>Snapshots TCP Adjust handles on the UI thread, before the background slice.</summary>
+    private static void ApplyTcpAttractorSettings(ViewportViewModel vm, SliceSettings settings)
+        => settings.TcpAttractors = vm.CaptureTcpAttractors();
 
     private static MassiveSlicer.Core.Models.MillSettings BuildMillSettings(SubtractiveSettingsViewModel s) => new()
     {
@@ -7065,31 +7134,25 @@ public partial class ViewportView : UserControl
     private bool _realtimeSlicePending;   // need another pass after current/cancelled slice
     private bool _cellSwapSuppressRealtime; // keep baked toolpath while LFAM2→LFAM3 remaps
     private CancellationTokenSource? _sliceCts; // cancels ComputeToolpathAsync
-    /// <summary>Mesh we already auto-set shop wipe for (once per file / source item).</summary>
-    private object? _travelWipeAppliedFor;
 
     /// <summary>
     /// After a successful print slice: if the path has travel hops, set Wipe to
     /// Same-Direction / 35 mm / −1 mm Z smash / 600 mm/s. Posted so we do not cancel this
-    /// finishing slice. Once per source mesh so a later Retrace edit is kept.
+    /// finishing slice. Once per source mesh so a later Retrace edit is kept. A model
+    /// restored from a .mass is already claimed, so reopen does not stamp the shop recipe
+    /// over the saved ramp, length, mode, and speed.
     /// </summary>
     void QueueShopWipeForTravels(Toolpath toolpath, object? sourceKey)
     {
         if (sourceKey is null) return;
-        if (ReferenceEquals(_travelWipeAppliedFor, sourceKey)) return;
         if (!toolpath.HasTravelMoves()) return;
 
         Dispatcher.UIThread.Post(() =>
         {
             if (DataContext is not ViewportViewModel live) return;
             if (live.AdditiveSettings is not { } add) return;
-            if (ReferenceEquals(_travelWipeAppliedFor, sourceKey)) return;
-            if (!add.ApplyShopWipeForTravels())
-            {
-                _travelWipeAppliedFor = sourceKey;
-                return;
-            }
-            _travelWipeAppliedFor = sourceKey;
+            if (!live.TryClaimShopWipe(sourceKey)) return;
+            add.ApplyShopWipeForTravels();
             // Wipe is now in RealtimeSliceProps; PropertyChanged schedules the rebuild.
         }, DispatcherPriority.Background);
     }
@@ -7099,6 +7162,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.LayerHeight),
         nameof(AdditiveSettingsViewModel.FirstLayerHeight),
         nameof(AdditiveSettingsViewModel.BeadWidth),
+        nameof(AdditiveSettingsViewModel.WallCount),
         nameof(AdditiveSettingsViewModel.Method),
         nameof(AdditiveSettingsViewModel.MethodDisplayName),
         nameof(AdditiveSettingsViewModel.SlicingMode),
@@ -7559,8 +7623,9 @@ public partial class ViewportView : UserControl
             cancel.ThrowIfCancellationRequested();
             // Build settings NOW so this run always uses latest UI values.
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
-            var settings = BuildSliceSettings(vm.AdditiveSettings);
+            var settings = BuildSliceSettings(vm.AdditiveSettings, _renderer.BedZ);
             ApplyEffectorSettings(vm, settings);
+            ApplyTcpAttractorSettings(vm, settings);
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
                 meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
                 pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct),
@@ -7682,11 +7747,16 @@ public partial class ViewportView : UserControl
         float minH     = (float)s.MinLayerHeight;
         float quality  = (float)s.AdaptiveQuality;
         bool  adaptive = s.AdaptiveLayerHeight && s.ShowAdaptiveLayerHeight;
+        // Bands follow the slice plane. UnitZ keeps the planar heatmap on world Z.
+        var axisN = s.Method == SliceMethod.Angled
+            ? TiltOptimizer.TiltToDirection((float)s.TiltAngleX, (float)s.TiltAngle)
+            : NVec3.UnitZ;
+        var axisTk = new Vector3(axisN.X, axisN.Y, axisN.Z);
 
         var result = await Task.Run(() =>
         {
             var flatMeshes = new List<NVec3[]>(meshSnapshots.Count);
-            float zMin = float.MaxValue, zMax = float.MinValue;
+            float tMin = float.MaxValue, tMax = float.MinValue;
 
             foreach (var (positions, indices, world) in meshSnapshots)
             {
@@ -7703,32 +7773,37 @@ public partial class ViewportView : UserControl
                     for (int i = 0; i < indices.Length; i++)
                         flat[i] = TransformPoint(positions[indices[i]], world);
                 }
-                foreach (var v in flat) { zMin = MathF.Min(zMin, v.Z); zMax = MathF.Max(zMax, v.Z); }
+                foreach (var v in flat)
+                {
+                    float t = NVec3.Dot(v, axisN);
+                    if (t < tMin) tMin = t;
+                    if (t > tMax) tMax = t;
+                }
                 flatMeshes.Add(flat);
             }
 
-            if (zMax <= zMin + 1e-4f) return ((float[])[], (float[])[]);
+            if (tMax <= tMin + 1e-4f) return ((float[])[], (float[])[]);
 
-            float[] zPositions = adaptive
-                ? AdaptiveLayerHeights.ComputeZPositions(flatMeshes, zMin, zMax, firstH, minH, layerH, quality)
-                : BuildUniformZPositions(zMin, zMax, firstH, layerH);
+            float[] positionsAlong = adaptive
+                ? AdaptiveLayerHeights.ComputePositions(flatMeshes, axisN, tMin, tMax, firstH, minH, layerH, quality)
+                : BuildUniformZPositions(tMin, tMax, firstH, layerH);
 
-            if (zPositions.Length == 0) return ((float[])[], (float[])[]);
+            if (positionsAlong.Length == 0) return ((float[])[], (float[])[]);
 
-            var bounds  = new float[zPositions.Length + 1];
-            var heights = new float[zPositions.Length];
-            bounds[0] = zMin;
-            for (int i = 0; i < zPositions.Length; i++)
+            var bounds  = new float[positionsAlong.Length + 1];
+            var heights = new float[positionsAlong.Length];
+            bounds[0] = tMin;
+            for (int i = 0; i < positionsAlong.Length; i++)
             {
-                bounds[i + 1] = zPositions[i];
-                heights[i]    = zPositions[i] - (i == 0 ? zMin : zPositions[i - 1]);
+                bounds[i + 1] = positionsAlong[i];
+                heights[i]    = positionsAlong[i] - (i == 0 ? tMin : positionsAlong[i - 1]);
             }
             return (bounds, heights);
         });
 
         if (result.Item1.Length >= 2)
         {
-            vm.PendingLayerPreview.Enqueue(result);
+            vm.PendingLayerPreview.Enqueue((result.Item1, result.Item2, axisTk));
             GlCanvas.RequestNextFrameRendering();
         }
     }
@@ -7770,7 +7845,7 @@ public partial class ViewportView : UserControl
             return;
         }
 
-        var settings = BuildSliceSettings(s);
+        var settings = BuildSliceSettings(s, _renderer.BedZ);
         var result = ThermalSimulator.Simulate(pair.Value, settings);
 
         var sb = new System.Text.StringBuilder();
@@ -8550,8 +8625,9 @@ public partial class ViewportView : UserControl
                 };
 
                 var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
-                var settings = BuildSliceSettings(vm.AdditiveSettings);
+                var settings = BuildSliceSettings(vm.AdditiveSettings, _renderer.BedZ);
                 ApplyEffectorSettings(vm, settings);
+                ApplyTcpAttractorSettings(vm, settings);
                 SetSliceStatus(vm, $"{SliceMethodLabel(method)}: slicing \"{node.Name}\"…");
 
                 Toolpath smoothedToolpath, rawToolpath;
@@ -8886,7 +8962,32 @@ public partial class ViewportView : UserControl
     /// already planted planted. <paramref name="wasResting"/> must be sampled BEFORE the edit.
     /// </summary>
     private void ApplyBedRules(SceneNode node, bool wasResting, BedEdit edit)
-        => SettleOnBed(node, alsoLower: wasResting && KeepOnBedEnabled(edit));
+    {
+        if (DataContext is ViewportViewModel vm && vm.IsTcpAttractorNode(node)) return;
+        SettleOnBed(node, alsoLower: wasResting && KeepOnBedEnabled(edit));
+    }
+
+    /// <summary>A moved or aimed TCP handle updates the lean readout and reslices.</summary>
+    private static void AfterTcpAttractorTransform(ViewportViewModel vm, SceneNode node)
+    {
+        if (!vm.IsTcpAttractorNode(node)) return;
+        vm.SyncTcpAttractorReadout(node);
+        vm.OnModelGeometryChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// MarkUserImportSubtree turns every child selectable. The influence sphere must stay
+    /// unpickable so a click lands on the extruder cylinder.
+    /// </summary>
+    private static void RestoreTcpAttractorPick(SceneNode root)
+    {
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (ReferenceEquals(n, root)) continue;
+            n.Selectable = false;
+            n.PickIgnore = true;
+        }
+    }
 
     /// <summary>
     /// Lowest world Z of <paramref name="node"/>'s real geometry together with anything linked to it.
@@ -8931,7 +9032,8 @@ public partial class ViewportView : UserControl
     private bool BedClampApplies(SceneNode node)
     {
         if (IsToolNodeSelected()) return false;
-        if (DataContext is ViewportViewModel vm && vm.IsModifierNode(node)) return false;
+        if (DataContext is ViewportViewModel vm && (vm.IsModifierNode(node) || vm.IsTcpAttractorNode(node)))
+            return false;
         return true;
     }
 
@@ -9211,7 +9313,7 @@ public partial class ViewportView : UserControl
         {
             var userHit = Picker.PickWhere(
                 ray, _renderer.SceneRoot,
-                n => vm.IsUserModelSceneNode(n) || vm.IsEffectorNode(n)
+                n => vm.IsUserModelSceneNode(n) || vm.IsEffectorNode(n) || vm.IsTcpAttractorNode(n)
                      || vm.IsModifierNode(n) || vm.IsModifiersGroupNode(n), out _);
             if (userHit is not null)
                 return Picker.FindSelectableRoot(userHit, _renderer.SceneRoot);
@@ -9227,7 +9329,7 @@ public partial class ViewportView : UserControl
             node = userRoot;
 
         bool isUserContent = node is not null
-            && (vm.IsUserModelSceneNode(node) || vm.IsEffectorNode(node)
+            && (vm.IsUserModelSceneNode(node) || vm.IsEffectorNode(node) || vm.IsTcpAttractorNode(node)
                 || vm.IsModifierNode(node) || vm.IsModifiersGroupNode(node));
 
         // Dev mode: registered environment props (print bed, stands, docks) are pickable —
@@ -9600,6 +9702,7 @@ public partial class ViewportView : UserControl
                 _                => BedEdit.Move,
             };
             ApplyBedRules(node, _kbWasRestingAtStart, bedEdit);
+            AfterTcpAttractorTransform(vmCb, node);
 
             RecordTransformUndo(vmCb, node, _kbTransformInitialLocal, node.LocalTransform, TransformUndoLabel(_kbTransformOp));
         }
@@ -9701,7 +9804,7 @@ public partial class ViewportView : UserControl
         for (var c = meshLeaf; c is not null; c = c.Parent)
         {
             if (vm.FindUserMeshOutlinerItem(c) is { } item
-                && !item.IsToolpath && !item.IsEffector
+                && !item.IsToolpath && !item.IsEffector && !item.IsTcpAttractor
                 && !item.IsModifier && !item.IsModifiersGroup)
             {
                 root = item.Node;
@@ -14609,6 +14712,12 @@ public partial class ViewportView : UserControl
             // have their own toggle lifecycle (pattern panel buttons).
             var userItem = vm.FindUserMeshOutlinerItem(selected);
             if (userItem is null || userItem.IsEffector) return false;
+            if (userItem.IsTcpAttractor)
+            {
+                if (vm.FindTcpAttractor(selected) is { } attractor)
+                    vm.RemoveTcpAttractor(attractor);
+                return true;
+            }
             if (IsToolNodeSelected() || IsDevNode(selected)) return false;
             node = userItem.Node;
         }
@@ -17111,6 +17220,8 @@ public partial class ViewportView : UserControl
         if (IsToolNodeSelected() && _renderer.GizmoMode == GizmoMode.Scale) return;
         // A modifier plane isn't a solid part — scaling it means nothing (no field for it).
         if (DataContext is ViewportViewModel vmScale && vmScale.IsModifierNode(node)
+            && _renderer.GizmoMode == GizmoMode.Scale) return;
+        if (DataContext is ViewportViewModel vmTcpScale && vmTcpScale.IsTcpAttractorNode(node)
             && _renderer.GizmoMode == GizmoMode.Scale) return;
         _gizmoDragInitialLocal     = node.LocalTransform;
         _gizmoDragInitialWorld     = node.WorldTransform;

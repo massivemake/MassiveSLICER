@@ -405,9 +405,9 @@ public sealed class MassiveDriveJobV2Test
             return;
 
         var cell = CellLoader.Load(path);
-        Assert.Equal("http://192.168.0.173:8080", cell.MassiveDriveUrl);
+        Assert.Equal("http://192.168.0.75:8080", cell.MassiveDriveUrl);
         Assert.Equal("lfam2", cell.MassiveDriveCellId);
-        Assert.Contains("192.168.0.173", cell.MassiveDriveJobsRoot, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("192.168.0.75", cell.MassiveDriveJobsRoot, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("MassiveDRIVE-LFAM2", cell.MassiveDriveJobsRoot, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("jobs", cell.MassiveDriveJobsRoot, StringComparison.OrdinalIgnoreCase);
     }

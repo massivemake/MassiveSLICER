@@ -101,7 +101,7 @@ public static class LayerSpeedPostProcessor
         var notes = new Dictionary<int, float>();
         if (string.IsNullOrWhiteSpace(text)) return notes;
 
-        foreach (var raw in text.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries))
+        foreach (var raw in text.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
         {
             var token = raw.Trim();
             if (token.Length == 0) continue;

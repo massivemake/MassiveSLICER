@@ -33,6 +33,12 @@ public sealed class WorkspaceDocument
     /// <summary>Snapshot of user settings at save time.</summary>
     public AppPreferences Settings { get; set; } = new();
 
+    /// <summary>
+    /// TCP Adjust attractors (sphere + extruder cylinder). Job data, not prefs.json
+    /// and not the cell. Empty on files saved before this existed.
+    /// </summary>
+    public List<TcpAttractorPose> TcpAttractors { get; set; } = [];
+
     /// <summary>ERP project/lead this workspace is attached to, or null.</summary>
     public ErpAttachment? Erp { get; set; }
 }
@@ -340,6 +346,18 @@ public sealed class ErpAttachment
     public string? ElementName { get; set; }
 }
 
+/// <summary>
+/// One geometry node's pose under a model root. <see cref="Path"/> is the child-index
+/// route from that root (<c>"0"</c>, <c>"0/1"</c>). The root's own matrix lives on the entry.
+/// </summary>
+public sealed class WorkspaceNodePose
+{
+    public string Path { get; set; } = "";
+
+    /// <summary>Row-major 4×4 local transform (16 floats: M11–M44).</summary>
+    public float[] LocalTransform { get; set; } = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+}
+
 /// <summary>One outliner root model entry.</summary>
 public sealed class WorkspaceModelEntry
 {
@@ -394,6 +412,15 @@ public sealed class WorkspaceModelEntry
     /// reopening a file quietly redefines 100% as "whatever size it was saved at".
     /// </remarks>
     public float[]? ImportScale { get; set; }
+
+    /// <summary>
+    /// Local transforms of geometry nodes under this root, keyed by child-index path
+    /// (<c>"0/1"</c>). Lay on Face and the gizmo edit the mesh leaf, not the outliner root.
+    /// The root matrix above does not include those, and reloading the STEP rebuilds the
+    /// leaf at its file pose, so without this list the flip and the move disappear.
+    /// Empty on files saved before child poses existed.
+    /// </summary>
+    public List<WorkspaceNodePose> ChildPoses { get; set; } = [];
 
     /// <summary>Toolpaths generated from this model (child outliner entries).</summary>
     public List<WorkspaceToolpathEntry> Toolpaths { get; set; } = [];

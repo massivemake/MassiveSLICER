@@ -4,11 +4,13 @@ using MassiveSlicer.Core.Models;
 namespace MassiveSlicer.Core.Slicing.Effects;
 
 /// <summary>
-/// Spiral / vase mode: ramps each layer's closed contour continuously in Z across its
-/// arc length, so the print becomes one uninterrupted helix — no stepped layer seam.
+/// Spiral / vase mode: ramps each layer's closed contour along the slicing-plane normal
+/// across its arc length, so the print becomes one uninterrupted helix — no stepped
+/// layer seam. On a horizontal slice that ramp is world Z. On an angled slice the
+/// contour stays on its tilted plane and steps toward the next one.
 /// Runs after <see cref="PatternEffect"/> (patterns are already finely segmented, so
 /// the ramp stays smooth). Only closed chains spiral; open chains (surface-mode walls
-/// that don't loop) keep their flat layer Z, as a height ramp would tear their ends.
+/// that don't loop) keep their slice position, as a height ramp would tear their ends.
 /// </summary>
 public static class SpiralizeEffect
 {
@@ -28,15 +30,17 @@ public static class SpiralizeEffect
         for (int li = 0; li < toolpath.Layers.Count; li++)
         {
             var layer = toolpath.Layers[li];
-            // Ramp to exactly where the next layer starts. Layer.Height is the gap
-            // BELOW a layer (its Z minus the previous layer's Z), so the rise to the
-            // layer above is the NEXT layer's height, not this one's. They only agree
-            // when every layer is the same thickness — under adaptive or support-driven
-            // heights, using this layer's leaves a gap beneath every thinned layer and
-            // drives the ramp through the one above it.
-            float height = li + 1 < toolpath.Layers.Count
-                ? MathF.Max(0f, toolpath.Layers[li + 1].Z - layer.Z)
+            // Ramp along the slicing plane's normal by the gap to the next plane.
+            // Layer.Z is only a label: planar stores the layer's world Z, angled stores
+            // the plane's Z at the world origin (planeD / n.Z). Writing that label back
+            // onto every point flattens a tilted contour onto a horizontal line and
+            // walks each layer off the part. Measure the gap from the points themselves
+            // (n · p). On a horizontal layer that is still next.Z - this.Z.
+            var n = UnitNormal(layer);
+            float along = li + 1 < toolpath.Layers.Count
+                ? MeanPlaneDistance(toolpath.Layers[li + 1], n) - MeanPlaneDistance(layer, n)
                 : layer.Height;
+            if (along < 0f) along = 0f;
 
             var newLayer = new ToolpathLayer(layer.Index, layer.Z)
             {
@@ -45,7 +49,7 @@ public static class SpiralizeEffect
             };
             newLayer.Contours.AddRange(layer.Contours);
 
-            if (height <= 0f)
+            if (along <= 0f)
             {
                 foreach (var m in layer.Moves) newLayer.Moves.Add(m);
                 result.Layers.Add(newLayer);
@@ -88,20 +92,21 @@ public static class SpiralizeEffect
                 }
                 else
                 {
-                    // Ramp Z linearly with arc length: loop start at layer Z, loop end
-                    // one layer height up — meeting the next layer's start exactly.
+                    // Ramp along the plane normal with arc length. A horizontal layer
+                    // still rises in world Z. A tilted layer stays on its plane and
+                    // steps toward the next one, instead of being dropped onto layer.Z.
                     float cum = 0f;
                     for (int k = start; k < j; k++)
                     {
                         var mv  = moves[k];
                         float len = Vector3.Distance(mv.From, mv.To);
-                        float z0  = layer.Z + height * (cum / total);
-                        float z1  = layer.Z + height * ((cum + len) / total);
+                        float f0  = cum / total;
+                        float f1  = (cum + len) / total;
                         cum += len;
                         newLayer.Moves.Add(mv with
                         {
-                            From = new Vector3(mv.From.X, mv.From.Y, z0),
-                            To   = new Vector3(mv.To.X,   mv.To.Y,   z1),
+                            From = mv.From + n * (along * f0),
+                            To   = mv.To   + n * (along * f1),
                         });
                     }
                 }
@@ -111,6 +116,28 @@ public static class SpiralizeEffect
         }
         RejoinConnectors(result);
         return result;
+    }
+
+    static Vector3 UnitNormal(ToolpathLayer layer)
+    {
+        var n = layer.PlaneNormal;
+        float len2 = n.LengthSquared();
+        return len2 < 1e-8f ? Vector3.UnitZ : n / MathF.Sqrt(len2);
+    }
+
+    /// <summary>Mean signed distance of this layer's extrude mids from the origin, along <paramref name="n"/>.</summary>
+    static float MeanPlaneDistance(ToolpathLayer layer, Vector3 n)
+    {
+        double sum = 0;
+        int count = 0;
+        foreach (var m in layer.Moves)
+        {
+            if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
+            var mid = (m.From + m.To) * 0.5f;
+            sum += Vector3.Dot(mid, n);
+            if (++count >= 24) break;
+        }
+        return count > 0 ? (float)(sum / count) : layer.Z * n.Z;
     }
 
     /// <summary>

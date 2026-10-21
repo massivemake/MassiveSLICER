@@ -49,6 +49,7 @@ internal static class WorkspaceService
             Camera         = viewport.GetCameraState?.Invoke(),
             RightPanelTab  = rightPanel.ActiveTab.ToString(),
             Settings       = ClonePreferences(prefs),
+            TcpAttractors  = viewport.CaptureTcpAttractorPoses(),
             Erp            = viewport.Erp.CurrentAttachment,
             UiSession      = CaptureUiSession(viewport),
         };
@@ -76,6 +77,7 @@ internal static class WorkspaceService
                 // rather than anything the current transform records.
                 PivotOrigin    = node.Placement is { } pl ? [pl.Origin.X, pl.Origin.Y, pl.Origin.Z] : null,
                 ImportScale    = node.ImportScale is { } isc ? [isc.X, isc.Y, isc.Z] : null,
+                ChildPoses     = CollectChildPoses(node),
             };
 
             // EnumerateUserModelItems() flattens Applied-Pieces groups (see its own comment) so
@@ -91,8 +93,9 @@ internal static class WorkspaceService
             // Always embed a portable copy of the mesh beside the .mass (workspace_meshes/)
             // so the workspace opens on any machine, even when SourcePath is an absolute
             // path from the machine it was saved on. Load prefers SourcePath, then a file
-            // beside the .mass, then this embedded copy.
-            if (TryGetMesh(node) is { } mesh)
+            // beside the .mass, then this embedded copy. Vertices are written in the root's
+            // space so a leaf that was flipped still reopens when the STEP file is gone.
+            if (MeshInRootSpace(node) is { } mesh)
             {
                 string fileName = $"{Guid.NewGuid():N}.stl";
                 string meshPath = Path.Combine(meshDir, fileName);
@@ -189,7 +192,7 @@ internal static class WorkspaceService
                 entry.SourcePath = src;
 
             // Prefer embedding the meshable scan so the .mass reloads without the Zivid SDK.
-            if (TryGetMesh(node) is { } mesh)
+            if (MeshInRootSpace(node) is { } mesh)
             {
                 string fileName = $"scan_{Guid.NewGuid():N}.stl";
                 string meshPath = Path.Combine(meshDir, fileName);
@@ -390,6 +393,9 @@ internal static class WorkspaceService
                 node.Name         = entry.Name;
                 node.Visible      = entry.Visible;
                 node.LayerPreview = entry.LayerPreview;
+                // Before parenting. Child locals are parent-relative; the root matrix is the
+                // saved world pose and the rotary attach converts only the root.
+                ApplyChildPoses(node, entry.ChildPoses);
                 if (zdfPath is not null)
                     node.SourceFilePath = zdfPath;
                 else if (entry.SourcePath is { } sp && File.Exists(sp))
@@ -458,6 +464,10 @@ internal static class WorkspaceService
                 viewport.NotifyRenderNeeded();
                 continue;
             }
+
+            // The next slice must not snap this part back to the shop wipe recipe.
+            // The file already stored the mode, length, ramp, and speed.
+            viewport.KeepSavedWipe(parentItem);
 
             foreach (var tpEntry in entry.Toolpaths)
             {
@@ -539,6 +549,94 @@ internal static class WorkspaceService
             if (n.Mesh?.PickingData is { } gpu) return gpu;
         }
         return null;
+    }
+
+    /// <summary>
+    /// The first mesh under <paramref name="root"/>, with vertices moved into that root's
+    /// local space. A STEP leaf keeps its own transform; copying the raw vertex buffer
+    /// would drop the lay-flat rotation the moment the sidecar is the only mesh available.
+    /// </summary>
+    internal static MeshData? MeshInRootSpace(SceneNode root)
+    {
+        foreach (var n in root.SelfAndDescendants())
+        {
+            MeshData? src = n.PendingMesh ?? n.Mesh?.PickingData;
+            if (src is null) continue;
+            if (ReferenceEquals(n, root)) return src;
+
+            var rootWorld = root.WorldTransform;
+            if (MathF.Abs(rootWorld.Determinant) < 1e-12f) return src;
+            Matrix4.Invert(rootWorld, out var invRoot);
+            var toRoot = n.WorldTransform * invRoot;
+            if (NearlyIdentity(toRoot)) return src;
+
+            var pos = new Vector3[src.Positions.Length];
+            for (int i = 0; i < pos.Length; i++)
+                pos[i] = Vector3.TransformPosition(src.Positions[i], toRoot);
+            var nrm = src.Normals.Length == pos.Length ? src.Normals : new Vector3[pos.Length];
+            return new MeshData(pos, nrm, src.Indices, src.Name, src.BaseColor, src.Metallic, src.Roughness);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Local matrix of every geometry node under <paramref name="root"/>. Index paths stay
+    /// valid across a reload of the same file because imported children are built first and
+    /// authoring groups (modifiers) are appended after them and skipped here.
+    /// </summary>
+    internal static List<WorkspaceNodePose> CollectChildPoses(SceneNode root)
+    {
+        var list = new List<WorkspaceNodePose>();
+        void Walk(SceneNode n, string prefix)
+        {
+            for (int i = 0; i < n.Children.Count; i++)
+            {
+                var child = n.Children[i];
+                if (child.IsAuthoringOverlay) continue;
+                string path = prefix.Length == 0 ? i.ToString() : prefix + "/" + i;
+                list.Add(new WorkspaceNodePose
+                {
+                    Path = path,
+                    LocalTransform = ToArray(child.LocalTransform),
+                });
+                Walk(child, path);
+            }
+        }
+        Walk(root, "");
+        return list;
+    }
+
+    /// <summary>Writes saved leaf poses back onto a freshly loaded hierarchy. Missing paths are skipped.</summary>
+    internal static void ApplyChildPoses(SceneNode root, IReadOnlyList<WorkspaceNodePose>? poses)
+    {
+        if (poses is null || poses.Count == 0) return;
+        foreach (var pose in poses)
+        {
+            if (FindByIndexPath(root, pose.Path) is not { } node) continue;
+            node.LocalTransform = FromArray(pose.LocalTransform);
+        }
+    }
+
+    private static SceneNode? FindByIndexPath(SceneNode root, string path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        var current = root;
+        foreach (var part in path.Split('/'))
+        {
+            if (!int.TryParse(part, out int index) || index < 0 || index >= current.Children.Count)
+                return null;
+            current = current.Children[index];
+        }
+        return current;
+    }
+
+    private static bool NearlyIdentity(Matrix4 m)
+    {
+        var id = Matrix4.Identity;
+        for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++)
+            if (MathF.Abs(m[r, c] - id[r, c]) > 1e-5f) return false;
+        return true;
     }
 
     internal static bool IsZdfPath(string path)

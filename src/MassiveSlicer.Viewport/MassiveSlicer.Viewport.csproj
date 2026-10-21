@@ -25,6 +25,10 @@
     <Compile Remove="Loading\OcctUiSuppressor.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="MassiveSlicer.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework Condition="$([MSBuild]::IsOSPlatform('Windows'))">net8.0-windows</TargetFramework>
     <TargetFramework Condition="!$([MSBuild]::IsOSPlatform('Windows'))">net8.0</TargetFramework>

@@ -34,15 +34,17 @@ public static class CellLoader
         return cell;
     }
 
-    /// <summary>Returns paths of all <c>*.json</c> files under the given directory (recursive).</summary>
+    /// <summary>
+    /// Returns paths of cell JSON files under the given directory (recursive).
+    /// Skips <c>*.homes.json</c> sidecars — those are saved home positions, not cells.
+    /// </summary>
     public static IEnumerable<string> FindAll(string directory = "assets/cells")
     {
         foreach (var cellsDir in CandidateCellDirectories(directory))
         {
             try
             {
-                if (!Directory.Exists(cellsDir)) continue;
-                var files = Directory.EnumerateFiles(cellsDir, "*.json", SearchOption.AllDirectories).ToList();
+                var files = EnumerateCellFiles(cellsDir).ToList();
                 if (files.Count > 0)
                     return files;
             }
@@ -53,6 +55,18 @@ public static class CellLoader
         }
 
         return [];
+    }
+
+    /// <summary>Cell JSON files in <paramref name="cellsDir"/>. Omits <c>*.homes.json</c>.</summary>
+    internal static IEnumerable<string> EnumerateCellFiles(string cellsDir)
+    {
+        if (!Directory.Exists(cellsDir)) yield break;
+        foreach (var file in Directory.EnumerateFiles(cellsDir, "*.json", SearchOption.AllDirectories))
+        {
+            if (file.EndsWith(".homes.json", StringComparison.OrdinalIgnoreCase))
+                continue;
+            yield return file;
+        }
     }
 
     private static IEnumerable<string> CandidateCellDirectories(string fallbackRelative)

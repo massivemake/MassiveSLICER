@@ -1259,22 +1259,29 @@ public sealed class PresetsCardViewModel : ViewModelBase
     /// a preset with a typo'd/legacy method shouldn't block applying everything else.</summary>
     private static SliceMethod ParseSliceMethod(string method) => method switch
     {
-        "Angled"       => SliceMethod.Angled,
-        "Geodesic"     => SliceMethod.Geodesic,
-        "Curved"       => SliceMethod.Curved,
-        "Multi-Planar" => SliceMethod.MultiPlanar,
-        _              => SliceMethod.Planar,
+        "Angled"          => SliceMethod.Angled,
+        "Geodesic"        => SliceMethod.Geodesic,
+        "Curved"          => SliceMethod.Curved,
+        "Multi-Planar"    => SliceMethod.MultiPlanar,
+        "Signed Distance"         => SliceMethod.SignedDistance,
+        "SignedDistance"          => SliceMethod.SignedDistance,
+        "Continuous Planar Field" => SliceMethod.ContinuousPlanar,
+        "Continuous Planar"       => SliceMethod.ContinuousPlanar,
+        "ContinuousPlanar"        => SliceMethod.ContinuousPlanar,
+        _                         => SliceMethod.Planar,
     };
 
     /// <summary>Reverse of <see cref="ParseSliceMethod"/> — the real enum's spelling back to
     /// this comp's display labels, used when saving the panel's CURRENT method into a preset.</summary>
     private static string FormatSliceMethod(SliceMethod method) => method switch
     {
-        SliceMethod.Angled     => "Angled",
-        SliceMethod.Geodesic   => "Geodesic",
-        SliceMethod.Curved     => "Curved",
-        SliceMethod.MultiPlanar=> "Multi-Planar",
-        _                      => "Planar",
+        SliceMethod.Angled         => "Angled",
+        SliceMethod.Geodesic       => "Geodesic",
+        SliceMethod.Curved         => "Curved",
+        SliceMethod.MultiPlanar    => "Multi-Planar",
+        SliceMethod.SignedDistance    => "Signed Distance",
+        SliceMethod.ContinuousPlanar => "Continuous Planar Field",
+        _                             => "Planar",
     };
 
     private void ToggleFavorite(PrintPresetSample? p)

@@ -7,6 +7,9 @@ public sealed class Toolpath
 {
     public List<ToolpathLayer> Layers { get; } = [];
 
+    /// <summary>Bead width from the imported file, in millimetres. Zero when the path was sliced here.</summary>
+    public float BeadWidthMm { get; set; }
+
     /// <summary>Formbound planner diagnostics when a Formbound pattern was sliced; null otherwise.</summary>
     public FormboundPlanStats? FormboundStats { get; set; }
 

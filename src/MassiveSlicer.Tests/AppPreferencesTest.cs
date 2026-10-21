@@ -20,6 +20,7 @@ public sealed class AppPreferencesTest
             ZigZagAllowSameLayerTravel = false,
             InfillPattern       = "Grid",
             WaveEffect          = "Sine",
+            WallCount           = 3,
         };
 
         var json = JsonSerializer.Serialize(prefs);
@@ -36,5 +37,6 @@ public sealed class AppPreferencesTest
         Assert.False(loaded.ZigZagAllowSameLayerTravel);
         Assert.Equal("Grid", loaded.InfillPattern);
         Assert.Equal("Sine", loaded.WaveEffect);
+        Assert.Equal(3, loaded.WallCount);
     }
 }

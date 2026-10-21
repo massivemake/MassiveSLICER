@@ -199,12 +199,12 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal bool IsMillableWorkpiece(SceneNode? node)
     {
         if (node is null) return false;
-        if (IsEffectorNode(node) || IsModifierNode(node) || IsModifiersGroupNode(node))
+        if (IsEffectorNode(node) || IsTcpAttractorNode(node) || IsModifierNode(node) || IsModifiersGroupNode(node))
             return false;
 
         var item = FindUserMeshOutlinerItem(node);
         if (item is null) return false;
-        if (item.IsToolpath || item.IsEffector || item.IsModifier || item.IsModifiersGroup)
+        if (item.IsToolpath || item.IsEffector || item.IsTcpAttractor || item.IsModifier || item.IsModifiersGroup)
             return false;
 
         // Lock to first painted model (same outliner item or under that root).
@@ -497,6 +497,14 @@ public sealed partial class ViewportViewModel : ViewModelBase
     {
         get => _showTravelMoves;
         set => SetField(ref _showTravelMoves, value);
+    }
+
+    private bool _showZHopMoves = true;
+    /// <summary>Vertical Z-hop lift and drop. The across move stays on <see cref="ShowTravelMoves"/>.</summary>
+    public bool ShowZHopMoves
+    {
+        get => _showZHopMoves;
+        set => SetField(ref _showZHopMoves, value);
     }
 
     private bool _showWipeMoves = true;
@@ -1072,6 +1080,15 @@ public sealed partial class ViewportViewModel : ViewModelBase
     {
         get => _bottomRightLegendMargin;
         set => SetField(ref _bottomRightLegendMargin, value);
+    }
+
+    private Avalonia.Thickness _improvedIkTagMargin = new(8, 8, 8, 8);
+    /// <summary>Margin for the Improved IK status pill. Same bottom lift as the Live I/O
+    /// dock, shifted left of that dock so the two never cover each other.</summary>
+    public Avalonia.Thickness ImprovedIkTagMargin
+    {
+        get => _improvedIkTagMargin;
+        set => SetField(ref _improvedIkTagMargin, value);
     }
 
     /// <summary>Viewport inset for workflow bar — 20px sides/bottom; lifts above scrubber when a toolpath is selected.</summary>
@@ -4933,6 +4950,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         public bool ShowBead { get; set; } = true;
         public bool ShowExtrusionMoves { get; set; } = true;
         public bool ShowTravelMoves { get; set; } = true;
+        public bool ShowZHopMoves { get; set; } = true;
         public bool ShowWipeMoves { get; set; } = true;
         public bool ShowSeam { get; set; } = true;
 
@@ -4995,21 +5013,21 @@ public sealed partial class ViewportViewModel : ViewModelBase
         {
             case "Preview":   // printed-part look: bead surface only
                 p.ShowBead = true;  p.ShowExtrusionMoves = false;
-                p.ShowTravelMoves = false; p.ShowWipeMoves = false; p.ShowSeam = false;
+                p.ShowTravelMoves = false; p.ShowZHopMoves = false; p.ShowWipeMoves = false; p.ShowSeam = false;
                 break;
             case "Toolpath":  // classic extrusion + travel lines
                 p.ShowBead = false; p.ShowExtrusionMoves = true;
-                p.ShowTravelMoves = true;  p.ShowWipeMoves = true;  p.ShowSeam = true;
+                p.ShowTravelMoves = true; p.ShowZHopMoves = true; p.ShowWipeMoves = true; p.ShowSeam = true;
                 break;
             case "Speed":
             case "RPM":
             case "Thermal":   // clean gradient lines, no travels
                 p.ShowBead = false; p.ShowExtrusionMoves = true;
-                p.ShowTravelMoves = false; p.ShowWipeMoves = true;  p.ShowSeam = true;
+                p.ShowTravelMoves = false; p.ShowZHopMoves = false; p.ShowWipeMoves = true; p.ShowSeam = true;
                 break;
             case EditProfileKey:  // decluttered for path picking, seam dots kept
                 p.ShowBead = false; p.ShowExtrusionMoves = true;
-                p.ShowTravelMoves = false; p.ShowWipeMoves = false; p.ShowSeam = true;
+                p.ShowTravelMoves = false; p.ShowZHopMoves = false; p.ShowWipeMoves = false; p.ShowSeam = true;
                 break;
             // Body hides toolpaths outright — leave the permissive defaults.
         }
@@ -5030,7 +5048,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         nameof(DarkViewportBackground), nameof(ActiveShaderMode),
         nameof(BackdropOpacity), nameof(BackdropBlur), nameof(ToolpathLineOpacity),
         nameof(ShowBead), nameof(ShowExtrusionMoves), nameof(ShowTravelMoves),
-        nameof(ShowWipeMoves), nameof(ShowSeam),
+        nameof(ShowZHopMoves), nameof(ShowWipeMoves), nameof(ShowSeam),
         nameof(ShowRpmOverLimit),
     ];
 
@@ -5065,6 +5083,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             prof.ShowBead           = ShowBead;
             prof.ShowExtrusionMoves = ShowExtrusionMoves;
             prof.ShowTravelMoves    = ShowTravelMoves;
+            prof.ShowZHopMoves      = ShowZHopMoves;
             prof.ShowWipeMoves      = ShowWipeMoves;
             prof.ShowSeam           = ShowSeam;
             prof.ShowRpmOverLimit   = ShowRpmOverLimit;
@@ -5091,6 +5110,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             ShowBead           = prof.ShowBead;
             ShowExtrusionMoves = prof.ShowExtrusionMoves;
             ShowTravelMoves    = prof.ShowTravelMoves;
+            ShowZHopMoves      = prof.ShowZHopMoves;
             ShowWipeMoves      = prof.ShowWipeMoves;
             ShowSeam           = prof.ShowSeam;
             // Keep the edit toolbar's "Bead mesh" box honest: it has its own
@@ -5137,6 +5157,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
                         doc.RootElement.TryGetProperty(k, out var el) &&
                         el.TryGetProperty(nameof(ViewDisplayProfile.ShowSeam), out _);
                     if (!hasLayers) ApplyDefaultDisplayLayers(v, k);
+                    else if (!el.TryGetProperty(nameof(ViewDisplayProfile.ShowZHopMoves), out _))
+                        v.ShowZHopMoves = v.ShowTravelMoves;
                     _viewProfiles[k] = v;
                 }
             }
@@ -6506,11 +6528,10 @@ public sealed partial class ViewportViewModel : ViewModelBase
     public ConcurrentQueue<SceneNode> PendingModelRefresh { get; } = new();
 
     /// <summary>
-    /// Layer boundary data queued after each slice so the GL thread can upload the
-    /// layer-preview heatmap texture. zBounds has numLayers+1 entries (sorted);
-    /// heights has numLayers entries, one thickness per layer.
+    /// Layer boundary data queued so the GL thread can upload the layer-preview heatmap.
+    /// Bounds are signed distances along <c>axis</c> (world Z for planar). One thickness per layer.
     /// </summary>
-    public ConcurrentQueue<(float[] zBounds, float[] heights)> PendingLayerPreview { get; } = new();
+    public ConcurrentQueue<(float[] zBounds, float[] heights, Vector3 axis)> PendingLayerPreview { get; } = new();
 
     /// <summary>
     /// Enqueues <paramref name="node"/> for GPU upload and registers it in the outliner.
@@ -6813,6 +6834,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         _selectedOutlinerItem = item;
         OnPropertyChanged(nameof(SelectedOutlinerItem));
         OnPropertyChanged(nameof(SelectedModifierOwner));
+        NoteTcpAttractorSelection(item);
         if (item is null) return;
 
         if (OutlinerModelOps.IsScanItem(item))
@@ -6844,7 +6866,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         // gizmo immediately (same convention as the cut tool) — placing it is the whole point
         // of selecting it. Selecting the group moves/rotates every modifier under it together,
         // for free, via ordinary parent-child transforms.
-        if ((item.IsEffector || item.IsModifier || item.IsModifiersGroup)
+        if ((item.IsEffector || item.IsTcpAttractor || item.IsModifier || item.IsModifiersGroup)
             && (ActiveGizmoModeInternal == GizmoMode.None || ActiveGizmoModeInternal == GizmoMode.Scale))
             ActiveGizmoModeInternal = GizmoMode.Translate;
     }
@@ -7034,7 +7056,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         if (GetSelectedSceneNode?.Invoke() is { } selected)
         {
             var selectedItem = FindUserMeshOutlinerItem(selected);
-            if (selectedItem is not null && !selectedItem.IsEffector
+            if (selectedItem is not null && !selectedItem.IsEffector && !selectedItem.IsTcpAttractor
                 && !OutlinerModelOps.IsScanItem(selectedItem))
                 return selectedItem;
         }
@@ -7125,7 +7147,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// </summary>
     internal OutlinerItemViewModel? OwningModelItem(OutlinerItemViewModel? item)
     {
-        if (item is null) return null;
+        if (item is null || item.IsTcpAttractor) return null;
         if (item.IsModifier || item.IsModifiersGroup)
         {
             var groupItem = item.IsModifiersGroup ? item : FindParentOutlinerItem(item);
@@ -7166,7 +7188,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             {
                 foreach (var child in item.Children)
                 {
-                    if (!OutlinerModelOps.IsScanItem(child) && !child.IsEffector
+                    if (!OutlinerModelOps.IsScanItem(child) && !child.IsEffector && !child.IsTcpAttractor
                         && !child.IsModifier && !child.IsModifiersGroup && !child.IsPiecesGroup)
                         yield return child;
                 }
@@ -7176,6 +7198,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             if (item == _toolheadGroupItem) continue;
             if (_cellEnvOutlinerItems.Contains(item)) continue;
             if (item.IsEffector) continue;
+            if (item.IsTcpAttractor) continue;
             if (item.IsModifier) continue;
             if (item.IsModifiersGroup) continue;
             if (item.IsPiecesGroup)
@@ -7295,6 +7318,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             else if (item.IsPrintToolpath) flags.Add("PrintToolpath");
             else if (item.IsToolpath) flags.Add("Toolpath");
             if (item.IsEffector) flags.Add("Effector");
+            if (item.IsTcpAttractor) flags.Add("TcpAttractor");
             if (!item.Visible) flags.Add("Hidden");
             string flagStr = flags.Count == 0 ? "" : $" [{string.Join(",", flags)}]";
             sb.AppendLine($"{new string(' ', depth * 2)}- {item.Name}{flagStr}");
@@ -8610,6 +8634,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
         // clears its list and refreshes the panel from it. The local Clear() still runs so
         // headless callers (and tests) with no view attached also end up empty.
         PaintModifications.Clear();
+        _shopWipeKept.Clear();
+        ForgetTcpAttractors();
         RestorePaintModifications?.Invoke([]);
         if (AdditiveSettings is { } jobSettings)
         {
@@ -8621,5 +8647,21 @@ public sealed partial class ViewportViewModel : ViewModelBase
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
     }
+
+    /// <summary>
+    /// Models whose saved wipe must survive the next slice. The first travel slice of a
+    /// fresh import snaps wipe to the shop recipe once; a model just read from a .mass
+    /// is recorded here first, so that snap does not throw away the file's mode, length,
+    /// ramp, and speed.
+    /// </summary>
+    private readonly HashSet<object> _shopWipeKept = new(ReferenceEqualityComparer.Instance);
+
+    internal void KeepSavedWipe(object source) => _shopWipeKept.Add(source);
+
+    /// <summary>
+    /// True only the first time <paramref name="source"/> asks. False when this reopen
+    /// already kept a saved wipe, or when a previous slice already snapped this import.
+    /// </summary>
+    internal bool TryClaimShopWipe(object source) => _shopWipeKept.Add(source);
 
 }

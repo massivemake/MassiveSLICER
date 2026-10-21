@@ -50,6 +50,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <c>CALIBRATE LFAM3</c> button.
     /// </summary>
     public ICommand StartLfam3CalibrationCommand { get; }
+    public ICommand StitchToolpathCommand { get; }
 
     /// <summary>Teach current live pose as the scan/bed-cal waypoint (<c>scanner-down-bed</c>).</summary>
     public ICommand MarkScanPositionCommand { get; }
@@ -101,6 +102,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public MainWindowViewModel()
     {
         StartLfam3CalibrationCommand = new RelayCommand(() => StartLfam3CalibrationWizard(null));
+        StitchToolpathCommand = new RelayCommand(() => Console.Log(StitchActiveToolpath()));
         MarkScanPositionCommand = new RelayCommand(
             () => _ = MarkScanPositionAsync().ContinueWith(t =>
             {
@@ -3635,7 +3637,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>
     /// Imports a desktop gcode / .gcode.3mf that was sliced at
     /// <paramref name="sourcePercent"/> of full size, scales it to 100%, and
-    /// drops it on the print bed. Select it, then Send to MassiveDRIVE.
+    /// drops the part centre on the middle of the print surface, on top.
+    /// Select it, then Send to MassiveDRIVE.
     /// </summary>
     public bool ImportScaledToolpath(string path, float sourcePercent)
     {
@@ -3653,10 +3656,12 @@ public sealed class MainWindowViewModel : ViewModelBase
                 return false;
             }
 
+            // Same landing as a mesh import: middle of the print plate, on the top surface.
+            // BaseMarkerWorld is the BASE 0,0,0 corner, about 1.4 m off that centre on LFAM 2.
             var off = System.Numerics.Vector3.Zero;
             if (Viewport.ActiveCell is { } cell)
             {
-                var m = cell.Bed.BaseMarkerWorld(cell.Robot.WorldPosition);
+                var m = PrintSurface.Center(cell, Viewport.ActivePrintSurfaceIsHeated);
                 off = new System.Numerics.Vector3(m.X, m.Y, m.Z);
             }
             else
@@ -3664,18 +3669,43 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             var text = MassiveSlicer.Core.IO.ScaledGcodeImporter.ReadGcodeText(path);
             var result = MassiveSlicer.Core.IO.ScaledGcodeImporter.Import(text, sourcePercent, off);
+            var stitch = MassiveSlicer.Core.Slicing.ContinuousLayerStitch.Apply(result.Toolpath, result.BeadWidthMm);
             if (result.MoveCount == 0)
             {
                 Console.LogError($"[scaled] No print moves in {System.IO.Path.GetFileName(path)}.");
                 return false;
             }
 
+            var add = RightPanel.Additive;
+            var movement = new SliceSettings
+            {
+                LayerHeight = result.LayerHeightMm,
+                ZHopMm = (float)add.ZHopMm,
+                BedZ = off.Z,
+                WipeMode = add.WipeModeDisplay switch
+                {
+                    "Retrace" => WipeMode.Retrace,
+                    "Same-Direction" or "Natural" or "Normal" => WipeMode.SameDirection,
+                    "90-Degree" or "90 Degree" or "Perpendicular" => WipeMode.Perpendicular,
+                    _ => WipeMode.None,
+                },
+                WipeLengthMm = (float)add.WipeLengthMm,
+                WipeRampMm = (float)add.WipeRampMm,
+                WipeSkipShortTravels = add.WipeSkipShortTravels,
+            };
+            var toolpath = MassiveSlicer.Core.Slicing.Effects.MovementPostProcessor.Apply(result.Toolpath, movement);
+            int moves = toolpath.Layers.Sum(l => l.Moves.Count);
+            int wipes = toolpath.Layers.SelectMany(l => l.Moves).Count(m => m.IsWipe);
+
             var name = $"Scaled: {System.IO.Path.GetFileNameWithoutExtension(path)}";
-            Viewport.AddImportedToolpath(result.Toolpath, name, result.BeadWidthMm, result.LayerHeightMm);
+            Viewport.AddImportedToolpath(toolpath, name, result.BeadWidthMm, result.LayerHeightMm);
             Console.Log(
-                $"[scaled] Imported {result.MoveCount} moves, {result.LayerCount} layers from " +
+                $"[scaled] Imported {moves} moves, {result.LayerCount} layers from " +
                 $"{System.IO.Path.GetFileName(path)} at {sourcePercent:0.##}% → ×{result.ScaleFactor:0.##}. " +
                 $"Size {result.SizeMm.X:0} × {result.SizeMm.Y:0} × {result.SizeMm.Z:0} mm. " +
+                $"Centred on the print surface ({off.X:0}, {off.Y:0}, {off.Z:0}). " +
+                $"Stitch {stitch}. " +
+                $"Wipe {add.WipeModeDisplay} {add.WipeLengthMm:0.#} mm, Z hop {add.ZHopMm:0.#} mm, {wipes} wipe move(s). " +
                 "Select it in the outliner, then Send to MassiveDRIVE. The robot was not started.");
             return true;
         }
@@ -3684,6 +3714,48 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.LogError($"[scaled] Failed to import {System.IO.Path.GetFileName(path)}: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Joins the active toolpath into a continuous extrusion per layer.
+    /// Ends stitch together, and infill bridges onto the nearest wall, within 3× bead width.
+    /// </summary>
+    public string StitchActiveToolpath()
+    {
+        if (Viewport.ActiveScrubToolpath is not { } tp)
+            return "[tpstitch] no active toolpath — select Scaled: Uni7 in the outliner";
+
+        float bead = tp.BeadWidthMm > 0.05f ? tp.BeadWidthMm : (float)RightPanel.Additive.BeadWidth;
+        var stats = MassiveSlicer.Core.Slicing.ContinuousLayerStitch.Apply(tp, bead);
+
+        var add = RightPanel.Additive;
+        float bedZ = 0f;
+        if (Viewport.ActiveCell is { } cell)
+            bedZ = PrintSurface.Center(cell, Viewport.ActivePrintSurfaceIsHeated).Z;
+        var movement = new SliceSettings
+        {
+            LayerHeight = (float)add.LayerHeight,
+            ZHopMm = (float)add.ZHopMm,
+            BedZ = bedZ,
+            WipeMode = add.WipeModeDisplay switch
+            {
+                "Retrace" => WipeMode.Retrace,
+                "Same-Direction" or "Natural" or "Normal" => WipeMode.SameDirection,
+                "90-Degree" or "90 Degree" or "Perpendicular" => WipeMode.Perpendicular,
+                _ => WipeMode.None,
+            },
+            WipeLengthMm = (float)add.WipeLengthMm,
+            WipeRampMm = (float)add.WipeRampMm,
+            WipeSkipShortTravels = add.WipeSkipShortTravels,
+        };
+        var posted = MassiveSlicer.Core.Slicing.Effects.MovementPostProcessor.Apply(tp, movement);
+        if (!ReferenceEquals(posted, tp))
+        {
+            tp.Layers.Clear();
+            tp.Layers.AddRange(posted.Layers);
+        }
+        Viewport.RequestActiveToolpathReupload?.Invoke();
+        return $"[tpstitch] {stats}. The robot was not started.";
     }
 
     public bool ReloadOutlinerModel(MassiveSlicer.Viewport.Scene.SceneNode node)
@@ -4250,6 +4322,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         Viewport.Erp.RestoreAttachment(doc.Erp);
 
         int restoredCount = WorkspaceService.RestoreModels(doc, Viewport, workspacePath);
+        Viewport.RestoreTcpAttractors(doc.TcpAttractors);
         Viewport.FlattenScansToBedGroup();
 
         if (doc.Camera is { } camera)
@@ -4573,6 +4646,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.CurvedBoundaryHighVertices = [.. copy.CurvedBoundaryHighVertices];
         live.LayerHeight            = copy.LayerHeight;
         live.BeadWidth              = copy.BeadWidth;
+        live.WallCount              = copy.WallCount;
         live.FirstLayerHeight       = copy.FirstLayerHeight;
         live.AdaptiveLayerHeight    = copy.AdaptiveLayerHeight;
         live.AdaptiveQuality        = copy.AdaptiveQuality;
@@ -4839,6 +4913,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Additive slicing settings
         add.LayerHeight      = p.LayerHeight;
         add.BeadWidth        = p.BeadWidth;
+        add.WallCount        = p.WallCount;
         add.FirstLayerHeight = p.FirstLayerHeight;
         add.AdaptiveLayerHeight = p.AdaptiveLayerHeight;
         add.AdaptiveQuality     = p.AdaptiveQuality;
@@ -4944,6 +5019,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.PatternFadeOut      = p.PatternFadeOut;
         if (Enum.TryParse<SliceMethod>(p.SliceMethod, out var method))
             add.Method = method;
+        else if (p.SliceMethod is "Signed Distance")
+            add.Method = SliceMethod.SignedDistance;
+        else if (p.SliceMethod is "Continuous Planar Field" or "Continuous Planar")
+            add.Method = SliceMethod.ContinuousPlanar;
         add.SlicingMode   = p.SlicingMode is "Surface" ? "Surface" : "Normal";
         add.PassAngle     = p.PassAngle;
         add.TiltAngle     = p.TiltAngle;
@@ -5195,6 +5274,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.SelectedMaterialPresetName = add.SelectedPreset?.Name;
         p.LayerHeight      = add.LayerHeight;
         p.BeadWidth        = add.BeadWidth;
+        p.WallCount        = add.WallCount;
         p.FirstLayerHeight = add.FirstLayerHeight;
         p.AdaptiveLayerHeight = add.AdaptiveLayerHeight;
         p.AdaptiveQuality     = add.AdaptiveQuality;

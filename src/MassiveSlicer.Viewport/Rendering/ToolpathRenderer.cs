@@ -35,6 +35,7 @@ public sealed class ToolpathRenderer : IDisposable
     private int  _extrudeVao, _extrudeVbo, _extrudeCount;
     private int  _wipeVao, _wipeVbo, _wipeCount;
     private int  _travelVao,  _travelVbo,  _travelCount;
+    private int  _zhopVao, _zhopVbo, _zhopCount;
     private int  _lightningVao, _lightningVbo, _lightningCount;
     private int  _ptVao, _ptVbo;
     private int  _pointCount;
@@ -315,6 +316,7 @@ void main() {
     private int   _totalMoveCount;
     private int[] _extrudeVertexCumulative = [];
     private int[] _travelVertexCumulative  = [];
+    private int[] _zhopVertexCumulative = [];
     private int[] _lightningVertexCumulative = [];
     private int[] _wipeVertexCumulative = [];
     private static readonly Vector3 LightningColor = new(1.00f, 0.58f, 0.12f);
@@ -495,8 +497,13 @@ void main() {
 
         if (_travelVao != 0) { GL.DeleteVertexArray(_travelVao); GL.DeleteBuffer(_travelVbo); }
         _travelVao = _travelVbo = _travelCount = 0;
-        var trData = BuildTravelData();
+        var trData = BuildTravelData(zhopOnly: false);
         if (trData.Length > 0) { (_travelVao, _travelVbo) = BuildVao(trData); _travelCount = trData.Length / 6; }
+
+        if (_zhopVao != 0) { GL.DeleteVertexArray(_zhopVao); GL.DeleteBuffer(_zhopVbo); }
+        _zhopVao = _zhopVbo = _zhopCount = 0;
+        var zhData = BuildTravelData(zhopOnly: true);
+        if (zhData.Length > 0) { (_zhopVao, _zhopVbo) = BuildVao(zhData); _zhopCount = zhData.Length / 6; }
 
         if (_ptVao != 0) { GL.DeleteVertexArray(_ptVao); GL.DeleteBuffer(_ptVbo); }
         _ptVao = _ptVbo = _pointCount = 0;
@@ -644,10 +651,11 @@ void main() {
 
         _extrudeVertexCumulative   = new int[total + 1];
         _travelVertexCumulative    = new int[total + 1];
+        _zhopVertexCumulative      = new int[total + 1];
         _lightningVertexCumulative = new int[total + 1];
         _wipeVertexCumulative      = new int[total + 1];
 
-        int ei = 0, ti = 0, li = 0, wi = 0, fi = 0;
+        int ei = 0, ti = 0, zi = 0, li = 0, wi = 0, fi = 0;
         foreach (var layer in _toolpath.Layers)
         {
             foreach (var move in layer.Moves)
@@ -658,10 +666,15 @@ void main() {
                     else if (move.IsWipe) wi += 2;
                     else ei += 2;
                 }
-                else if (ToolpathMoveKinds.IsTravelSegment(move.Kind)) ti += 2;
+                else if (ToolpathMoveKinds.IsTravelSegment(move.Kind))
+                {
+                    if (IsVerticalHop(move)) zi += 2;
+                    else ti += 2;
+                }
                 fi++;
                 _extrudeVertexCumulative[fi]   = ei;
                 _travelVertexCumulative[fi]    = ti;
+                _zhopVertexCumulative[fi]      = zi;
                 _lightningVertexCumulative[fi] = li;
                 _wipeVertexCumulative[fi]      = wi;
             }
@@ -708,8 +721,11 @@ void main() {
         var wpData = BuildExtrudeData(wipeOnly: true);
         if (wpData.Length > 0) { (_wipeVao, _wipeVbo) = BuildVao(wpData); _wipeCount = wpData.Length / 6; }
 
-        var trData = BuildTravelData();
+        var trData = BuildTravelData(zhopOnly: false);
         if (trData.Length > 0) { (_travelVao, _travelVbo) = BuildVao(trData); _travelCount = trData.Length / 6; }
+
+        var zhData = BuildTravelData(zhopOnly: true);
+        if (zhData.Length > 0) { (_zhopVao, _zhopVbo) = BuildVao(zhData); _zhopCount = zhData.Length / 6; }
 
         var ptData = BuildSeamData();
         _pointCount = ptData.Length / 6;
@@ -720,12 +736,25 @@ void main() {
         if (_allPointCount > 0) (_allPtVao, _allPtVbo) = BuildVao(allPtData);
     }
 
-    private float[] BuildTravelData()
+    /// <summary>
+    /// A Z hop is the vertical lift and the vertical drop. The move between
+    /// them is the travel, even though the post-processor marks it IsZHop.
+    /// </summary>
+    private static bool IsVerticalHop(ToolpathMove move)
+    {
+        if (!move.IsZHop) return false;
+        float dx = move.To.X - move.From.X;
+        float dy = move.To.Y - move.From.Y;
+        float dz = move.To.Z - move.From.Z;
+        return dx * dx + dy * dy <= 0.25f && dz * dz > 1e-6f;
+    }
+
+    private float[] BuildTravelData(bool zhopOnly)
     {
         int travelCount = 0;
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Travel) travelCount++;
+                if (move.Kind == MoveKind.Travel && IsVerticalHop(move) == zhopOnly) travelCount++;
 
         var trData = new float[travelCount * 2 * 6];
         int ti = 0;
@@ -736,11 +765,11 @@ void main() {
             trData[ti++] = c.X;             trData[ti++] = c.Y;             trData[ti++] = c.Z;
         }
 
+        var color = zhopOnly ? _retractionColor : _travelColor;
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Travel)
+                if (move.Kind == MoveKind.Travel && IsVerticalHop(move) == zhopOnly)
                 {
-                    var color = move.IsZHop ? _retractionColor : _travelColor;
                     WriteTr(move.From, color);
                     WriteTr(move.To,   color);
                 }
@@ -860,6 +889,19 @@ void main() {
         NVec3.Normalize(-r + up), NVec3.Normalize( r + up));
 
     /// <summary>
+    /// Half the deposited bead thickness. Adaptive flow stores the real gap in
+    /// <paramref name="deposited"/> and that gap over the nominal height in
+    /// <paramref name="heightScale"/>, so a matching scale must not be applied twice.
+    /// Any other scale is a per-point wedge factor and still multiplies.
+    /// </summary>
+    private static float BeadHalfHeight(float deposited, float flowRatio, float heightScale)
+    {
+        bool ratioOfThisGap = MathF.Abs(heightScale - flowRatio) <= 1e-3f;
+        float h = ratioOfThisGap ? deposited : deposited * MathF.Max(heightScale, 0.05f);
+        return h * 0.5f;
+    }
+
+    /// <summary>
     /// Builds the shared bead plan: contours of chord-error-decimated polyline points.
     /// Unlike fixed-step decimation, this keeps every point needed to represent curves
     /// (e.g. wave effects) faithfully and merges only visually straight runs.
@@ -874,7 +916,12 @@ void main() {
         foreach (var layer in toolpath.Layers)
         {
             float lh  = layer.Height > 0f ? layer.Height : layerHeight;
-            float lhh = lh * 0.5f;
+            // Adaptive flow stores the real gap in layer.Height and that gap divided by
+            // the nominal height in HeightScale. Multiplying both draws the bead too thin.
+            // A multi-planar wedge stores the nominal gap and a per-point ratio, so the
+            // product is the local thickness and must be kept.
+            float nominal = layerHeight > 1e-4f ? layerHeight : lh;
+            float flow = Math.Clamp(lh / nominal, 0.05f, 2f);
             // Beads stack along the slicing-plane normal, not world Z — on angled
             // prints the cross-section must tilt with the layers or the preview
             // renders overlapping parallelogram-sheared beads.
@@ -891,12 +938,12 @@ void main() {
                 {
                     if (pts is null)
                     {
-                        pts = [move.From]; flats = []; hhs = [lhh * move.HeightScale];
+                        pts = [move.From]; flats = []; hhs = [BeadHalfHeight(lh, flow, move.HeightScale)];
                         raw.Add((pts, flats, hhs, layerUp));
                     }
                     pts.Add(move.To);
                     flats!.Add(flatIdx);
-                    hhs!.Add(lhh * move.HeightScale);
+                    hhs!.Add(BeadHalfHeight(lh, flow, move.HeightScale));
                 }
                 else { pts = null; flats = null; hhs = null; }
                 flatIdx++;
@@ -1218,6 +1265,7 @@ void main() {
                      Vector3 eyeLocal = default, float lineOpacity = 1f,
                      bool showLightning = true, int scrubStart = 0,
                      bool showWipe = true,
+                     bool showZHop = false,
                      bool showAllPathPoints = false,
                      bool showDepthLines = false,
                      float viewportW = 0f, float viewportH = 0f,
@@ -1230,18 +1278,20 @@ void main() {
         int lgCount    = ScrubCount(_lightningVertexCumulative, _lightningCount, scrubIndex);
         int wpCount    = ScrubCount(_wipeVertexCumulative,    _wipeCount,    scrubIndex);
         int trCount    = ScrubCount(_travelVertexCumulative,  _travelCount,  scrubIndex);
+        int zhCount    = ScrubCount(_zhopVertexCumulative,    _zhopCount,    scrubIndex);
         int beadCount  = ScrubCount(_beadVertexCumulative,    _beadCount,    scrubIndex);
         int seamCount  = ScrubCount(_seamVertexCumulative,    _pointCount,   scrubIndex);
         int allPtCount = ScrubCount(_allPointVertexCumulative, _allPointCount, scrubIndex);
 
         // Layer-window low bound (edit mode): first vertex per buffer to draw.
-        int extFirst = 0, lgFirst = 0, wpFirst = 0, trFirst = 0, beadFirst = 0, seamFirst = 0, allPtFirst = 0;
+        int extFirst = 0, lgFirst = 0, wpFirst = 0, trFirst = 0, zhFirst = 0, beadFirst = 0, seamFirst = 0, allPtFirst = 0;
         if (scrubStart > 0)
         {
             extFirst  = Math.Min(ScrubCount(_extrudeVertexCumulative,  _extrudeCount, scrubStart), extCount);
             lgFirst   = Math.Min(ScrubCount(_lightningVertexCumulative, _lightningCount, scrubStart), lgCount);
             wpFirst   = Math.Min(ScrubCount(_wipeVertexCumulative,     _wipeCount,    scrubStart), wpCount);
             trFirst   = Math.Min(ScrubCount(_travelVertexCumulative,   _travelCount,  scrubStart), trCount);
+            zhFirst   = Math.Min(ScrubCount(_zhopVertexCumulative,     _zhopCount,    scrubStart), zhCount);
             beadFirst = Math.Min(ScrubCount(_beadVertexCumulative,     _beadCount,    scrubStart), beadCount);
             seamFirst = Math.Min(ScrubCount(_seamVertexCumulative,     _pointCount,   scrubStart), seamCount);
             allPtFirst = Math.Min(ScrubCount(_allPointVertexCumulative, _allPointCount, scrubStart), allPtCount);
@@ -1259,8 +1309,8 @@ void main() {
         if (useDepthLines)
         {
             DrawDepthAwareLines(mvp, eyeLocal, viewportW, viewportH,
-                selected, showExtrusion, showLightning, showTravel, showWipe,
-                extFirst, extCount, lgFirst, lgCount, trFirst, trCount, wpFirst, wpCount);
+                selected, showExtrusion, showLightning, showTravel, showWipe, showZHop,
+                extFirst, extCount, lgFirst, lgCount, trFirst, trCount, zhFirst, zhCount, wpFirst, wpCount);
         }
         else
         {
@@ -1295,11 +1345,10 @@ void main() {
                     GL.BindVertexArray(_lightningVao);
                     GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
                 }
-                if (showWipe && wpCount > 0)
+                if (showWipe)
                 {
                     _shader.SetFloat("uOverride", 0f);
-                    GL.BindVertexArray(_wipeVao);
-                    GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
+                    DrawWipeOnTop(wpFirst, wpCount);
                 }
             }
             else
@@ -1318,17 +1367,20 @@ void main() {
                     GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
                 }
 
-                if (showWipe && wpCount > 0)
-                {
-                    GL.BindVertexArray(_wipeVao);
-                    GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
-                }
-
                 if (showTravel && trCount > 0)
                 {
                     GL.BindVertexArray(_travelVao);
                     GL.DrawArrays(PrimitiveType.Lines, trFirst, trCount - trFirst);
                 }
+
+                if (showZHop && zhCount > 0)
+                {
+                    GL.BindVertexArray(_zhopVao);
+                    GL.DrawArrays(PrimitiveType.Lines, zhFirst, zhCount - zhFirst);
+                }
+
+                if (showWipe)
+                    DrawWipeOnTop(wpFirst, wpCount);
             }
 
             if (appliedWidth > 1.01f)
@@ -1438,11 +1490,26 @@ void main() {
     /// Path-edit depth cue: expands each line to a screen-space quad. Near lines are
     /// 2.5x the base width and fully opaque; far lines shrink and fade to ~20%.
     /// </summary>
+    /// <summary>
+    /// The hop is raised above the bead, so a depth test hides every wipe that
+    /// does not stick out of the silhouette. Draw the wipe after the other lines
+    /// and without that test.
+    /// </summary>
+    private void DrawWipeOnTop(int first, int count)
+    {
+        if (count <= first || _wipeVao == 0) return;
+        bool depth = GL.IsEnabled(EnableCap.DepthTest);
+        GL.Disable(EnableCap.DepthTest);
+        GL.BindVertexArray(_wipeVao);
+        GL.DrawArrays(PrimitiveType.Lines, first, count - first);
+        if (depth) GL.Enable(EnableCap.DepthTest);
+    }
+
     private void DrawDepthAwareLines(
         Matrix4 mvp, Vector3 eyeLocal, float viewportW, float viewportH,
-        bool selected, bool showExtrusion, bool showLightning, bool showTravel, bool showWipe,
+        bool selected, bool showExtrusion, bool showLightning, bool showTravel, bool showWipe, bool showZHop,
         int extFirst, int extCount, int lgFirst, int lgCount, int trFirst, int trCount,
-        int wpFirst, int wpCount)
+        int zhFirst, int zhCount, int wpFirst, int wpCount)
     {
         if (_depthLineShader is null) return;
 
@@ -1472,10 +1539,10 @@ void main() {
                 GL.BindVertexArray(_lightningVao);
                 GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
             }
-            if (showWipe && wpCount > wpFirst)
+            if (showWipe)
             {
-                GL.BindVertexArray(_wipeVao);
-                GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
+                _depthLineShader.SetFloat("uOverride", 0f);
+                DrawWipeOnTop(wpFirst, wpCount);
             }
         }
         else
@@ -1485,11 +1552,6 @@ void main() {
             {
                 GL.BindVertexArray(_extrudeVao);
                 GL.DrawArrays(PrimitiveType.Lines, extFirst, extCount - extFirst);
-            }
-            if (showWipe && wpCount > wpFirst)
-            {
-                GL.BindVertexArray(_wipeVao);
-                GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
             }
             if (showLightning && lgCount > lgFirst)
             {
@@ -1501,6 +1563,13 @@ void main() {
                 GL.BindVertexArray(_travelVao);
                 GL.DrawArrays(PrimitiveType.Lines, trFirst, trCount - trFirst);
             }
+            if (showZHop && zhCount > zhFirst)
+            {
+                GL.BindVertexArray(_zhopVao);
+                GL.DrawArrays(PrimitiveType.Lines, zhFirst, zhCount - zhFirst);
+            }
+            if (showWipe)
+                DrawWipeOnTop(wpFirst, wpCount);
         }
 
         GL.DepthMask(true);
@@ -1557,6 +1626,7 @@ void main() {
         _disposed = true;
         if (_extrudeVao       != 0) { GL.DeleteVertexArray(_extrudeVao);       GL.DeleteBuffer(_extrudeVbo);       }
         if (_travelVao        != 0) { GL.DeleteVertexArray(_travelVao);        GL.DeleteBuffer(_travelVbo);        }
+        if (_zhopVao          != 0) { GL.DeleteVertexArray(_zhopVao);          GL.DeleteBuffer(_zhopVbo);          }
         if (_lightningVao     != 0) { GL.DeleteVertexArray(_lightningVao);     GL.DeleteBuffer(_lightningVbo);     }
         if (_wipeVao          != 0) { GL.DeleteVertexArray(_wipeVao);          GL.DeleteBuffer(_wipeVbo);          }
         if (_ptVao            != 0) { GL.DeleteVertexArray(_ptVao);            GL.DeleteBuffer(_ptVbo);            }

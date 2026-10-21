@@ -943,10 +943,13 @@
                                           ToolTip.Tip="Print moves as coloured lines (Speed/RPM views recolour them)"/>
                                 <CheckBox Content="Travel moves" FontSize="11"
                                           IsChecked="{Binding ShowTravelMoves, Mode=TwoWay}"
-                                          ToolTip.Tip="Rapid repositioning moves"/>
+                                          ToolTip.Tip="Rapid repositioning moves. The vertical hop is its own layer."/>
+                                <CheckBox Content="Z-Hop" FontSize="11"
+                                          IsChecked="{Binding ShowZHopMoves, Mode=TwoWay}"
+                                          ToolTip.Tip="Vertical lift and drop on a travel. The across move stays with Travel moves."/>
                                 <CheckBox Content="Wipe moves" FontSize="11"
                                           IsChecked="{Binding ShowWipeMoves, Mode=TwoWay}"
-                                          ToolTip.Tip="Pre-travel filament wipe extrusions — separate from the main toolpath lines"/>
+                                          ToolTip.Tip="Pre-travel filament wipe extrusions — drawn on top of travel and Z hop"/>
                                 <CheckBox Content="Formbound bridges" FontSize="11"
                                           IsChecked="{Binding ShowLightningMoves, Mode=TwoWay}"
                                           ToolTip.Tip="Formbound Bridge / Buttress support (orange) — uncheck Extrusion lines to isolate them"/>
@@ -1514,11 +1517,15 @@
                                     <CheckBox Content="Travel moves"
                                               FontSize="11"
                                               IsChecked="{Binding ShowTravelMoves, Mode=TwoWay}"
-                                              ToolTip.Tip="Rapid repositioning moves"/>
+                                              ToolTip.Tip="Rapid repositioning moves. The vertical hop is its own layer."/>
+                                    <CheckBox Content="Z-Hop"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowZHopMoves, Mode=TwoWay}"
+                                              ToolTip.Tip="Vertical lift and drop on a travel. The across move stays with Travel moves."/>
                                     <CheckBox Content="Wipe moves"
                                               FontSize="11"
                                               IsChecked="{Binding ShowWipeMoves, Mode=TwoWay}"
-                                              ToolTip.Tip="Pre-travel filament wipe extrusions — separate from the main toolpath lines"/>
+                                              ToolTip.Tip="Pre-travel filament wipe extrusions — drawn on top of travel and Z hop"/>
                                     <CheckBox Content="Formbound bridges"
                                               FontSize="11"
                                               IsChecked="{Binding ShowLightningMoves, Mode=TwoWay}"
@@ -1809,6 +1816,24 @@
             </StackPanel>
         </Border>
 
+        <!-- Improved IK — status pill, bottom-right, left of the Live I/O dock. -->
+        <Border x:Name="ImprovedIkTag"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="{Binding ImprovedIkTagMargin}"
+                Background="#33409640"
+                BorderBrush="{DynamicResource Accent}"
+                BorderThickness="1"
+                CornerRadius="999"
+                Padding="12,4"
+                IsHitTestVisible="False"
+                ZIndex="28">
+            <TextBlock Text="Improved IK"
+                       FontSize="12"
+                       Foreground="{DynamicResource AccentHover}"
+                       VerticalAlignment="Center"/>
+        </Border>
+
         <!-- Bead overhang legend — bottom-right, floats above the Live I/O dock,
              timelines, and anything else parked in that corner -->
         <Border IsVisible="{Binding ShowBeadOverhang}"
@@ -1852,7 +1877,8 @@
         </Border>
 
         <!-- Orientation rate legend — right-center, visible when orientation preview active -->
-        <Border IsVisible="{Binding ShowOrientationPreview}"
+        <Border x:Name="OrientationLegend"
+                IsVisible="{Binding ShowOrientationPreview}"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Bottom"
                 Margin="8,8,8,78"

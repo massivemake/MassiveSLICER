@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-10-02** (File → Import Scaled Toolpath)
+Last updated: **2026-10-21** (Signed Distance shells)
 
 ---
 
@@ -521,6 +521,89 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-10-21 — IceSL gcode travels
+
+- `Uni5b.gcode` is IceSL for MassiveMake. The path in the file is about 48 × 47 × 23 mm. Uni5.stl is 479 × 473 × 236 mm, so the gcode was sliced at 10%. Enter 10 in the import box (×10). The header line that says 100% source scale is not the import percent. G1 with a rising E is print. G0 is travel.
+- Import keeps a combing polyline instead of folding it into a chord. A travel that leaves the beads is redrawn along the printed path. Stitch uses the file bead width, not the bead slider.
+- Reimport after a restart. The robot was not started.
+
+### 2026-10-21 — Scaled path stitch
+
+- `tpstitch` and scaled import join each layer's beads into continuous extrusions. Loose ends stitch to the nearest end, and an infill end bridges onto the nearest wall, within 3× bead width. A bridge that would cross or ride a bead is left out. No bead is printed twice.
+- Uni7 at 10% (`Uni7.gcode.3mf`): 4,701 pieces and 4,717 travels become 774 pieces and 773 travels, 6,361 bridges. Median about 6 paths on a layer. Lightning branches that meet the wall far apart stay separate when a join would cross.
+- The open app keeps the binary it launched with until a restart. Select the Uni7 toolpath and run `tpstitch`. The robot was not started.
+
+### 2026-10-21 — Continuous Planar Field
+
+- SLICING METHOD gains `Continuous Planar Field`, the planar reading of Cocco and Chermain, Wave-Guided Field-Aligned Volume-Filling Curves (SGP 2026).
+- Each mesh island keeps its outline. The wall and any hole outline are printed once. Infill lines cover the closed area and stitch to the closest unused line, the same nearest-entry rule as toolpath optimize (extrude a gap within 3× bead width). A bead already printed on the layer is not printed again, and no bead crosses another. A donut does not get chords across the hole. The next layer starts on the outline nearest the previous end.
+- Console: `cpf` (read-only). Tests: `ContinuousPlanarFieldTest` (9).
+- The open app keeps the binary it launched with until a restart.
+
+### 2026-10-21 — Signed Distance
+
+- SLICING METHOD gains `Signed Distance`, from the Atomizer paper's signed-distance shells (Chermain et al., Computer Graphics Forum 2025).
+- Bead centers lie on iso-surfaces inset by half a bead, then one bead width per shell. Contours on each shell are spaced by layer height. The nozzle normal is the outward gradient, mirrored into the upper hemisphere.
+- Surface follow, max tilt, and first-layer zero tilt apply. Wall count and infill do not. The field caps at 64 cells on the long side and 48 shells.
+- Saved as the existing slice-method string `SignedDistance`. Console: `sdf` (read-only). Tests: `SignedDistanceSlicerTest` (9).
+- The open app keeps the binary it launched with until a restart.
+- Stanchion Base v8 04 (closed solid, 2,070,808 tris) sliced to 0 layers. The iso-surface had a speck below the real shell, and the contour walk seeded only that speck. v8 02 is one open surface, so it sliced. Geodesic now seeds the bottom of every separate piece. v8 04 then sliced to 178 layers.
+
+### 2026-10-19 — TCP Adjust
+
+- SLICE card, under STOCK FROM MAPS: TCP ADJUST. Add places a sphere and an amber cylinder. Move places it, Rotate aims it, the slider sets the sphere radius (default 300 mm).
+- A toolpath point inside the sphere leans toward the cylinder. On the cylinder the extruder matches that angle. Outside, the move is unchanged. The tilt is the move normal, written after orientation smoothing.
+- Mill moves and layer stitches are skipped. Two equal weights: the first attractor wins.
+- Saved on the workspace (`TcpAttractors`), not prefs and not the cell. Console: `tcpadj`.
+- Tests: `TcpAttractorEffectTest` (8). The open app keeps the binary it launched with until a restart.
+
+### 2026-10-08 — Wipes use the cell bed, not Z = 0
+
+- CowMid on LFAM 2: bed surface is Z = 130. The open toolpath's real beads stay at or above 131.6. 289 wipe segments (35 mm Same-Direction, ramp 5) finish below the bed, down to Z = 108.
+- The first bed check treated Z = 0 as the bed, so those wipes were allowed. Slice settings now carry the live bed height (`SceneRenderer.BedZ`), and the wipe limit uses that.
+- The open app keeps the binary it launched with until a restart, and the slice already on screen stays until the next slice.
+
+### 2026-10-08 — Wipes stay above the bed
+
+- Every wipe heading (Retrace, Same-Direction, 90-Degree) is rejected when the move would finish below Z = 0. The wipe then takes the opposite heading, then a 90° side, and if those still descend it drops the downward component.
+- The negative-ramp Z smash is also capped at the bed, after the existing layer-height cap.
+- Tests: `MovementPostProcessorTest` bed cases. The open app keeps the binary it launched with until a restart.
+
+### 2026-10-08 — Wipe 90-Degree
+
+- WIPE combo gains `90-Degree` beside Off, Retrace, and Same-Direction.
+- The wipe leaves the bead at 90° in the layer plane. Of the two sides, it picks the one toward the closer of the previous bead and the next bead. If neither sits beside the bead, it leans toward the travel.
+- Length, ramp, speed, short-travel skip, and the fresh-import shop recipe (Same-Direction) are unchanged.
+- Tests: `MovementPostProcessorTest` perpendicular cases. The open app keeps the binary it launched with until a restart.
+
+### 2026-10-07 — LFAM 2 Send targets 192.168.0.75
+
+- `GET http://192.168.0.75:8080/api/health` is MassiveDRIVE, cell `lfam2`, upload on. `192.168.0.173:8080` refuses the connection. Drive config `web.host` is `192.168.0.75`.
+- `assets/cells/LFAM2/lfam2.json` `massiveDriveUrl` is `http://192.168.0.75:8080`. Jobs share host moved with it: `\\192.168.0.75\MassiveDRIVE-LFAM2\var\jobs`. Cell id stays `lfam2`.
+- The open app keeps the cell it loaded until a restart. Send uses that in-memory URL.
+
+### 2026-10-07 — Reopen keeps the saved wipe
+
+- Symptom: wipe ramp (and the rest of the WIPE card) looked unsaved after reopening `CowMid_reprint_OCT01_01.mass`.
+- The file did have them: Retrace, length 35 mm, ramp 5 mm, speed 600 mm/s. Realtime slicing was on, so the first slice after open treated the part as a new import and stamped the shop recipe (Same-Direction, 35 mm, ramp −1, 600 mm/s).
+- A model restored from a `.mass` is marked so that snap does not run. A fresh import still gets the shop recipe once.
+- Tests: `ShopWipeRestoreTest` (3) and `TravelWipeDefaultsTest` (2). The open app keeps the binary it launched with until a restart.
+
+### 2026-10-07 — Lay on Face and moves survive `.mass` save
+
+- Symptom: align-to-face plus a move, then Save, then reopen. `CowMid_reprint_OCT01_01.mass` came back unflipped. Saved root matrix was scale 1000 and a translation, no rotation.
+- Cause: a STEP import is root + body + mesh leaf. Lay on Face and the gizmo edit the leaf. Save stored only the outliner root's world matrix, and reopen prefers the STEP, which rebuilds the leaf at the file pose.
+- Fix: `WorkspaceModelEntry.ChildPoses` stores each non-overlay child's local matrix by index path (`"0/0"`). Restore applies them before bed parenting. The embedded STL is baked in root space so a missing STEP still reopens posed. Older files have an empty list.
+- Tests: `WorkspaceChildPoseTest` (4) plus `WorkspaceSaveTest` (9 passed together). The open app keeps the binary it launched with until a restart, and a file saved before this still has no child pose to restore.
+- Key files: `WorkspaceDocument.cs`, `WorkspaceService.cs`, `WorkspaceChildPoseTest.cs`.
+
+### 2026-10-07 — Angled Normal concentric walls
+
+- Angled slicing with Slicing mode Normal shows a Walls stepper (− / count / +) under the mode combo. 1 is the outer wall. Each + insets another shell by one bead width, up to 16.
+- Holes grow the extra wall into the material. Infill fills inside the innermost wall. Surface, zig-zag, Planar, and Multi-Planar ignore the count.
+- Saved in app preferences (`WallCount`, default 1). Console: `addset WallCount`. A value writes and reslices.
+- Tests: `AngledWallCountTest` (5) and the preferences round-trip. The open app keeps the binary it launched with until a restart.
 
 ### 2026-10-02 — Import Scaled Toolpath
 

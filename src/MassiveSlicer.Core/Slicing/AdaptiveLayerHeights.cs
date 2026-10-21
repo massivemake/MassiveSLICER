@@ -3,66 +3,80 @@ using System.Numerics;
 namespace MassiveSlicer.Core.Slicing;
 
 /// <summary>
-/// Computes adaptive Z slice positions using surface-normal analysis.
+/// Computes adaptive slice positions from surface slope relative to the slicing axis.
 ///
 /// Based on Wasserfall et al. "Adaptive Slicing for the FDM Process Revisited" (CASE 2017)
 /// with Vojtech Bubnik's triangle-area error metric, as implemented in OrcaSlicer / PrusaSlicer.
 ///
-/// The core insight: stairstepping is most visible on surfaces that slope gently from horizontal.
-/// Near-vertical faces impose no constraint because each layer adds only a tiny horizontal step.
-/// Quality factor [0=finest, 1=coarsest] linearly scales the allowed surface deviation between
-/// MinLayerHeight and MaxLayerHeight, which drives layer thickness via the slope formula.
+/// Stairstepping is most visible on faces that lie nearly parallel to the slice plane.
+/// Faces that run along the plane normal impose no constraint. Quality [0=finest, 1=coarsest]
+/// maps the allowed surface deviation from MinLayerHeight to MaxLayerHeight.
+/// Planar slicing passes <see cref="Vector3.UnitZ"/>; angled slicing passes the plane normal.
+/// Both go through <see cref="ComputePositions"/>, so a vertical axis stays the old per-Z metric.
 /// </summary>
 public static class AdaptiveLayerHeights
 {
-    private readonly struct FaceZ
+    private readonly struct FaceSpan
     {
-        public float ZMin { get; init; }
-        public float ZMax { get; init; }
-        public float NCos { get; init; }  // |n.z|            — vertical component of unit normal
-        public float NSin { get; init; }  // sqrt(n.x²+n.y²) — horizontal component
+        public float TMin { get; init; }
+        public float TMax { get; init; }
+        public float NCos { get; init; }  // |n · axis|
+        public float NSin { get; init; }  // length of n perpendicular to axis
     }
 
     /// <summary>
-    /// Returns the list of Z values to slice at.
+    /// Returns the list of world-Z values to slice at. Equivalent to
+    /// <see cref="ComputePositions"/> along <see cref="Vector3.UnitZ"/>.
     /// </summary>
-    /// <param name="meshes">Flat triangle soups (every 3 verts = one triangle) in world space.</param>
-    /// <param name="zMin">Mesh bottom Z.</param>
-    /// <param name="zMax">Mesh top Z.</param>
-    /// <param name="firstLayerHeight">Height of the very first layer.</param>
-    /// <param name="minLayerHeight">Minimum allowed layer height (mm).</param>
-    /// <param name="maxLayerHeight">Maximum allowed layer height (mm). Typically == nominal LayerHeight.</param>
-    /// <param name="qualityFactor">0 = finest detail (min layers), 1 = fastest (max layers).</param>
     public static float[] ComputeZPositions(
         IReadOnlyList<Vector3[]> meshes,
         float zMin, float zMax,
         float firstLayerHeight,
         float minLayerHeight, float maxLayerHeight,
         float qualityFactor)
+        => ComputePositions(meshes, Vector3.UnitZ, zMin, zMax,
+            firstLayerHeight, minLayerHeight, maxLayerHeight, qualityFactor);
+
+    /// <summary>
+    /// Returns signed distances along <paramref name="axis"/> at which to cut.
+    /// <paramref name="axis"/> is the slice-plane normal (unit length). Positions start at
+    /// <paramref name="tMin"/> + <paramref name="firstLayerHeight"/> and step by the slope metric.
+    /// </summary>
+    public static float[] ComputePositions(
+        IReadOnlyList<Vector3[]> meshes,
+        Vector3 axis,
+        float tMin, float tMax,
+        float firstLayerHeight,
+        float minLayerHeight, float maxLayerHeight,
+        float qualityFactor)
     {
+        float len2 = axis.LengthSquared();
+        if (len2 < 1e-8f) axis = Vector3.UnitZ;
+        else if (MathF.Abs(len2 - 1f) > 1e-4f) axis /= MathF.Sqrt(len2);
+
         qualityFactor = Math.Clamp(qualityFactor, 0f, 1f);
 
-        var faces = BuildFaces(meshes);
-        // Sort by ZMin so the range-scan loop below can exit early.
-        faces.Sort((a, b) => a.ZMin.CompareTo(b.ZMin));
+        var faces = BuildFaces(meshes, axis);
+        // Sort by span start so the range-scan loop below can exit early.
+        faces.Sort((a, b) => a.TMin.CompareTo(b.TMin));
 
         var positions = new List<float>();
-        float z = zMin + firstLayerHeight;
+        float t = tMin + firstLayerHeight;
         int currentFacet = 0;
 
-        while (z < zMax - 1e-4f)
+        while (t < tMax - 1e-4f)
         {
-            positions.Add(z);
-            float h = NextLayerHeight(faces, z, qualityFactor,
+            positions.Add(t);
+            float h = NextLayerHeight(faces, t, qualityFactor,
                 minLayerHeight, maxLayerHeight, ref currentFacet);
-            z += h;
+            t += h;
         }
 
         return [.. positions];
     }
 
     private static float NextLayerHeight(
-        List<FaceZ> faces, float printZ, float quality,
+        List<FaceSpan> faces, float printT, float quality,
         float minH, float maxH, ref int currentFacet)
     {
         float height = maxH;
@@ -72,22 +86,20 @@ public static class AdaptiveLayerHeights
         // quality=1 → maxDev=maxH  (loose tolerance, thick layers where geometry allows)
         float maxDev = minH + quality * (maxH - minH);
 
-        // ── First pass: scan active facets from the last known position ────────
-        // Facets are sorted by ZMin. We walk forward from currentFacet, looking for
-        // any facet that straddles printZ (ZMin < printZ < ZMax).
+        // Facets are sorted by TMin. Walk forward from currentFacet for any facet
+        // that straddles printT (TMin < printT < TMax).
         int orderedId = currentFacet;
         bool firstHit = false;
         for (; orderedId < faces.Count; orderedId++)
         {
             var f = faces[orderedId];
-            // Sorted list: once ZMin ≥ printZ nothing further can intersect from below.
-            if (f.ZMin >= printZ) break;
-            if (f.ZMax > printZ)
+            // Sorted list: once TMin ≥ printT nothing further can intersect from below.
+            if (f.TMin >= printT) break;
+            if (f.TMax > printT)
             {
-                // Remember where the scan should restart next call.
                 if (!firstHit) { firstHit = true; currentFacet = orderedId; }
-                // Skip faces whose top just barely touches printZ (degenerate contact).
-                if (f.ZMax < printZ + 1e-4f) continue;
+                // Skip faces whose top just barely touches printT (degenerate contact).
+                if (f.TMax < printT + 1e-4f) continue;
                 float h = LayerHeightFromSlope(f, maxDev);
                 if (h < height) height = h;
             }
@@ -95,22 +107,20 @@ public static class AdaptiveLayerHeights
 
         height = MathF.Max(height, minH);
 
-        // ── Second pass: check newly revealed facets inside the tentative height ─
-        // A face starting inside [printZ, printZ+height) might further restrict height.
+        // A face starting inside [printT, printT+height) might further restrict height.
         if (height > minH)
         {
             for (; orderedId < faces.Count; orderedId++)
             {
                 var f = faces[orderedId];
-                if (f.ZMin >= printZ + height) break;
-                if (f.ZMax < printZ + 1e-4f) continue;
+                if (f.TMin >= printT + height) break;
+                if (f.TMax < printT + 1e-4f) continue;
 
                 float reducedH = LayerHeightFromSlope(f, maxDev);
-                float zDiff    = f.ZMin - printZ;
+                float tDiff    = f.TMin - printT;
 
-                if (reducedH < zDiff)
-                    // The face's bottom is already above the proposed layer — snap to it.
-                    height = zDiff;
+                if (reducedH < tDiff)
+                    height = tDiff;
                 else if (reducedH < height)
                     height = reducedH;
             }
@@ -122,9 +132,9 @@ public static class AdaptiveLayerHeights
 
     // Vojtech's triangle-area error metric (from OrcaSlicer/PrusaSlicer SlicingAdaptive.cpp).
     // Returns the maximum safe layer height that keeps surface deviation within maxDev.
-    // The min with maxDev/0.184 caps the result for near-horizontal faces where the
-    // Vojtech term would otherwise collapse to zero.
-    private static float LayerHeightFromSlope(in FaceZ face, float maxDev)
+    // The min with maxDev/0.184 caps the result for faces nearly parallel to the slice
+    // plane, where the Vojtech term would otherwise collapse to zero.
+    private static float LayerHeightFromSlope(in FaceSpan face, float maxDev)
     {
         float vojtech = face.NCos > 1e-5f
             ? 1.44f * maxDev * MathF.Sqrt(face.NSin / face.NCos)
@@ -132,9 +142,9 @@ public static class AdaptiveLayerHeights
         return MathF.Min(maxDev / 0.184f, vojtech);
     }
 
-    private static List<FaceZ> BuildFaces(IReadOnlyList<Vector3[]> meshes)
+    private static List<FaceSpan> BuildFaces(IReadOnlyList<Vector3[]> meshes, Vector3 axis)
     {
-        var faces = new List<FaceZ>();
+        var faces = new List<FaceSpan>();
         foreach (var verts in meshes)
         {
             for (int i = 0; i + 2 < verts.Length; i += 3)
@@ -144,12 +154,17 @@ public static class AdaptiveLayerHeights
                 float len = n.Length();
                 if (len < 1e-8f) continue;
                 n /= len;
-                faces.Add(new FaceZ
+                float t0 = Vector3.Dot(v0, axis);
+                float t1 = Vector3.Dot(v1, axis);
+                float t2 = Vector3.Dot(v2, axis);
+                float nCos = MathF.Abs(Vector3.Dot(n, axis));
+                var perp = n - axis * Vector3.Dot(n, axis);
+                faces.Add(new FaceSpan
                 {
-                    ZMin = MathF.Min(MathF.Min(v0.Z, v1.Z), v2.Z),
-                    ZMax = MathF.Max(MathF.Max(v0.Z, v1.Z), v2.Z),
-                    NCos = MathF.Abs(n.Z),
-                    NSin = MathF.Sqrt(n.X * n.X + n.Y * n.Y)
+                    TMin = MathF.Min(MathF.Min(t0, t1), t2),
+                    TMax = MathF.Max(MathF.Max(t0, t1), t2),
+                    NCos = nCos,
+                    NSin = perp.Length(),
                 });
             }
         }

@@ -499,7 +499,7 @@ public static class StartStopCalibrationWorkspace
             placements,
             (test, wallA, wallB, _, _) => BuildDualIslandToolpath(
                 wallA, wallB, thicknessMm, lengthMm, bedZ, layerH, layerCount, beadWidth),
-            layerH, beadWidth, printMps, travelMps, wipeMps);
+            layerH, beadWidth, printMps, travelMps, wipeMps, bedZ);
 
     /// <summary>
     /// Same serial matrix as dual-wall: each T-cell has <b>two</b>  circle rings (A/B)
@@ -524,7 +524,7 @@ public static class StartStopCalibrationWorkspace
             placements,
             (_, wallA, wallB, _, _) => BuildDualCircleToolpath(
                 wallA.X, wallA.Y, wallB.X, wallB.Y, pathR, bedZ, layerH, layerCount, segments),
-            layerH, beadWidth, printMps, travelMps, wipeMps);
+            layerH, beadWidth, printMps, travelMps, wipeMps, bedZ);
     }
 
     private static Toolpath AssembleSerialMatrix(
@@ -534,7 +534,8 @@ public static class StartStopCalibrationWorkspace
         float beadWidth,
         float printMps,
         float travelMps,
-        float wipeMps)
+        float wipeMps,
+        float bedZ)
     {
         var result = new Toolpath();
         int layerIndex = 0;
@@ -556,6 +557,7 @@ public static class StartStopCalibrationWorkspace
                 WipeLengthMm         = test.WipeLengthMm,
                 WipeRampMm           = test.WipeRampMm,
                 WipeSkipShortTravels = true,
+                BedZ                 = bedZ,
             };
             cellPath = MovementPostProcessor.Apply(cellPath, settings);
             float resumeSec = Math.Max(0f, test.ResumeWaitMs / 1000f);

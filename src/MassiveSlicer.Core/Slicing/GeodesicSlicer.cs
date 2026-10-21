@@ -19,10 +19,9 @@ public static class GeodesicSlicer
         if (mesh.VertexCount == 0 || mesh.Triangles.Length == 0) return new Toolpath();
         progress?.Invoke(0.05f);
 
-        float zMin = float.MaxValue;
-        foreach (var v in mesh.Vertices) if (v.Z < zMin) zMin = v.Z;
-
-        var geodDist = MeshGraph.DijkstraFromZThreshold(mesh, zMin + settings.LayerHeight * 0.1f);
+        // Seed the bottom of every connected piece. A stray fragment below the part
+        // used to become the only seed, and the real shell was left unreachable.
+        var geodDist = DistanceFromLocalBottoms(mesh, settings.LayerHeight * 0.1f);
         progress?.Invoke(0.25f);
 
         float maxDist = 0f;
@@ -45,5 +44,41 @@ public static class GeodesicSlicer
             settings,
             targetAtParameter: t => t,
             progress: progress is null ? null : f => progress(0.25f + f * 0.75f));
+    }
+
+    static float[] DistanceFromLocalBottoms(WeldedMesh mesh, float band)
+    {
+        int n = mesh.VertexCount;
+        var comp = new int[n];
+        Array.Fill(comp, -1);
+        var zMin = new List<float>();
+        var stack = new Stack<int>();
+
+        for (int i = 0; i < n; i++)
+        {
+            if (comp[i] >= 0) continue;
+            int id = zMin.Count;
+            zMin.Add(float.MaxValue);
+            stack.Push(i);
+            comp[i] = id;
+            while (stack.Count > 0)
+            {
+                int u = stack.Pop();
+                float z = mesh.Vertices[u].Z;
+                if (z < zMin[id]) zMin[id] = z;
+                foreach (var (v, _) in mesh.Adjacency[u])
+                {
+                    if (comp[v] >= 0) continue;
+                    comp[v] = id;
+                    stack.Push(v);
+                }
+            }
+        }
+
+        var seeds = new List<int>();
+        for (int i = 0; i < n; i++)
+            if (mesh.Vertices[i].Z <= zMin[comp[i]] + band)
+                seeds.Add(i);
+        return MeshGraph.DijkstraFromSeeds(mesh, seeds);
     }
 }

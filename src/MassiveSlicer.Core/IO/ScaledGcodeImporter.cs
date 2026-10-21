@@ -3,14 +3,19 @@ using System.IO.Compression;
 using System.Numerics;
 using System.Text;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Slicing;
 
 namespace MassiveSlicer.Core.IO;
 
 /// <summary>
 /// Imports a desktop slicer toolpath (Bambu / Orca / Prusa gcode, or a
 /// <c>.gcode.3mf</c> plate) that was sliced at a reduced scale, and rebuilds
-/// it at full size for MassiveDRIVE. Machine prime lines and nozzle wipes
-/// are not part of the part.
+/// it at full size for MassiveDRIVE. Machine prime lines, nozzle wipes, and
+/// spiral Z-lifts are not part of the part. A desktop Z hop is dropped.
+/// What remains is the travel, so MassiveSLICER can put its own wipe and
+/// Z hop on that move. Ends within 3× bead width are stitched, and an infill
+/// end that meets a wall is bridged onto that line, so each layer is one
+/// continuous path where the beads allow it.
 /// </summary>
 public static class ScaledGcodeImporter
 {
@@ -63,8 +68,8 @@ public static class ScaledGcodeImporter
     /// <summary>
     /// <paramref name="sourcePercent"/> is how the desktop file was sliced (10 = 10%).
     /// Geometry is scaled by 100 / that percent, then centered on
-    /// <paramref name="bedWorldOffset"/> (Print Bed 0,0,0). Z stays nozzle height
-    /// above that bed.
+    /// <paramref name="bedWorldOffset"/> (middle of the print surface, on top).
+    /// Z stays nozzle height above that surface.
     /// </summary>
     public static Result Import(string gcode, float sourcePercent, Vector3 bedWorldOffset)
     {
@@ -74,6 +79,7 @@ public static class ScaledGcodeImporter
 
         var raw = Parse(gcode);
         TrimMachineTravels(raw);
+        CollapseTravels(raw);
         if (raw.Moves.Count == 0)
             return new Result(new Toolpath(), 0, 0, factor, 0, 0, Vector3.Zero);
 
@@ -132,6 +138,8 @@ public static class ScaledGcodeImporter
         }
 
         var size = new Vector3((maxX - minX) * factor, (maxY - minY) * factor, (maxZ - minZ) * factor);
+        tp.BeadWidthMm = Math.Max(0.1f, raw.BeadWidthMm * factor);
+        BeadTravelRouter.Reroute(tp, tp.BeadWidthMm);
         return new Result(
             tp,
             moves,
@@ -219,6 +227,75 @@ public static class ScaledGcodeImporter
         }
     }
 
+    /// <summary>
+    /// A desktop hop is one across move, so a straight run folds into the
+    /// travel from the end of a bead to the start of the next. A comb that
+    /// leaves that straight line stays a polyline — folding it would cut a
+    /// chord across an opening.
+    /// </summary>
+    static void CollapseTravels(Raw raw)
+    {
+        var src = raw.Moves;
+        if (src.Count == 0)
+            return;
+        var dst = new List<RawMove>(src.Count);
+        int i = 0;
+        while (i < src.Count)
+        {
+            if (src[i].Extrude)
+            {
+                dst.Add(src[i]);
+                i++;
+                continue;
+            }
+
+            int j = i;
+            while (j < src.Count && !src[j].Extrude)
+                j++;
+
+            var start = src[i].From;
+            var end = j < src.Count ? src[j].From : src[j - 1].To;
+            bool straight = true;
+            for (int k = i; k < j; k++)
+            {
+                if (OffSegment(src[k].From, start, end) > 0.5f
+                    || OffSegment(src[k].To, start, end) > 0.5f)
+                {
+                    straight = false;
+                    break;
+                }
+            }
+
+            if (j - i <= 1 || straight)
+            {
+                if ((end - start).LengthSquared() > 1e-6f)
+                {
+                    int layer = j < src.Count ? src[j].Layer : src[j - 1].Layer;
+                    bool layerChange = MathF.Abs(end.Z - start.Z) > 1e-3f;
+                    dst.Add(new RawMove(start, end, false, layerChange, false, false, layer));
+                }
+            }
+            else
+            {
+                for (int k = i; k < j; k++)
+                    dst.Add(src[k]);
+            }
+            i = j;
+        }
+
+        src.Clear();
+        src.AddRange(dst);
+    }
+
+    static float OffSegment(Vector3 p, Vector3 a, Vector3 b)
+    {
+        var ab = b - a;
+        float len2 = ab.LengthSquared();
+        if (len2 < 1e-8f) return Vector3.Distance(p, a);
+        float t = Math.Clamp(Vector3.Dot(p - a, ab) / len2, 0f, 1f);
+        return Vector3.Distance(p, a + ab * t);
+    }
+
     static bool IsToolpathEnd(string s)
         => s.StartsWith("; MACHINE_END_GCODE_START", StringComparison.OrdinalIgnoreCase)
            || s.StartsWith(";EXECUTABLE_BLOCK_END", StringComparison.OrdinalIgnoreCase)
@@ -296,7 +373,7 @@ public static class ScaledGcodeImporter
 
             float x0 = x, y0 = y, z0 = z, e0 = e;
             float iOff = 0, jOff = 0, r = float.NaN;
-            bool hasI = false, hasJ = false, hasR = false;
+            bool hasX = false, hasY = false, hasI = false, hasJ = false, hasR = false;
             foreach (var w in words.Skip(1))
             {
                 if (w.Length < 2) continue;
@@ -305,8 +382,8 @@ public static class ScaledGcodeImporter
                     continue;
                 switch (a)
                 {
-                    case 'X': x = absXyz ? v : x + v; break;
-                    case 'Y': y = absXyz ? v : y + v; break;
+                    case 'X': x = absXyz ? v : x + v; hasX = true; break;
+                    case 'Y': y = absXyz ? v : y + v; hasY = true; break;
                     case 'Z': z = absXyz ? v : z + v; break;
                     case 'E': e = absE ? v : e + v; break;
                     case 'I': iOff = v; hasI = true; break;
@@ -326,8 +403,25 @@ public static class ScaledGcodeImporter
 
             if (motion is 2 or 3 && (hasI || hasJ || hasR))
             {
+                // Bambu spiral lift: "G3 Z0.6 I1.2 J0 P1" and no X or Y.
+                // P1 is one full turn. That circle is the hop, not the part.
+                if (!hasX && !hasY)
+                {
+                    // Spiral lift. Keep the pose and drop the circle. The travel
+                    // that follows is what MassiveSLICER wipes and hops.
+                    layerChangePending = false;
+                    continue;
+                }
                 EmitArc(raw, from, to, iOff, jOff, hasR ? r : float.NaN, motion == 2, extrude && !inWipe,
                     layerChangePending, zOnly, brim, layer, ref last);
+                layerChangePending = false;
+                continue;
+            }
+
+            // A Z-only move with no extrusion is the desktop hop, or the
+            // return to layer height. The next bead carries the real Z.
+            if (!extrude && zOnly)
+            {
                 layerChangePending = false;
                 continue;
             }
@@ -335,7 +429,7 @@ public static class ScaledGcodeImporter
             if ((to - from).LengthSquared() < 1e-8f)
                 continue;
 
-            Emit(raw, from, to, extrude, layerChangePending && !extrude, zOnly && !extrude, brim, layer, ref last);
+            Emit(raw, from, to, extrude, layerChangePending && !extrude, false, brim, layer, ref last);
             layerChangePending = false;
         }
 

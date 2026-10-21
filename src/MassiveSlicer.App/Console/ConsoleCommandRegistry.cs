@@ -463,6 +463,40 @@ public sealed partial class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "cpf",
+            Description = "Continuous Planar Field: report whether it is listed and active. Does not slice.",
+            Usage = "cpf",
+            Execute = (ctx, _) =>
+            {
+                var add = ctx.Main.RightPanel.Additive;
+                bool listed = add.AvailableMethodNames.Contains("Continuous Planar Field");
+                ctx.Log($"[cpf] active={add.MethodDisplayName}  listed={listed}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "sdf",
+            Description = "Signed Distance slice method: report whether it is listed and active. Does not slice.",
+            Usage = "sdf",
+            Execute = (ctx, _) =>
+            {
+                var add = ctx.Main.RightPanel.Additive;
+                bool listed = add.AvailableMethodNames.Contains("Signed Distance");
+                ctx.Log($"[sdf] active={add.MethodDisplayName}  listed={listed}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "tcpadj",
+            Description = "TCP Adjust spherical attractors: list, add, remove, radius, lean",
+            Usage = "tcpadj [list|add|remove|radius <mm>|lean <xDeg> <yDeg>]",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.TcpAttractorCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "effector",
             Description = "Toggle live effector point 1-3, or list active positions",
             Usage = "effector <1|2|3|list>",
@@ -525,6 +559,14 @@ public sealed partial class ConsoleCommandRegistry
                 ctx.Main.Viewport.RequestActiveToolpathReupload?.Invoke();
                 ctx.Log($"[tpopt] {stats}");
             },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "tpstitch",
+            Description = "Stitch the active toolpath into a continuous path per layer: join ends and bridge infill onto walls within 3× bead width. Does not cross or reprint a bead.",
+            Usage = "tpstitch",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.StitchActiveToolpath()),
         });
 
         Register(new ConsoleCommandDefinition
@@ -1649,7 +1691,7 @@ public sealed partial class ConsoleCommandRegistry
                     ctx.Log("[speednote] cleared");
                     return;
                 }
-                var parts = raw.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+                var parts = raw.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length < 2
                     || !int.TryParse(parts[0].TrimStart('L', 'l'), out int layer)
                     || layer < 1
@@ -1722,6 +1764,32 @@ public sealed partial class ConsoleCommandRegistry
             Aliases = ["krl", "import krl"],
             Description = "Import a KRL program",
             Execute = (ctx, _) => ctx.RequestImportKrlPicker(),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "import-scaled",
+            Aliases = ["scaled"],
+            Description = "Import a desktop gcode or .gcode.3mf sliced at a percent of full size. Default 10.",
+            Usage = "import-scaled <path> [percent]",
+            Execute = (ctx, args) =>
+            {
+                var text = args.Trim().Trim('"');
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    ctx.LogError("usage: import-scaled <path> [percent]");
+                    return;
+                }
+                float percent = ScaledGcodeImporter.DefaultSourcePercent;
+                int sp = text.LastIndexOf(' ');
+                if (sp > 0 && float.TryParse(text[(sp + 1)..], System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out float parsed))
+                {
+                    percent = parsed;
+                    text = text[..sp].Trim().Trim('"');
+                }
+                ctx.Main.ImportScaledToolpath(text, percent);
+            },
         });
 
         Register(new ConsoleCommandDefinition

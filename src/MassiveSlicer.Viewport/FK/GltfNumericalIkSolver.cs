@@ -12,7 +12,7 @@ namespace MassiveSlicer.Viewport.FK;
 /// Position-only variant: 3D task space, 3×3 DLS matrix.
 /// Orientation-constrained variant: 6D task space (pos + rot), 6×6 DLS matrix.
 /// </summary>
-public sealed class GltfNumericalIkSolver
+public class GltfNumericalIkSolver
 {
     /// <summary>
     /// Print 6D: reject a position hit whose rotation-vector error is still this
@@ -20,10 +20,10 @@ public sealed class GltfNumericalIkSolver
     /// </summary>
     public const float PrintOrientErrMax = 0.25f;
 
-    private readonly Matrix4[] _restPose;
-    private Matrix4   _chainRoot;      // WorldTransform of joint_1's parent (exact scene FK base)
-    private readonly Matrix4   _tcpLocal;       // TCP offset as a local transform in GLTF space
-    private Vector3   _robotWorldPos;  // ROBROOT origin in scene space (for ROBROOT ↔ scene conversion)
+    protected readonly Matrix4[] _restPose;
+    protected Matrix4   _chainRoot;      // WorldTransform of joint_1's parent (exact scene FK base)
+    protected readonly Matrix4   _tcpLocal;       // TCP offset as a local transform in GLTF space
+    protected Vector3   _robotWorldPos;  // ROBROOT origin in scene space (for ROBROOT ↔ scene conversion)
     private readonly float     _toolFrameRoll;  // rotation around flange outward axis (radians), matches SyncTcpReadout
     // Taught TOOL_DATA ABC (T12). Orientation-only — never baked into _tcpLocal or the triad XYZ.
     private readonly float     _tcpADeg;
@@ -31,7 +31,7 @@ public sealed class GltfNumericalIkSolver
     private readonly float     _tcpCDeg;
     private readonly bool      _hasTcpAbc;
 
-    private readonly JointConfig[] _jcfg;
+    protected readonly JointConfig[] _jcfg;
 
     // Workspace bounds measured directly from FK, not derived from abstract L1/L2.
     // Sampling A2/A3 over their full joint ranges gives the exact TCP reach envelope
@@ -165,7 +165,7 @@ public sealed class GltfNumericalIkSolver
     public float PreferredHorizontalReachMm
         => 0.5f * (_minReachFromShoulder + _maxReachFromShoulder);
 
-    private bool IsWorkspaceReachable(Vector3 targetRobroot)
+    protected bool IsWorkspaceReachable(Vector3 targetRobroot)
     {
         float dxy        = MathF.Sqrt(targetRobroot.X * targetRobroot.X + targetRobroot.Y * targetRobroot.Y);
         float dz         = targetRobroot.Z - _shoulderZ;
@@ -180,7 +180,7 @@ public sealed class GltfNumericalIkSolver
 
     // -- FK --------------------------------------------------------------------
 
-    private Matrix4 ComputeJoint6Transform(float[] krl)
+    protected Matrix4 ComputeJoint6Transform(float[] krl)
     {
         var wt = _chainRoot;
         for (int i = 0; i < 6; i++)
@@ -207,7 +207,7 @@ public sealed class GltfNumericalIkSolver
         => (_tcpLocal * ComputeJoint6Transform(krl)).Row3.Xyz;
 
     /// <summary>Returns TCP position and normalized rotation rows in one FK pass.</summary>
-    private (Vector3 pos, Vector3 r0, Vector3 r1, Vector3 r2) ComputeTcpAndRot(float[] krl)
+    protected (Vector3 pos, Vector3 r0, Vector3 r1, Vector3 r2) ComputeTcpAndRot(float[] krl)
     {
         var   wt  = ComputeJoint6Transform(krl);
         var   tcp = (_tcpLocal * wt).Row3.Xyz;
@@ -510,7 +510,7 @@ public sealed class GltfNumericalIkSolver
     /// <paramref name="maxIterations"/> is a safety cap; stagnation detection typically exits
     /// well before it. 40 is sufficient for reachability checks.
     /// </summary>
-    public float[]? Solve(Vector3 targetRobroot, float[] seed, int maxIterations = 200, float finalTolerance = 10f)
+    public virtual float[]? Solve(Vector3 targetRobroot, float[] seed, int maxIterations = 200, float finalTolerance = 10f)
     {
         // Analytical workspace test: rejects targets that are geometrically unreachable
         // (both too far AND too close) before spending iterations on the DLS loop.
@@ -600,7 +600,7 @@ public sealed class GltfNumericalIkSolver
     /// — otherwise a folded home already on the bead is accepted with the extruder
     /// on its side.
     /// </summary>
-    public float[]? Solve(Vector3 targetRobroot, float[] seed,
+    public virtual float[]? Solve(Vector3 targetRobroot, float[] seed,
                           (Vector3 r0, Vector3 r1, Vector3 r2) targetRot,
                           int maxIterations = 300,
                           bool requireOrientation = false)
@@ -705,7 +705,7 @@ public sealed class GltfNumericalIkSolver
     /// Orientation error as a rotation vector (axis × sin(angle/2) approximation).
     /// Formula: ω = ½ Σ_k (cR_k × tR_k) -- drives current frame toward target frame.
     /// </summary>
-    private static Vector3 RotErr(
+    protected static Vector3 RotErr(
         Vector3 tR0, Vector3 tR1, Vector3 tR2,
         Vector3 cR0, Vector3 cR1, Vector3 cR2)
         => 0.5f * (Vector3.Cross(cR0, tR0) + Vector3.Cross(cR1, tR1) + Vector3.Cross(cR2, tR2));

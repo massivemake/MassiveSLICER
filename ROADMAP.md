@@ -135,7 +135,7 @@ Key facts:
 ## Features
 
 ### Built ✅
-- Slicing: Planar / Angled / Geodesic / Curved; adaptive layer height; infill;
+- Slicing: Planar / Angled / Geodesic / Curved / Signed Distance / Continuous Planar Field; adaptive layer height; infill;
   Normal + Surface modes; contour-offset control; simplification
 - Seams: direction control, visual seam editor, zig-zag; one seam guide per part,
   drawn along the model's own surface profile (placing again moves it)
@@ -143,6 +143,10 @@ Key facts:
   X-bracing
 - Wave effects: sine/sawtooth/triangle; **Fixed + Dynamic** phase methods;
   gradient; stagger; pattern effects (relief, twist, fade); live effectors
+- TCP Adjust: spherical attractors with an aimable extruder cylinder. Inside
+  the sphere the toolpath leans toward that angle; on the cylinder it matches
+- Signed Distance: bead shells on the mesh signed-distance field. Contours
+  follow each shell; the nozzle follows the outward gradient
 - KRL export: temps + RPM via `$ANOUT`, per-layer adaptive speed & flow,
   resume ramps, wipes, per-move TCP yaw; KRL **import** (toolpath from .src)
 - Robot validation: per-move reachability + singularity IK pass, TCP

@@ -11,4 +11,10 @@ public enum WipeMode
 
     /// <summary>Continue forward along the print direction past the travel start point.</summary>
     SameDirection,
+
+    /// <summary>
+    /// Leave the bead at 90° in the layer plane. Of the two sides, pick the one
+    /// toward the closer of the previous bead and the next bead.
+    /// </summary>
+    Perpendicular,
 }

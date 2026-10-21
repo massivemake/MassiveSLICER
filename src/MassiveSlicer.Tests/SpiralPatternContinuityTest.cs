@@ -239,6 +239,56 @@ public class SpiralPatternContinuityTest
         }
     }
 
+    /// <summary>
+    /// Angled slices store layer.Z as the plane's height at the world origin, not the
+    /// height of the contour. Spiral mode used to stamp that label onto every point, so
+    /// each layer left the part and the stack grew far taller than the mesh.
+    /// </summary>
+    [Fact]
+    public void AngledSpiralStaysOnTheTiltedPlane()
+    {
+        float tx = -42.4f * MathF.PI / 180f;
+        var n = Vector3.Normalize(new Vector3(0f, -MathF.Sin(tx), MathF.Cos(tx)));
+        // Part sits far from the origin, where planeD / n.Z is hundreds of mm off.
+        float d0 = Vector3.Dot(new Vector3(0f, 400f, 100f), n);
+        float spacing = 4f;
+
+        ToolpathLayer Loop(int index, float d)
+        {
+            var layer = new ToolpathLayer(index, d / n.Z) { PlaneNormal = n, Height = spacing };
+            Vector3 P(float x, float y) => new(x, y, (d - n.Y * y) / n.Z);
+            var corners = new[] { P(1000f, 350f), P(1100f, 350f), P(1100f, 450f), P(1000f, 450f) };
+            for (int k = 0; k < 4; k++)
+                layer.Moves.Add(new ToolpathMove(corners[k], corners[(k + 1) % 4], MoveKind.Extrude));
+            return layer;
+        }
+
+        var tp = new Toolpath();
+        tp.Layers.Add(Loop(0, d0));
+        tp.Layers.Add(Loop(1, d0 + spacing));
+
+        var spiralled = SpiralizeEffect.Apply(tp, new SliceSettings { Spiralize = true });
+        var layer = spiralled.Layers[0];
+
+        float lo = float.MaxValue, hi = float.MinValue;
+        foreach (var m in layer.Moves)
+        {
+            foreach (var p in new[] { m.From, m.To })
+            {
+                float signed = Vector3.Dot(p, n) - d0;
+                Assert.InRange(signed, -0.05f, spacing + 0.05f);
+                lo = MathF.Min(lo, p.Z);
+                hi = MathF.Max(hi, p.Z);
+            }
+        }
+
+        // The old intercept stamp parked this contour near d/n.Z, ~365 mm above the part.
+        float interceptZ = d0 / n.Z;
+        Assert.True(hi < interceptZ - 100f,
+            $"contour climbed to Z {hi:F0}, toward the origin intercept {interceptZ:F0}");
+        Assert.True(hi - lo > 20f, $"tilted contour was flattened (Z span {hi - lo:F1})");
+    }
+
     /// <summary>The pattern must not drop the layer metadata the rest of the pipeline reads.</summary>
     [Fact]
     public void PatternKeepsLayerHeight()

@@ -38,6 +38,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         };
         OpenCurvedBoundaryEditorCommand  = new RelayCommand(() => OnOpenCurvedBoundaryEditorRequested?.Invoke());
         ImportCurvedBoundariesCommand    = new RelayCommand(() => OnImportCurvedBoundariesRequested?.Invoke());
+        NudgeWallCountCommand = new RelayCommand<string>(delta =>
+        {
+            if (!int.TryParse(delta, out int d)) return;
+            WallCount += d;
+        });
 
         PropertyChanged += (_, e) =>
         {
@@ -91,6 +96,21 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _beadWidth, Math.Clamp(value, 1.0, 100.0));
     }
 
+    private int _wallCount = 1;
+
+    /// <summary>Concentric shells for angled Normal slicing. 1 = the outer wall only.</summary>
+    public int WallCount
+    {
+        get => _wallCount;
+        set => SetField(ref _wallCount, Math.Clamp(value, 1, 16));
+    }
+
+    /// <summary>+ / − for <see cref="WallCount"/>. Parameter is the integer step.</summary>
+    public RelayCommand<string> NudgeWallCountCommand { get; }
+
+    /// <summary>Wall count applies only to Angled + Normal. Hidden for Surface and other methods.</summary>
+    public bool ShowWallCount => _method == SliceMethod.Angled && _slicingMode == "Normal";
+
     private bool   _useDisplacedStock;
     private double _stockAllowanceMm = 2.0;
 
@@ -127,7 +147,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     private bool _adaptiveLayerHeight;
 
-    /// <summary>When true, the planar slicer adapts layer spacing to local surface slope.</summary>
+    /// <summary>When true, Planar and Angled slicing adapt layer spacing to surface slope.</summary>
     public bool AdaptiveLayerHeight
     {
         get => _adaptiveLayerHeight;
@@ -141,11 +161,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Visible when adaptive is checked and method is Planar.</summary>
-    public bool ShowAdaptiveControls => _adaptiveLayerHeight && _method == SliceMethod.Planar;
+    /// <summary>Visible when adaptive is checked and the method is Planar or Angled.</summary>
+    public bool ShowAdaptiveControls => _adaptiveLayerHeight && _method is SliceMethod.Planar or SliceMethod.Angled or SliceMethod.ContinuousPlanar;
 
-    /// <summary>Visible when method is Planar (for the checkbox itself).</summary>
-    public bool ShowAdaptiveLayerHeight => _method == SliceMethod.Planar;
+    /// <summary>Visible when the method is Planar, Angled, or Continuous Planar (for the checkbox itself).</summary>
+    public bool ShowAdaptiveLayerHeight => _method is SliceMethod.Planar or SliceMethod.Angled or SliceMethod.ContinuousPlanar;
 
     // -- Slicing mode (Normal vs Surface) -------------------------------------
 
@@ -165,14 +185,18 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(ShowInfillControls));
                 OnPropertyChanged(nameof(SurfaceModeActive));
+                OnPropertyChanged(nameof(ShowWallCount));
             }
         }
     }
 
     public bool SurfaceModeActive => _slicingMode == "Surface";
 
-    /// <summary>Surface mode is for planar/angled strategies (not geodesic/curved).</summary>
-    public bool ShowSlicingMode => _method is not SliceMethod.Geodesic and not SliceMethod.Curved;
+    /// <summary>Surface mode is for planar/angled strategies (not geodesic, curved, or signed distance).</summary>
+    public bool ShowSlicingMode => _method is not SliceMethod.Geodesic
+        and not SliceMethod.Curved
+        and not SliceMethod.SignedDistance
+        and not SliceMethod.ContinuousPlanar;
 
     private double _adaptiveQuality = 0.5;
 
@@ -212,6 +236,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowAdaptiveLayerHeight));
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
                 OnPropertyChanged(nameof(ShowSlicingMode));
+                OnPropertyChanged(nameof(ShowWallCount));
                 OnPropertyChanged(nameof(ShowCurvedControls));
                 OnPropertyChanged(nameof(IsCurvedMethod));
                 OnPropertyChanged(nameof(ShowOrientationFollow));
@@ -221,17 +246,19 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     public string[] AvailableMethodNames { get; } =
-        ["Planar", "Angled", "Multi-Planar", "Geodesic (Experimental)", "Curved (Sweep)"];
+        ["Planar", "Angled", "Multi-Planar", "Geodesic (Experimental)", "Curved (Sweep)", "Signed Distance", "Continuous Planar Field"];
 
     public string MethodDisplayName
     {
         get => Method switch
         {
-            SliceMethod.Angled      => "Angled",
-            SliceMethod.MultiPlanar => "Multi-Planar",
-            SliceMethod.Geodesic    => "Geodesic (Experimental)",
-            SliceMethod.Curved      => "Curved (Sweep)",
-            _                       => "Planar",
+            SliceMethod.Angled         => "Angled",
+            SliceMethod.MultiPlanar    => "Multi-Planar",
+            SliceMethod.Geodesic       => "Geodesic (Experimental)",
+            SliceMethod.Curved         => "Curved (Sweep)",
+            SliceMethod.SignedDistance => "Signed Distance",
+            SliceMethod.ContinuousPlanar => "Continuous Planar Field",
+            _                          => "Planar",
         };
         set => Method = value switch
         {
@@ -242,6 +269,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             "Geodesic"                => SliceMethod.Geodesic,
             "Curved (Sweep)"          => SliceMethod.Curved,
             "Curved"                  => SliceMethod.Curved,
+            "Signed Distance"         => SliceMethod.SignedDistance,
+            "SignedDistance"          => SliceMethod.SignedDistance,
+            "Continuous Planar Field" => SliceMethod.ContinuousPlanar,
+            "Continuous Planar"       => SliceMethod.ContinuousPlanar,
+            "ContinuousPlanar"        => SliceMethod.ContinuousPlanar,
             _                         => SliceMethod.Planar,
         };
     }
@@ -302,18 +334,24 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public bool ShowCurvedControls      => Method == SliceMethod.Curved;
     /// <summary>Surface-follow (vertical ↔ stacking-normal tween) applies to methods that
     /// emit per-move surface normals: Geodesic and Curved (Sweep).</summary>
-    public bool ShowOrientationFollow   => Method is SliceMethod.Geodesic or SliceMethod.Curved;
+    public bool ShowOrientationFollow   => Method is SliceMethod.Geodesic or SliceMethod.Curved or SliceMethod.SignedDistance;
     /// <summary>Layer-lean (previous-layer tilt) applies to plane-stacked methods.</summary>
     public bool ShowLayerLean           => Method is SliceMethod.Planar or SliceMethod.Angled;
     public bool ShowTiltAngle           => Method == SliceMethod.Angled;
     public bool ShowMultiPlanarControls => Method == SliceMethod.MultiPlanar;
     /// <summary>Bead-width contour inset — planar / angled / multi-planar only.</summary>
-    public bool ShowContourOffsetOption => Method is not SliceMethod.Geodesic and not SliceMethod.Curved;
+    public bool ShowContourOffsetOption => Method is not SliceMethod.Geodesic
+                                           and not SliceMethod.Curved
+                                           and not SliceMethod.SignedDistance
+                                           and not SliceMethod.ContinuousPlanar;
     /// <summary>
     /// Seam guides + spiral extras that only apply to planar-style slicing.
     /// Geodesic / Curved still show SEAM for Zig-zag mode.
     /// </summary>
-    public bool ShowPlanarSeamExtras => Method is not SliceMethod.Geodesic and not SliceMethod.Curved;
+    public bool ShowPlanarSeamExtras => Method is not SliceMethod.Geodesic
+                                        and not SliceMethod.Curved
+                                        and not SliceMethod.SignedDistance
+                                        and not SliceMethod.ContinuousPlanar;
 
     private bool _disableContourOffset;
 
@@ -2421,7 +2459,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _zHopMm, Math.Max(0.0, value));
     }
 
-    public string[] WipeModeOptions { get; } = ["Off", "Retrace", "Same-Direction"];
+    public string[] WipeModeOptions { get; } = ["Off", "Retrace", "Same-Direction", "90-Degree"];
 
     public const string ShopWipeMode = "Same-Direction";
     public const double ShopWipeLengthMm = 35.0;
@@ -2460,7 +2498,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     private string _wipeModeDisplay = "Same-Direction";
 
-    /// <summary>Wipe path before travel: Off, Retrace (back), or Same-Direction (forward past the point).</summary>
+    /// <summary>Wipe path before travel: Off, Retrace (back), Same-Direction (forward), or 90-Degree (sideways toward the closer neighbor bead).</summary>
     public string WipeModeDisplay
     {
         get => _wipeModeDisplay;

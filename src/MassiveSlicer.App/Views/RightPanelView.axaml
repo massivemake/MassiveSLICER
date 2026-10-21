@@ -1126,7 +1126,7 @@
                         <Grid ColumnDefinitions="*,*,56">
                             <TextBlock Grid.Column="0" Text="Surface follow (%)"
                                        VerticalAlignment="Center" Classes="LabelMuted"
-                                       ToolTip.Tip="Tweens the TCP between upright (0 = vertical, like Planar) and the full surface-following orientation (100). E.g. 10 keeps the tool nearly upright with 10% of the geodesic tilt."/>
+                                       ToolTip.Tip="Tweens the TCP between upright (0 = vertical, like Planar) and the full surface-following orientation (100). E.g. 10 keeps the tool nearly upright with 10% of the surface tilt. Used by Geodesic, Curved, and Signed Distance."/>
                             <Slider Grid.Column="1" Minimum="0" Maximum="100"
                                     Value="{Binding Additive.OrientationFollowPercent, Mode=TwoWay}"
                                     VerticalAlignment="Center" Margin="8,0,4,0"/>
@@ -1185,6 +1185,24 @@
                                    SelectedItem="{Binding Additive.SlicingMode, Mode=TwoWay}"
                                    Width="100" FontSize="11"
                                    ToolTip.Tip="Normal: solid volume with shells and infill. Surface: cladding/boundary paths on mesh intersections; tool stays vertical unless Overhang orientation is enabled."/>
+                    </Grid>
+
+                    <Grid ColumnDefinitions="*,Auto"
+                          IsVisible="{Binding Additive.ShowWallCount}"
+                          Margin="0,4,0,0">
+                        <TextBlock Grid.Column="0" Text="Walls" VerticalAlignment="Center" Classes="LabelMuted"
+                                   ToolTip.Tip="Concentric shells for angled Normal slicing. 1 is the outer wall. + adds an inner wall one bead width further in."/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                            <Button Classes="ToolbarButton" Padding="8,2" Content="−"
+                                    Command="{Binding Additive.NudgeWallCountCommand}"
+                                    CommandParameter="-1"/>
+                            <TextBlock MinWidth="20" TextAlignment="Center" FontSize="12"
+                                       VerticalAlignment="Center"
+                                       Text="{Binding Additive.WallCount}"/>
+                            <Button Classes="ToolbarButton" Padding="8,2" Content="+"
+                                    Command="{Binding Additive.NudgeWallCountCommand}"
+                                    CommandParameter="1"/>
+                        </StackPanel>
                     </Grid>
 
                     <!-- Curved (Sweep) boundary controls -->
@@ -1416,7 +1434,7 @@
                                               FontSize="11"
                                               IsChecked="{Binding Additive.AdaptiveLayerHeight, Mode=TwoWay}"
                                               IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
-                                              ToolTip.Tip="Vary layer thickness based on surface slope — thin layers on gentle slopes, thick on steep faces. Enables layer preview shading."/>
+                                              ToolTip.Tip="Vary layer thickness based on surface slope relative to the slice plane — thin layers on gentle slopes, thick on steep faces. Planar and Angled. Enables layer preview shading."/>
 
                                     <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowAdaptiveControls}">
                                         <Grid.ColumnDefinitions>
@@ -1673,7 +1691,7 @@
                             <ComboBox Margin="8,0,8,4" HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding Additive.WipeModeOptions}"
                                       SelectedItem="{Binding Additive.WipeModeDisplay, Mode=TwoWay}"
-                                      ToolTip.Tip="Retrace = wipe back over the last extrusion. Same-Direction = continue forward past the travel point for the wipe length."/>
+                                      ToolTip.Tip="Retrace = wipe back over the last extrusion. Same-Direction = continue forward past the travel point. 90-Degree = leave the bead sideways in the layer plane, toward whichever of the previous bead and the next bead is closer. A wipe that would finish below the bed takes another direction, and the Z smash stops at the bed."/>
 
                             <Grid Margin="8,2,8,4">
                                 <Grid.ColumnDefinitions>
@@ -1724,6 +1742,72 @@
                                 <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Additive.StockAllowanceMm, Mode=TwoWay}"
                                                Minimum="0" Maximum="50" Increment="0.5" FormatString="F1" FontSize="11"/>
                             </Grid>
+                        </StackPanel>
+                    </Expander>
+                    <Expander Classes="SectionExpander" Header="TCP ADJUST" IsExpanded="False">
+                        <StackPanel Margin="0,2,0,6">
+                            <TextBlock Text="Place a sphere in the scene. The amber cylinder is the extruder angle. Closer to the sphere, the toolpath leans toward that angle. On the cylinder, it matches."
+                                       Classes="LabelMuted" Margin="8,0,8,6" TextWrapping="Wrap"/>
+                            <Grid Margin="8,0,8,4" ColumnDefinitions="*,*">
+                                <Button Grid.Column="0" Classes="ToolbarButton" Margin="0,0,4,0"
+                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        Command="{Binding $parent[Window].DataContext.Viewport.AddTcpAttractorCommand}"
+                                        ToolTip.Tip="Add a spherical attractor. Move places it. Rotate aims the cylinder.">
+                                    <TextBlock Text="ADD ATTRACTOR" FontSize="11"/>
+                                </Button>
+                                <Button Grid.Column="1" Classes="ToolbarButton" Margin="4,0,0,0"
+                                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        Command="{Binding $parent[Window].DataContext.Viewport.RemoveTcpAttractorCommand}"
+                                        IsEnabled="{Binding $parent[Window].DataContext.Viewport.HasSelectedTcpAttractor}"
+                                        ToolTip.Tip="Remove the selected attractor.">
+                                    <TextBlock Text="REMOVE" FontSize="11"/>
+                                </Button>
+                            </Grid>
+                            <ItemsControl ItemsSource="{Binding $parent[Window].DataContext.Viewport.TcpAttractors}" Margin="8,0,8,4">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Classes="ToolbarButton" HorizontalAlignment="Stretch"
+                                                HorizontalContentAlignment="Left" Margin="0,2" Padding="8,4"
+                                                Content="{Binding Name}"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.SelectTcpAttractorCommand}"
+                                                CommandParameter="{Binding}"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.HasSelectedTcpAttractor}" Spacing="4">
+                                <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.SelectedTcpAttractorName}"
+                                           Classes="LabelMuted" Margin="8,2,8,0" FontSize="11"/>
+                                <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56">
+                                    <TextBlock Grid.Column="0" Text="Influence (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Sphere radius. Outside it the toolpath is unchanged. On the cylinder the extruder matches the cylinder."/>
+                                    <Slider Grid.Column="1" Minimum="20" Maximum="2000"
+                                            Value="{Binding $parent[Window].DataContext.Viewport.TcpRadiusMm, Mode=TwoWay}"
+                                            VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                    <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                             Text="{Binding $parent[Window].DataContext.Viewport.TcpRadiusMm, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                             TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                </Grid>
+                                <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56">
+                                    <TextBlock Grid.Column="0" Text="Lean X (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Tilts the cylinder from upright toward −Y. ±80°. Rotate gizmo aims it too."/>
+                                    <Slider Grid.Column="1" Minimum="-80" Maximum="80"
+                                            Value="{Binding $parent[Window].DataContext.Viewport.TcpLeanXDeg, Mode=TwoWay}"
+                                            VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                    <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                             Text="{Binding $parent[Window].DataContext.Viewport.TcpLeanXDeg, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                             TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                </Grid>
+                                <Grid Margin="8,0,8,2" ColumnDefinitions="*,*,56">
+                                    <TextBlock Grid.Column="0" Text="Lean Y (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Tilts the cylinder from upright toward +X. ±80°."/>
+                                    <Slider Grid.Column="1" Minimum="-80" Maximum="80"
+                                            Value="{Binding $parent[Window].DataContext.Viewport.TcpLeanYDeg, Mode=TwoWay}"
+                                            VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                    <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                             Text="{Binding $parent[Window].DataContext.Viewport.TcpLeanYDeg, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                             TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                </Grid>
+                            </StackPanel>
                         </StackPanel>
                     </Expander>
                     <!-- Realtime slicing: no manual Generate button; the slice status text below reports progress. -->
@@ -2965,6 +3049,12 @@
                                         <Line StartPoint="2,12" EndPoint="22,12"
                                               Stroke="{DynamicResource ColorError}" StrokeThickness="1.5"/>
                                     </Grid>
+                                </Button>
+                                <Button Classes="ToolbarButton"
+                                        Width="32" Height="32" Padding="0"
+                                        Command="{Binding $parent[Window].DataContext.StitchToolpathCommand}"
+                                        ToolTip.Tip="Stitch — join the active toolpath into a continuous path per layer. Ends within 3× bead width bridge onto the nearest wall or infill line (tpstitch).">
+                                    <ia:Icon Value="mdi-call-merge" FontSize="18"/>
                                 </Button>
                             </UniformGrid>
                             <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.6" Margin="8,0,8,4"

@@ -61,6 +61,12 @@ public sealed class MeshRenderer : IDisposable
     public float LayerZMax { get; set; }
 
     /// <summary>
+    /// Unit axis the layer preview measures along. <see cref="Vector3.UnitZ"/> keeps horizontal bands.
+    /// Angled slicing passes the slice-plane normal so the bands lie on the tilted layers.
+    /// </summary>
+    public Vector3 LayerAxis { get; set; } = Vector3.UnitZ;
+
+    /// <summary>
     /// 0 = dielectric (Phong with white specular), 1 = metallic (tinted specular + Fresnel rim).
     /// Intermediate values blend between the two.
     /// </summary>
@@ -216,6 +222,7 @@ void main() {
         uniform float     uLayerZOffset;
         uniform float     uLayerZMin;
         uniform float     uLayerZMax;
+        uniform vec3      uLayerAxis;      // unit axis; (0,0,1) measures world Z
         uniform sampler1D uLayerColorTex;  // unit 2
         uniform sampler1D uLayerBoundTex;  // unit 3
         uniform int       uLayerBoundCount;
@@ -293,8 +300,8 @@ void main() {
             return vec2(-1.04, 1.04) * a004 + r.zw;
         }
 
-        // Binary-search the boundary texture for the world-Z distance to the nearest
-        // layer boundary. Returns a large sentinel when no boundary data is loaded.
+        // Binary-search the boundary texture for the distance along uLayerAxis to the
+        // nearest layer boundary. Returns a large sentinel when no boundary data is loaded.
         // 12 iterations handles up to 4096 boundaries without a loop-bound uniform.
         float distToNearestBound(float z) {
             if (uLayerBoundCount < 2) return 1.0e6;
@@ -314,11 +321,12 @@ void main() {
             float range = uLayerZMax - uLayerZMin;
             vec3  col;
             if (range > 0.001) {
-                float t = clamp((worldPos.z - uLayerZMin) / range, 0.0, 1.0);
+                float along = dot(worldPos, uLayerAxis);
+                float t = clamp((along - uLayerZMin) / range, 0.0, 1.0);
                 col     = texture(uLayerColorTex, t).rgb;
 
-                float distB = distToNearestBound(worldPos.z);
-                float dz    = fwidth(worldPos.z);
+                float distB = distToNearestBound(along);
+                float dz    = fwidth(along);
                 float seamW = max(dz * 1.5, 1e-4);
                 float seam  = 1.0 - smoothstep(0.0, seamW, distB);
                 col = mix(col, vec3(0.04), seam * 0.92);
@@ -662,6 +670,8 @@ void main() {
         _shader.SetFloat("uLayerZOffset",     LayerZOffset);
         _shader.SetFloat("uLayerZMin",        LayerZMin);
         _shader.SetFloat("uLayerZMax",        LayerZMax);
+        var layerAxis = LayerAxis.LengthSquared < 1e-8f ? Vector3.UnitZ : LayerAxis;
+        _shader.SetVector3("uLayerAxis",      layerAxis);
         _shader.SetInt("uLayerColorTex",      2);
         _shader.SetInt("uLayerBoundTex",      3);
         _shader.SetInt("uLayerBoundCount",    LayerBoundaryCount);

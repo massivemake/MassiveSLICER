@@ -178,6 +178,9 @@ public sealed class AppPreferences
     /// <summary>Bead width in mm.</summary>
     public double BeadWidth { get; set; } = 6.0;
 
+    /// <summary>Concentric shells for angled Normal slicing. 1 = outer wall only.</summary>
+    public int WallCount { get; set; } = 1;
+
     /// <summary>First-layer height override in mm.</summary>
     public double FirstLayerHeight { get; set; } = 3.0;
 
@@ -432,7 +435,7 @@ public sealed class AppPreferences
     /// <summary>Vertical z-hop on travel moves in mm.</summary>
     public double ZHopMm { get; set; }
 
-    /// <summary>Wipe mode display: Off, Retrace, Same-Direction.</summary>
+    /// <summary>Wipe mode display: Off, Retrace, Same-Direction, 90-Degree.</summary>
     public string WipeModeDisplay { get; set; } = "Same-Direction";
 
     public double WipeLengthMm { get; set; } = 35.0;

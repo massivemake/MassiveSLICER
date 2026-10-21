@@ -94,6 +94,7 @@ public sealed class SceneRenderer : IDisposable
     private int   _layerColorTexDefault;
     private float _layerColorZMin;
     private float _layerColorZMax;
+    private Vector3 _layerAxis = Vector3.UnitZ;
 
     // Layer boundary texture (1D, R32F): exact world-Z of each boundary.
     // Used by the fragment shader for screen-space seam line rendering.
@@ -116,6 +117,7 @@ public sealed class SceneRenderer : IDisposable
     private float _appliedLayerPreviewHeight;
     private float _appliedLayerZMin;
     private float _appliedLayerZMax;
+    private Vector3 _appliedLayerAxis;
     private int _appliedLayerBoundaryCount;
 
     // -- Shader sources --------------------------------------------------------
@@ -590,6 +592,8 @@ public sealed class SceneRenderer : IDisposable
 
     public bool ShowExtrusionMoves { get; set; } = true;
     public bool ShowTravelMoves    { get; set; } = true;
+    /// <summary>Vertical Z-hop lift and drop. The across move stays on <see cref="ShowTravelMoves"/>.</summary>
+    public bool ShowZHopMoves      { get; set; } = true;
     public bool ShowLightningMoves { get; set; } = true;
 
     /// <summary>Wipe extrusion segments (pre-travel filament wipes) as their own display layer.</summary>
@@ -1089,9 +1093,10 @@ public sealed class SceneRenderer : IDisposable
     /// shader can colour each fragment by the thickness of the layer it falls in.
     /// Blue = thinnest layer, red = thickest. Must be called on the GL thread.
     /// </summary>
-    /// <param name="zBoundaries">Sorted layer boundary Z positions (length = numLayers + 1).</param>
+    /// <param name="zBoundaries">Sorted boundary positions along <paramref name="axis"/> (length = numLayers + 1).</param>
     /// <param name="heights">Per-layer thickness in mm (length = numLayers).</param>
-    public void SetLayerPreview(float[] zBoundaries, float[] heights)
+    /// <param name="axis">Unit slice normal. <see cref="Vector3.UnitZ"/> keeps horizontal bands.</param>
+    public void SetLayerPreview(float[] zBoundaries, float[] heights, Vector3 axis)
     {
         if (zBoundaries.Length < 2 || heights.Length == 0) return;
 
@@ -1156,6 +1161,8 @@ public sealed class SceneRenderer : IDisposable
                         (int)TextureWrapMode.ClampToEdge);
         GL.BindTexture(TextureTarget.Texture1D, 0);
         _layerBoundaryCount = zBoundaries.Length;
+        float axisLen2 = axis.LengthSquared;
+        _layerAxis = axisLen2 < 1e-8f ? Vector3.UnitZ : axis / MathF.Sqrt(axisLen2);
         _shaderAppearanceDirty = true;
     }
 
@@ -1333,6 +1340,7 @@ public sealed class SceneRenderer : IDisposable
             || MathF.Abs(_layerPreviewHeight - _appliedLayerPreviewHeight) > 0.0001f
             || MathF.Abs(_layerColorZMin - _appliedLayerZMin) > 0.0001f
             || MathF.Abs(_layerColorZMax - _appliedLayerZMax) > 0.0001f
+            || (_layerAxis - _appliedLayerAxis).LengthSquared > 1e-8f
             || _layerBoundaryCount != _appliedLayerBoundaryCount)
         {
             // ChildrenForRender, not Children: the UI thread can be attaching models while this
@@ -1348,6 +1356,7 @@ public sealed class SceneRenderer : IDisposable
             _appliedLayerPreviewHeight    = _layerPreviewHeight;
             _appliedLayerZMin             = _layerColorZMin;
             _appliedLayerZMax             = _layerColorZMax;
+            _appliedLayerAxis             = _layerAxis;
             _appliedLayerBoundaryCount    = _layerBoundaryCount;
             _shaderAppearanceDirty        = false;
         }
@@ -1428,6 +1437,7 @@ public sealed class SceneRenderer : IDisposable
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
                 showLightning: ShowLightningMoves,
                 showWipe: ShowWipeMoves,
+                showZHop: ShowZHopMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
                 scrubIndex: scrub,
@@ -2417,6 +2427,7 @@ public sealed class SceneRenderer : IDisposable
                 mesh.LayerZOffset        = BedZ;
                 mesh.LayerZMin           = _layerColorZMin;
                 mesh.LayerZMax           = _layerColorZMax;
+                mesh.LayerAxis           = _layerAxis;
                 mesh.LayerBoundaryCount  = _layerBoundaryCount;
                 continue;
             }

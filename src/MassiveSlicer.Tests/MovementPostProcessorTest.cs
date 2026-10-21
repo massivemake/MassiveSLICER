@@ -218,4 +218,188 @@ public class MovementPostProcessorTest
         Assert.True(result.Layers[1].Moves.FindIndex(m => m.IsWipe)
                     < result.Layers[1].Moves.FindIndex(m => m.Kind == MoveKind.Travel));
     }
+
+    [Fact]
+    public void Apply_perpendicular_wipe_turns_toward_the_closer_next_bead()
+    {
+        // Bead along +X. The next bead is 12 mm in +Y, and there is no previous bead.
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(Extrude(0, 0, 50, 0));
+        layer.Moves.Add(Travel(50, 0, 50, 12));
+        layer.Moves.Add(Extrude(50, 12, 100, 12));
+
+        var wipe = OnlyWipe(layer, 20f);
+
+        Assert.Equal(50f, wipe.To.X, 0.01f);
+        Assert.True(wipe.To.Y > wipe.From.Y, "wipe should step toward the next bead");
+        Assert.Equal(20f, Vector3.Distance(wipe.From, wipe.To), 0.01f);
+        Assert.Equal(0f, Vector3.Dot(Vector3.Normalize(wipe.To - wipe.From), Vector3.UnitX), 0.01f);
+    }
+
+    [Fact]
+    public void Apply_perpendicular_wipe_prefers_the_closer_previous_bead()
+    {
+        // Previous bead is 8 mm below. Next bead is 40 mm above. Wipe goes toward the previous one.
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(Extrude(0, -8, 50, -8));
+        layer.Moves.Add(Extrude(0, 0, 50, 0));
+        layer.Moves.Add(Travel(50, 0, 50, 40));
+        layer.Moves.Add(Extrude(50, 40, 100, 40));
+
+        var wipe = OnlyWipe(layer, 15f);
+
+        Assert.True(wipe.To.Y < wipe.From.Y, "wipe should step toward the closer previous bead");
+        Assert.Equal(50f, wipe.To.X, 0.01f);
+    }
+
+    [Fact]
+    public void Apply_perpendicular_wipe_uses_travel_when_no_neighbor_is_beside_the_bead()
+    {
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(Extrude(0, 0, 50, 0));
+        layer.Moves.Add(Travel(50, 0, 50, 30));
+
+        var wipe = OnlyWipe(layer, 10f);
+
+        Assert.True(wipe.To.Y > wipe.From.Y);
+        Assert.Equal(50f, wipe.To.X, 0.01f);
+    }
+
+    [Fact]
+    public void Apply_perpendicular_wipe_stays_in_the_layer_plane()
+    {
+        // Plane normal +Y, so the layer is the XZ plane. Neighbor sits in +Z.
+        var layer = new ToolpathLayer(0, 0f) { PlaneNormal = Vector3.UnitY };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 0), new Vector3(50, 0, 0), MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 0), new Vector3(50, 0, 12), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 12), new Vector3(100, 0, 12), MoveKind.Extrude));
+
+        var wipe = OnlyWipe(layer, 10f);
+        var dir = Vector3.Normalize(wipe.To - wipe.From);
+
+        Assert.Equal(0f, dir.Y, 0.01f);
+        Assert.True(dir.Z > 0.9f);
+    }
+
+    [Fact]
+    public void Apply_same_direction_turns_back_when_forward_would_cross_the_bed()
+    {
+        // Bead descends toward the bed. Continuing forward for 40 mm goes below Z = 0.
+        var layer = new ToolpathLayer(0, 0.5f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 2), new Vector3(30, 0, 0.5f), MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(new Vector3(30, 0, 0.5f), new Vector3(30, 20, 0.5f), MoveKind.Travel));
+
+        var wipe = WipeOf(layer, WipeMode.SameDirection, 40f, 0f);
+
+        Assert.True(wipe.To.X < wipe.From.X, "forward crosses the bed, so the wipe retraces up the bead");
+        Assert.True(wipe.To.Z >= 0f);
+        Assert.True(wipe.From.Z >= 0f);
+    }
+
+    [Fact]
+    public void Apply_retrace_continues_forward_when_back_would_cross_the_bed()
+    {
+        var layer = new ToolpathLayer(0, 4f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 0.4f), new Vector3(30, 0, 4f), MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(new Vector3(30, 0, 4f), new Vector3(30, 20, 4f), MoveKind.Travel));
+
+        var wipe = WipeOf(layer, WipeMode.Retrace, 40f, 0f);
+
+        Assert.True(wipe.To.X > wipe.From.X, "retrace crosses the bed, so the wipe keeps going up the bead");
+        Assert.True(wipe.To.Z >= 0f);
+    }
+
+    [Fact]
+    public void Apply_perpendicular_picks_the_other_side_when_the_neighbor_side_crosses_the_bed()
+    {
+        // +side is (0, +0.8, -0.6): toward the next bead and down through Z = 0.
+        var n = new Vector3(0f, 0.6f, 0.8f);
+        var side = Vector3.Normalize(Vector3.Cross(n, Vector3.UnitX));
+        var end = new Vector3(40, 0, 1);
+        var next = end + side * 10f;
+
+        var layer = new ToolpathLayer(0, 1f) { PlaneNormal = n };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 1), end, MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(end, next, MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(next, next + new Vector3(40, 0, 0), MoveKind.Extrude));
+
+        var wipe = WipeOf(layer, WipeMode.Perpendicular, 20f, 0f);
+
+        Assert.True(wipe.To.Y < wipe.From.Y, "the downward side is rejected for the upward side");
+        Assert.True(wipe.To.Z >= 0f);
+        Assert.True(wipe.From.Z >= 0f);
+    }
+
+    [Fact]
+    public void Apply_smash_stops_at_the_bed()
+    {
+        var layer = new ToolpathLayer(0, 0.4f) { Height = 3f, PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 0.4f), new Vector3(40, 0, 0.4f), MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(new Vector3(40, 0, 0.4f), new Vector3(40, 20, 0.4f), MoveKind.Travel));
+
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+        var moves = MovementPostProcessor.Apply(tp, new SliceSettings
+        {
+            LayerHeight  = 3f,
+            WipeMode     = WipeMode.SameDirection,
+            WipeLengthMm = 15f,
+            WipeRampMm   = -1f,
+        }).Layers[0].Moves;
+
+        var wipes = moves.Where(m => m.IsWipe).ToList();
+        Assert.Equal(2, wipes.Count);
+        Assert.Equal(0f, wipes[0].WipeRpmScale);
+        Assert.Equal(0f, wipes[0].To.Z, 0.01f);
+        Assert.All(wipes, m =>
+        {
+            Assert.True(m.From.Z >= -0.001f);
+            Assert.True(m.To.Z >= -0.001f);
+        });
+    }
+
+    [Fact]
+    public void Apply_same_direction_respects_a_raised_bed()
+    {
+        // LFAM 2 bed is at Z = 130. Continuing this bead for 40 mm finishes near 116.
+        var layer = new ToolpathLayer(0, 132f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 150), new Vector3(40, 0, 132), MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(new Vector3(40, 0, 132), new Vector3(40, 20, 132), MoveKind.Travel));
+
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+        var wipe = Assert.Single(MovementPostProcessor.Apply(tp, new SliceSettings
+        {
+            WipeMode     = WipeMode.SameDirection,
+            WipeLengthMm = 40f,
+            WipeRampMm   = 0f,
+            BedZ         = 130f,
+        }).Layers[0].Moves.Where(m => m.IsWipe));
+
+        Assert.True(wipe.To.X < wipe.From.X);
+        Assert.True(wipe.To.Z >= 130f);
+        Assert.True(wipe.From.Z >= 130f);
+    }
+
+    private static ToolpathMove Extrude(float x0, float y0, float x1, float y1) =>
+        new(new Vector3(x0, y0, 10), new Vector3(x1, y1, 10), MoveKind.Extrude) { Normal = Vector3.UnitZ };
+
+    private static ToolpathMove Travel(float x0, float y0, float x1, float y1) =>
+        new(new Vector3(x0, y0, 10), new Vector3(x1, y1, 10), MoveKind.Travel);
+
+    private static ToolpathMove OnlyWipe(ToolpathLayer layer, float lengthMm) =>
+        WipeOf(layer, WipeMode.Perpendicular, lengthMm, 0f);
+
+    private static ToolpathMove WipeOf(ToolpathLayer layer, WipeMode mode, float lengthMm, float rampMm)
+    {
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+        var result = MovementPostProcessor.Apply(tp, new SliceSettings
+        {
+            WipeMode     = mode,
+            WipeLengthMm = lengthMm,
+            WipeRampMm   = rampMm,
+        });
+        return Assert.Single(result.Layers[0].Moves.Where(m => m.IsWipe));
+    }
 }

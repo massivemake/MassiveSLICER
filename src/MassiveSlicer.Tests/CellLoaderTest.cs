@@ -58,6 +58,29 @@ public class CellLoaderTest
         Assert.Equal(150f, cell.RobotRail.MaxMm);
     }
 
+    [Fact]
+    public void Cell_list_skips_homes_sidecar()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"mslicer-cells-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "lfam3.json"), "{}");
+            File.WriteAllText(Path.Combine(dir, "lfam3.homes.json"), "{}");
+
+            var names = CellLoader.EnumerateCellFiles(dir)
+                .Select(Path.GetFileName)
+                .ToList();
+
+            Assert.Contains("lfam3.json", names);
+            Assert.DoesNotContain("lfam3.homes.json", names);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     private static string? ResolveCellJson(string folder, string file)
     {
         string[] candidates =

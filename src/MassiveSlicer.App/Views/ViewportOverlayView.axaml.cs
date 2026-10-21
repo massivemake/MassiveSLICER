@@ -39,7 +39,7 @@ public partial class ViewportOverlayView : UserControl
         // Keep the bottom corner docks (ERP / Live I/O) 16px above whichever
         // timeline bar is showing; heights vary (keyframe lane, workflow bar).
         // Bottom-right legends stack above the Live I/O dock in turn.
-        foreach (Control bar in new Control[] { SimTimelineBar, PlaybackTimelineBar, Lfam3WorkflowBar, LiveIoDock })
+        foreach (Control bar in new Control[] { SimTimelineBar, PlaybackTimelineBar, Lfam3WorkflowBar, LiveIoDock, OrientationLegend, ImprovedIkTag })
             bar.PropertyChanged += (_, e) =>
             {
                 if (e.Property == BoundsProperty || e.Property == IsVisibleProperty)
@@ -267,6 +267,22 @@ public partial class ViewportOverlayView : UserControl
         if (LiveIoDock.IsVisible && LiveIoDock.Bounds.Height > 0)
             legendLift = lift + LiveIoDock.Bounds.Height + 8;
         vm.BottomRightLegendMargin = new Avalonia.Thickness(8, 8, 8, legendLift);
+
+        // Improved IK pill shares the dock's baseline and steps left of it. If the
+        // orientation legend (fixed bottom margin) covers that spot, step left of the legend too.
+        double tagRight = 8;
+        if (LiveIoDock.IsVisible && LiveIoDock.Bounds.Width > 0)
+            tagRight += LiveIoDock.Bounds.Width + 8;
+        if (OrientationLegend.IsVisible && OrientationLegend.Bounds.Height > 0)
+        {
+            double legendBottom = OrientationLegend.Margin.Bottom;
+            double legendTop = legendBottom + OrientationLegend.Bounds.Height;
+            double tagHeight = ImprovedIkTag.Bounds.Height > 0 ? ImprovedIkTag.Bounds.Height : 28;
+            bool overlaps = lift < legendTop && lift + tagHeight > legendBottom;
+            if (overlaps && OrientationLegend.Bounds.Width > 0)
+                tagRight = Math.Max(tagRight, OrientationLegend.Margin.Right + OrientationLegend.Bounds.Width + 8);
+        }
+        vm.ImprovedIkTagMargin = new Avalonia.Thickness(8, 8, tagRight, lift);
     }
 
     private void OnGoToValidationIssue(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

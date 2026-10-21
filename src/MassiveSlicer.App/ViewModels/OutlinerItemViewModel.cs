@@ -21,6 +21,7 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         IsPiecesGroup ? "mdi-source-fork"
         : IsModifiersGroup ? "mdi-layers-outline"
         : IsModifier ? "mdi-crop"
+        : IsTcpAttractor ? "mdi-axis-arrow"
         : IsEffector ? "mdi-white-balance-sunny"
         : IsMillToolpath ? OutlinerToolpathKinds.MillIcon
         : IsPrintToolpath ? OutlinerToolpathKinds.PrintIcon
@@ -34,6 +35,7 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         IsPiecesGroup ? "#4FC3B0"
         : IsModifiersGroup ? "#E8A33D"
         : IsModifier ? "#E8A33D"
+        : IsTcpAttractor ? "#E8A33D"
         : IsEffector ? "#A6DE38"
         : IsMillToolpath ? OutlinerToolpathKinds.MillColor
         : IsPrintToolpath ? OutlinerToolpathKinds.PrintColor
@@ -47,6 +49,7 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         IsPiecesGroup ? "Applied pieces — result of running the modifier stack, from an Apply press"
         : IsModifiersGroup ? "Modifier stack — select to move/rotate all together, or Apply"
         : IsModifier ? "Cut modifier"
+        : IsTcpAttractor ? "TCP attractor"
         : IsEffector ? "Effector"
         : IsMillToolpath ? OutlinerToolpathKinds.MillTip
         : IsPrintToolpath ? OutlinerToolpathKinds.PrintTip
@@ -147,6 +150,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 
     /// <summary>True for live-effector handles — excluded from slicing/model resolution.</summary>
     public bool IsEffector { get; set; }
+
+    /// <summary>True for a TCP Adjust handle — excluded from slicing, milling, and model save.</summary>
+    public bool IsTcpAttractor { get; set; }
 
     /// <summary>True for a modifier's own row, nested under its owning mesh's Modifiers group.</summary>
     public bool IsModifier { get; set; }

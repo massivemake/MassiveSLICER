@@ -126,7 +126,13 @@ public enum SliceMethod
     Curved,
     /// <summary>Plane tilt interpolates through three guide angles (base/middle/top) —
     /// wedge layers whose thickness varies along the path.</summary>
-    MultiPlanar
+    MultiPlanar,
+    /// <summary>Bead shells on signed-distance iso-surfaces. The nozzle follows the
+    /// outward gradient, kept in the upper hemisphere.</summary>
+    SignedDistance,
+    /// <summary>Planar layers stitched into one field-aligned curve: islands join
+    /// across a bridge, then the wall and the bead-spaced fill are one path.</summary>
+    ContinuousPlanar
 }
 
 /// <summary>Application colour theme.</summary>

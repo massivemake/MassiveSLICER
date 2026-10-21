@@ -17,6 +17,13 @@ public sealed class SliceSettings
     /// <summary>Width of the deposited bead in mm.</summary>
     public float BeadWidth { get; init; } = 6f;
 
+    /// <summary>
+    /// Concentric shells for constant-tilt angled slicing in Normal mode.
+    /// 1 is the single outer wall. Each extra wall is inset one bead width.
+    /// Surface, zig-zag, planar, and multi-planar ignore this.
+    /// </summary>
+    public int WallCount { get; init; } = 1;
+
     /// <summary>Deposition print speed in m/s.</summary>
     public float PrintSpeedMps { get; init; } = 0.1f;
 
@@ -28,6 +35,13 @@ public sealed class SliceSettings
 
     /// <summary>Pre-travel wipe mode. None = disabled.</summary>
     public WipeMode WipeMode { get; init; } = WipeMode.None;
+
+    /// <summary>
+    /// World Z of the print-bed surface. Wipes are not allowed to finish below it.
+    /// Defaults to 0, which is only correct when the bed really is at Z = 0.
+    /// Cell beds (LFAM 2 is 130) must pass the live bed height.
+    /// </summary>
+    public float BedZ { get; init; }
 
     /// <summary>Total wipe path length in mm.</summary>
     public float WipeLengthMm { get; init; } = 10f;
@@ -117,6 +131,12 @@ public sealed class SliceSettings
     /// <summary>What the effector does inside its influence bell.</summary>
     public EffectorMode EffectorMode { get; set; } = EffectorMode.Amplify;
 
+    /// <summary>
+    /// Spherical TCP attractors. Empty leaves every move normal alone.
+    /// Applied after orientation smoothing on the smoothed toolpath.
+    /// </summary>
+    public IReadOnlyList<TcpAttractor> TcpAttractors { get; set; } = [];
+
     // ── Pattern & texture (MassiveCODE effector port) ─────────────────────
     /// <summary>Decorative wall pattern applied to the toolpath after slicing.</summary>
     public Slicing.Effects.PatternType PatternType { get; init; } = Slicing.Effects.PatternType.Smooth;
@@ -175,7 +195,7 @@ public sealed class SliceSettings
 
     // -- Adaptive layer height ----------------------------------------------------
 
-    /// <summary>When true, layer spacing is computed per-Z from mesh surface normals.</summary>
+    /// <summary>When true, layer spacing follows surface slope along the slice normal.</summary>
     public bool  AdaptiveLayerHeight { get; init; } = false;
 
     /// <summary>

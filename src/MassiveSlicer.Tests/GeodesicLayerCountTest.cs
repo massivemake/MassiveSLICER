@@ -54,6 +54,25 @@ public sealed class GeodesicLayerCountTest
     }
 
     [Fact]
+    public void Geodesic_SpeckleBelowThePart_DoesNotHideTheShell()
+    {
+        // A disconnected triangle under the part must not become the only seed.
+        // That zeroed Signed Distance on Stanchion Base v8 04 (2,070,808 tris):
+        // the iso-surface had 71 pieces, the lowest was a 10-vertex speck,
+        // and the 97k-vertex shell was never reached.
+        var box = BoxSoup(40f, 40f, 40f);
+        var speck = new Vector3[] { new(5, 5, -10), new(5.2f, 5, -10), new(5, 5.2f, -10) };
+        var soup = new Vector3[box.Length + speck.Length];
+        box.CopyTo(soup, 0);
+        speck.CopyTo(soup, box.Length);
+
+        var settings = new SliceSettings { LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = 6f };
+        var tp = GeodesicSlicer.Slice([soup], settings);
+
+        Assert.True(tp.Layers.Count >= 8, $"layers {tp.Layers.Count}");
+    }
+
+    [Fact]
     public void Geodesic_Box_ProgressReachesCompletion()
     {
         var soup = BoxSoup(100f, 100f, 30f);

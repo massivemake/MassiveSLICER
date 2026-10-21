@@ -72,9 +72,16 @@ public static class AngledPlanarSlicer
         var   prevTracks = new List<ContourTrack>();
         Vector3? prevEnd = null;
 
-        var steps = new List<float>();
-        for (float st = tMin + settings.FirstLayerHeight; st < tMax - 1e-4f; st += settings.LayerHeight)
-            steps.Add(st);
+        // Spacing is the signed distance along the plane normal. Adaptive uses the
+        // same slope metric as planar slicing, measured against this normal instead of Z.
+        float[] steps = settings.AdaptiveLayerHeight
+            ? AdaptiveLayerHeights.ComputePositions(meshes, normal, tMin, tMax,
+                settings.FirstLayerHeight, settings.MinLayerHeight,
+                settings.LayerHeight, settings.AdaptiveQuality)
+            : BuildUniformSteps(tMin, tMax, settings.FirstLayerHeight, settings.LayerHeight);
+
+        float GapAt(int si) => MathF.Max(0.1f,
+            steps[si] - (si == 0 ? tMin : steps[si - 1]));
 
         // ── Lightning Bridge pre-pass (see PlanarSlicer): cache contours for every
         //    plane, then build the top-down finger plan in plane-local 2D.
@@ -95,18 +102,18 @@ public static class AngledPlanarSlicer
         if (needLightning)
         {
             bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
-            lightningCache = new(steps.Count);
-            var fillPolysPerLayer = new List<List<List<Vector2>>>(steps.Count);
-            var heights = new List<float>(steps.Count);
+            lightningCache = new(steps.Length);
+            var fillPolysPerLayer = new List<List<List<Vector2>>>(steps.Length);
+            var heights = new List<float>(steps.Length);
             // Constant-tilt frames (parallel planes). Formbound paint demand keys
             // off signed distance along normal — works for Angled, not only MultiPlanar.
-            var frames = new List<(Vector3 Origin, Vector3 U, Vector3 V)>(steps.Count);
-            for (int si = 0; si < steps.Count; si++)
+            var frames = new List<(Vector3 Origin, Vector3 U, Vector3 V)>(steps.Length);
+            for (int si = 0; si < steps.Length; si++)
             {
                 var contours = ComputeInsetContours(meshes, normal, steps[si], normal * steps[si], u, v, settings);
                 lightningCache.Add(contours);
                 fillPolysPerLayer.Add(FilterFillPolys(contours, surfaceMode));
-                heights.Add(si == 0 ? settings.FirstLayerHeight : settings.LayerHeight);
+                heights.Add(GapAt(si));
                 frames.Add((normal * steps[si], u, v));
             }
             // The oracle probes just BELOW the plane: the demanding solid occupies
@@ -127,18 +134,18 @@ public static class AngledPlanarSlicer
                     solidAt: (li, p) => meshTester.IsInside(
                         normal * (steps[li] - 0.4f * heights[li]) + u * p.X + v * p.Y),
                     manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
-                        settings.PaintMarks, steps.Count, frameOf,
+                        settings.PaintMarks, steps.Length, frameOf,
                         halfBandMm: halfBand,
                         targetSupportSelectionsOnly: settings.LightningTargetSupportSelections,
                         styleFilter: PaintSupportStyleUtil.IsFormbound));
             }
             else
-                lightningPlan = new Lightning.LightningPlan(steps.Count);
+                lightningPlan = new Lightning.LightningPlan(steps.Length);
 
             if (hasTreePaint)
             {
                 var treeDemand = ToolpathPaintFilter.ProjectBridgeMarks(
-                    settings.PaintMarks, steps.Count, frameOf,
+                    settings.PaintMarks, steps.Length, frameOf,
                     halfBandMm: halfBand,
                     targetSupportSelectionsOnly: true,
                     styleFilter: PaintSupportStyleUtil.IsTree);
@@ -148,8 +155,8 @@ public static class AngledPlanarSlicer
 
             if (settings.XBracingEnabled)
             {
-                var polysForX = new List<List<List<Vector2>>>(steps.Count);
-                for (int si = 0; si < steps.Count; si++)
+                var polysForX = new List<List<List<Vector2>>>(steps.Length);
+                for (int si = 0; si < steps.Length; si++)
                 {
                     var fill = fillPolysPerLayer[si];
                     if (fill.Count > 0) polysForX.Add(fill);
@@ -162,7 +169,7 @@ public static class AngledPlanarSlicer
             // Generator oracles: SolidAt probes both sides of the plane (fresh
             // islands have material only above their first plane); SolidAtPlane
             // probes exactly at it (a real contour's interior is solid there).
-            for (int li = 0; li < steps.Count; li++)
+            for (int li = 0; li < steps.Length; li++)
             {
                 int cap = li;
                 lightningPlan.Layers[li].SolidAt = p =>
@@ -173,7 +180,13 @@ public static class AngledPlanarSlicer
             }
         }
 
-        for (int si = 0; si < steps.Count; si++)
+        // Extra shells only on this constant-tilt path, and only for Normal closed
+        // contours. Surface and zig-zag keep the single skin they already print.
+        int wallCount = settings.SlicingMode == SlicingMode.Normal && !settings.ZigZagSeam
+            ? Math.Clamp(settings.WallCount, 1, 16)
+            : 1;
+
+        for (int si = 0; si < steps.Length; si++)
         {
             float step = steps[si];
             // origin = closest point on this plane to the world origin.
@@ -183,15 +196,20 @@ public static class AngledPlanarSlicer
             var seamOriginLocal = ToLocal(seamOriginXY, normal, step, origin, u, v);
 
             float repZ = normal.Z > 1e-6f ? step / normal.Z : step;
-            var   layer = new ToolpathLayer(idx++, repZ) { PlaneNormal = normal };
+            var   layer = new ToolpathLayer(idx++, repZ)
+            {
+                PlaneNormal = normal,
+                Height = GapAt(si),
+            };
 
-            bool isLastLayer = si == steps.Count - 1;
+            bool isLastLayer = si == steps.Length - 1;
             prevTracks = BuildLayer(meshes, normal, step, origin, u, v,
                 seamOriginLocal, seamDirLocal, settings, prevTracks, layer, isLastLayer,
                 cachedContours: lightningCache?[si],
                 lightningPlan:  lightningPlan?.Layers[si],
                 treePlan:       treePlan?.Layers[si],
-                prevEnd: prevEnd);
+                prevEnd: prevEnd,
+                wallCount: wallCount);
 
             if (layer.Moves.Count > 0)
             {
@@ -208,8 +226,20 @@ public static class AngledPlanarSlicer
         if (lightningPlan is not null)
             toolpath.FormboundStats = lightningPlan.ToStats();
 
+        // Flow follows the along-normal gap. No-op unless adaptive is on, so a uniform
+        // angled slice keeps HeightScale at 1.
+        Effects.LayerHeightFlowPostProcessor.Apply(toolpath, settings);
+
         PlanarSlicer.AttachZigZagWarning(toolpath);
         return toolpath;
+    }
+
+    private static float[] BuildUniformSteps(float tMin, float tMax, float firstH, float layerH)
+    {
+        var steps = new List<float>();
+        for (float st = tMin + firstH; st < tMax - 1e-4f; st += layerH)
+            steps.Add(st);
+        return [.. steps];
     }
 
     /// <summary>
@@ -602,7 +632,8 @@ public static class AngledPlanarSlicer
         List<List<Vector2>>? cachedContours = null,
         Lightning.LightningLayerPlan? lightningPlan = null,
         TreeSupport.TreeSupportLayerPlan? treePlan = null,
-        Vector3? prevEnd = null)
+        Vector3? prevEnd = null,
+        int wallCount = 1)
     {
         var insetContours = cachedContours
             ?? ComputeInsetContours(meshes, normal, planeD, origin, u, v, settings);
@@ -625,7 +656,7 @@ public static class AngledPlanarSlicer
 
         return BuildLayerBody(settings, layer, normal, planeD, origin, u, v,
             seamOrigin2d, seamDir2d, prevTracks, insetContours, isLastLayer, lightningPlan,
-            treePlan, prevEnd);
+            treePlan, prevEnd, wallCount);
     }
 
     /// <summary>
@@ -744,7 +775,8 @@ public static class AngledPlanarSlicer
         bool isLastLayer,
         Lightning.LightningLayerPlan? lightningPlan,
         TreeSupport.TreeSupportLayerPlan? treePlan = null,
-        Vector3? prevEnd = null)
+        Vector3? prevEnd = null,
+        int wallCount = 1)
     {
         bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
         // Zig-zag single-skin (same as Planar): closed loops → longest open face,
@@ -804,15 +836,40 @@ public static class AngledPlanarSlicer
             return tracksZz;
         }
 
+        // Extra walls are emit-time only. The lightning cache stays on the outer
+        // shell so Formbound / X-bracing do not treat the gaps between walls as holes.
+        WallStack? stacks = wallCount > 1
+            ? BuildConcentricWalls(insetContours, settings.BeadWidth, wallCount, settings.SimplificationTolerance)
+            : null;
+        void EmitShells(List<List<Vector2>> contours)
+        {
+            var shellTracks = AssignSeams(contours, prevTracks, seamOrigin2d, seamDir2d);
+            EmitContours(shellTracks.Select(t => (IEnumerable<Vector2>)t.Contour),
+                origin, u, v, normal, layer, closeLoops: true);
+        }
+
         // ── Infill mode: replace shell contours with a continuous fill pattern.
         // Contours are plane-local 2D; the projector lifts infill back onto the tilted plane.
+        // With extra walls, the shells print first and infill fills inside the innermost one.
         if (settings.InfillPattern != InfillPattern.None || formboundEmit)
         {
+            bool braceReplacesShell = formboundEmit
+                || (settings.XBracingEnabled && lightningPlan is not null && !targetSel);
+            bool emitWalls = false;
+            WallStack built = default;
+            if (stacks is { } stacked && !braceReplacesShell)
+            {
+                built = stacked;
+                emitWalls = true;
+            }
+            var fillSource = emitWalls ? built.Innermost : insetContours;
             // Surface mode fills across closed boundary chains only (1 mm closure
             // threshold, same as ChainByProximity); open chains keep their paths.
-            var fillPolys = FilterFillPolys(insetContours, surfaceMode);
+            var fillPolys = FilterFillPolys(fillSource, surfaceMode);
             if (fillPolys.Count > 0)
             {
+            if (emitWalls)
+                EmitShells(built.Walls);
             float baseAngle = settings.InfillAngleDeg;
             float infillAngle = settings.InfillPattern switch
             {
@@ -871,11 +928,45 @@ public static class AngledPlanarSlicer
         }
 
         ShellPath:
-        var tracks = AssignSeams(insetContours, prevTracks, seamOrigin2d, seamDir2d);
+        var tracks = AssignSeams(stacks?.Walls ?? insetContours, prevTracks, seamOrigin2d, seamDir2d);
         EmitContours(tracks.Select(t => (IEnumerable<Vector2>)t.Contour),
             origin, u, v, normal, layer, closeLoops: true);
         EmitTree();
         return tracks;
+    }
+
+    private readonly record struct WallStack(List<List<Vector2>> Walls, List<List<Vector2>> Innermost);
+
+    /// <summary>
+    /// Wall 0 is the contour already inset by half a bead. Each further wall steps
+    /// one bead width into the material. CCW shells move inward; CW holes move outward.
+    /// </summary>
+    private static WallStack BuildConcentricWalls(
+        List<List<Vector2>> outers, float bead, int wallCount, float simpTol)
+    {
+        var walls = new List<List<Vector2>>();
+        var inner = new List<List<Vector2>>();
+        float step = MathF.Max(bead, 0.1f);
+        foreach (var seed in outers)
+        {
+            if (seed.Count < 3) continue;
+            walls.Add(seed);
+            var current = seed;
+            for (int w = 1; w < wallCount; w++)
+            {
+                float sign = SignedArea(current) >= 0f ? 1f : -1f;
+                var next = InsetContour2D(current, sign * step)
+                    .Where(r => r.Count >= 3)
+                    .Select(r => simpTol > 0f ? SimplifyContour2D(r, simpTol) : r)
+                    .Where(r => r.Count >= 3)
+                    .ToList();
+                if (next.Count == 0) break;
+                walls.AddRange(next);
+                current = next.OrderByDescending(r => MathF.Abs(SignedArea(r))).First();
+            }
+            inner.Add(current);
+        }
+        return new WallStack(walls, inner);
     }
 
     // Unprojects 2D plane-local contours to 3D and emits toolpath moves.

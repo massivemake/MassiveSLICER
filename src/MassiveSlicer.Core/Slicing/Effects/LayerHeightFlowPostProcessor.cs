@@ -5,7 +5,7 @@ namespace MassiveSlicer.Core.Slicing.Effects;
 /// <summary>
 /// Makes extrusion flow follow the ACTUAL thickness of each adaptive layer.
 ///
-/// Adaptive layer height varies the Z spacing between slice planes, but extruder RPM is
+/// Adaptive layer height varies the spacing between slice planes, but extruder RPM is
 /// derived from the single nominal <see cref="SliceSettings.LayerHeight"/>. Without this pass
 /// a 1.75 mm layer is handed the material for a 3 mm one. Measured on a real part (Dragon
 /// column, 44 of 314 layers below nominal): up to 1.71x over-extrusion, concentrated in the

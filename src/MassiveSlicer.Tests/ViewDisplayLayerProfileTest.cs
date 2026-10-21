@@ -78,6 +78,7 @@ public class ViewDisplayLayerProfileTest
         Assert.True(vm.ShowBead);
         Assert.False(vm.ShowExtrusionMoves);
         Assert.False(vm.ShowTravelMoves);
+        Assert.False(vm.ShowZHopMoves);
         Assert.False(vm.ShowWipeMoves);
 
         // Toolpath = classic extrusion + travel lines, no beads.
@@ -85,12 +86,14 @@ public class ViewDisplayLayerProfileTest
         Assert.False(vm.ShowBead);
         Assert.True(vm.ShowExtrusionMoves);
         Assert.True(vm.ShowTravelMoves);
+        Assert.True(vm.ShowZHopMoves);
 
         // Speed = clean gradient lines, travels suppressed.
         vm.ViewMode = "Speed";
         Assert.False(vm.ShowBead);
         Assert.True(vm.ShowExtrusionMoves);
         Assert.False(vm.ShowTravelMoves);
+        Assert.False(vm.ShowZHopMoves);
     }
 
     [Fact]
@@ -101,6 +104,7 @@ public class ViewDisplayLayerProfileTest
 
         Assert.True(vm.ShowExtrusionMoves);   // you need the lines to click them
         Assert.False(vm.ShowTravelMoves);
+        Assert.False(vm.ShowZHopMoves);
         Assert.False(vm.ShowWipeMoves);
         Assert.False(vm.ShowBead);
         Assert.True(vm.ShowSeam);             // the dots Jeff went looking for
