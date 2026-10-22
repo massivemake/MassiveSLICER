@@ -204,6 +204,37 @@ public class WorkspaceSaveTest
     }
 
     [Fact]
+    public void Mesh_bytes_round_trip_inside_the_mass_file()
+    {
+        byte[] stl =
+        [
+            0x73, 0x6F, 0x6C, 0x69, 0x64, 0x20, 0x74, 0x65,
+            0x73, 0x74, 0x0A,
+        ];
+        var doc = new WorkspaceDocument
+        {
+            Models = [new WorkspaceModelEntry { Name = "Part", EmbeddedMesh = stl }],
+        };
+
+        var path = Path.Combine(Path.GetTempPath(), $"massive-embed-{Guid.NewGuid():N}.mass");
+        try
+        {
+            WorkspaceLoader.Save(doc, path);
+            string json = File.ReadAllText(path);
+            Assert.Contains("EmbeddedMesh", json);
+            Assert.DoesNotContain("SourcePath", json);
+            Assert.False(Directory.Exists(WorkspaceLoader.MeshesDirFor(path)));
+
+            var loaded = WorkspaceLoader.Load(path);
+            Assert.Equal(stl, Assert.Single(loaded!.Models).EmbeddedMesh);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Mill_sidebar_round_trips_with_workspace()
     {
         var doc = new WorkspaceDocument

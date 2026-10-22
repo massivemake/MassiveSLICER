@@ -458,6 +458,10 @@ public sealed class SliceSettings
     /// true = tilt about X (planes lean along Y).</summary>
     public bool MultiPlanarAxisX { get; init; } = false;
 
+    /// <summary>When true, even layers keep the interpolated guide tilt and odd layers
+    /// use the opposite lean. Off keeps a smooth climb through the guides.</summary>
+    public bool MultiPlanarSwitchByLayer { get; init; } = false;
+
     // ── Thermomechanical simulation (analytical interlayer cooling) ──────────
 
     /// <summary>Melt temperature at deposition (°C) — hottest extruder zone.</summary>

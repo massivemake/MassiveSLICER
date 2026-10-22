@@ -59,6 +59,17 @@ public sealed class WorkspaceUiSession
     public bool? ShowMultiPlanarPlanes { get; set; }
 
     /// <summary>
+    /// Guide stack copied beside the viewport session so height, X, and Y are in
+    /// the file even when a later settings blob is the one a reader checks.
+    /// Null on older files — restore then uses Settings.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(GuidePlaneListConverter))]
+    public List<GuidePlaneDto>? MultiPlanarPlanes { get; set; }
+
+    /// <summary>Slice method at save ("MultiPlanar", "Planar", …). Null on older files.</summary>
+    public string? SliceMethod { get; set; }
+
+    /// <summary>
     /// X-bracing plane/cylinder helper visibility. Nullable so older workspaces keep
     /// the app default (on). Prefer this when present over Settings alone so the
     /// helper state always round-trips with the .mass file.
@@ -348,9 +359,12 @@ public sealed class WorkspaceModelEntry
 
     /// <summary>
     /// Path to an embedded mesh sidecar (relative to the workspace file directory),
-    /// used for exploded/ungrouped geometry with no original file.
+    /// used by files saved before the mesh lived in the .mass itself.
     /// </summary>
     public string? EmbeddedMeshPath { get; set; }
+
+    /// <summary>Binary STL of this model, stored in the .mass. Not a path.</summary>
+    public byte[]? EmbeddedMesh { get; set; }
 
     public string Name { get; set; } = "Model";
 

@@ -4228,6 +4228,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         CopyPreferences(doc.Settings);
         SyncViewportFromPrefs();
+        ApplyMultiPlanarFromSession(doc.UiSession);
         // Settings-menu / Lab recipe owns KRL post-process — a .mass must not
         // restore stale Robot Mode / Travel Moves / header over it.
         RightPanel.Additive.KrlPostProcess.LoadForCell(KrlPostProcessLoader.Load());
@@ -4597,8 +4598,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LightningButtressBarMm         = copy.LightningButtressBarMm;
         live.LightningPreferInteriorMouths  = copy.LightningPreferInteriorMouths;
         live.LightningTargetSupportSelections = copy.LightningTargetSupportSelections;
-        live.MultiPlanarPlanes = copy.MultiPlanarPlanes.Select(a => (double[])a.Clone()).ToList();
+        live.MultiPlanarPlanes = copy.MultiPlanarPlanes
+            .Select(a => new GuidePlaneDto { HeightPct = a.HeightPct, AngleX = a.AngleX, AngleY = a.AngleY })
+            .ToList();
         live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
+        live.MultiPlanarSwitchByLayer = copy.MultiPlanarSwitchByLayer;
         live.BrimEnabled            = copy.BrimEnabled;
         live.BrimLoops              = copy.BrimLoops;
         live.BrimDirectionDisplay   = copy.BrimDirectionDisplay;
@@ -4682,6 +4686,24 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ScanToolDataIndex      = copy.ScanToolDataIndex;
         live.ScanBaseDataIndex      = copy.ScanBaseDataIndex;
         live.Mill                   = copy.Mill;
+    }
+
+    /// <summary>
+    /// The session copy is written from the live plane rows at save. Prefer it
+    /// when present so height, X, and Y come back even if Settings was an older pair.
+    /// </summary>
+    private void ApplyMultiPlanarFromSession(WorkspaceUiSession? session)
+    {
+        if (session is null) return;
+        var add = RightPanel.Additive;
+        if (session.SliceMethod is { Length: > 0 } method
+            && Enum.TryParse<SliceMethod>(method, out var parsed))
+            add.Method = parsed;
+        if (session.MultiPlanarPlanes is not { Count: >= 2 } planes) return;
+        add.MultiPlanarPlanes.Clear();
+        foreach (var row in planes)
+            add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(row.HeightPct, row.AngleY, row.AngleX));
+        add.BumpMultiPlanarStamp();
     }
 
     private void RestoreMaterialPresetSelection(
@@ -4864,14 +4886,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.LightningPreferInteriorMouths  = p.LightningPreferInteriorMouths;
         add.LightningTargetSupportSelections = p.LightningTargetSupportSelections;
         add.MultiPlanarPlanes.Clear();
-        foreach (var pair in p.MultiPlanarPlanes.Where(a => a is { Length: >= 2 }))
-            add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(pair[0], pair[1]));
+        foreach (var row in p.MultiPlanarPlanes)
+            add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(row.HeightPct, row.AngleY, row.AngleX));
         if (add.MultiPlanarPlanes.Count < 2)
         {
             add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(0, 0));
             add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(100, 30));
         }
         add.MultiPlanarAxisX = p.MultiPlanarAxisX;
+        add.MultiPlanarSwitchByLayer = p.MultiPlanarSwitchByLayer;
         add.BumpMultiPlanarStamp();
         add.BrimEnabled         = p.BrimEnabled;
         add.BrimLoops           = p.BrimLoops;
@@ -5220,8 +5243,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.LightningPreferInteriorMouths  = add.LightningPreferInteriorMouths;
         p.LightningTargetSupportSelections = add.LightningTargetSupportSelections;
         p.MultiPlanarPlanes = add.MultiPlanarPlanes
-            .Select(r => new[] { r.HeightPct, r.AngleDeg }).ToList();
+            .Select(r => new GuidePlaneDto { HeightPct = r.HeightPct, AngleX = r.AngleX, AngleY = r.AngleY })
+            .ToList();
         p.MultiPlanarAxisX = add.MultiPlanarAxisX;
+        p.MultiPlanarSwitchByLayer = add.MultiPlanarSwitchByLayer;
         p.BrimEnabled          = add.BrimEnabled;
         p.BrimLoops            = add.BrimLoops;
         p.BrimDirectionDisplay = add.BrimDirectionDisplay;
