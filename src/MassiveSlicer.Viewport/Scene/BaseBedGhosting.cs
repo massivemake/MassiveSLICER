@@ -9,8 +9,8 @@ public static class BaseBedGhosting
     /// <summary>Fill alpha for the inactive bed (rotary when BASE #6, heated otherwise).</summary>
     public const float GhostOpacity = 0.25f;
 
-    /// <summary>VIEWPORT T1 HV TCP outer hull when the checkbox is on.</summary>
-    public const float T1EnvelopeGhostOpacity = 0.05f;
+    /// <summary>Flange kinematic envelope at ROBROOT when the checkbox is on.</summary>
+    public const float T1EnvelopeGhostOpacity = 0.22f;
 
     /// <summary>Cell env node name for the Tool #1 kinematic envelope.</summary>
     public const string T1TcpEnvelopeNodeName = "T1TcpEnvelope";

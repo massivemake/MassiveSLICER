@@ -194,8 +194,8 @@
     ]
   },
   "t1TcpEnvelope": {
-    "name": "T1 HV TCP outer",
-    "modelPath": "assets/cells/LFAM3/t1_hv_tcp_envelope.glb"
+    "name": "Flange envelope",
+    "modelPath": "assets/cells/LFAM3/lfam3_flangeEnvelope.glb"
   },
   "tools": [
     {

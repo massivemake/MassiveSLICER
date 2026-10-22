@@ -556,7 +556,7 @@ public sealed record HeatedBedCellConfig
 /// </summary>
 public sealed record T1TcpEnvelopeCellConfig
 {
-    public string Name { get; init; } = "T1 HV TCP outer";
+    public string Name { get; init; } = "Flange envelope";
     public required string ModelPath { get; init; }
 }
 

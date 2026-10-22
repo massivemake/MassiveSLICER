@@ -11,8 +11,8 @@ public class T1TcpEnvelopeConfigTest
     {
         var cell = CellLoader.Load(ResolveLfam3());
         Assert.NotNull(cell.T1TcpEnvelope);
-        Assert.Equal("T1 HV TCP outer", cell.T1TcpEnvelope!.Name);
-        Assert.Equal("assets/cells/LFAM3/t1_hv_tcp_envelope.glb", cell.T1TcpEnvelope.ModelPath);
+        Assert.Equal("Flange envelope", cell.T1TcpEnvelope!.Name);
+        Assert.Equal("assets/cells/LFAM3/lfam3_flangeEnvelope.glb", cell.T1TcpEnvelope.ModelPath);
     }
 
     [Fact]
@@ -22,14 +22,14 @@ public class T1TcpEnvelopeConfigTest
         {
             var cell = CellLoader.Load(path);
             Assert.True(cell.T1TcpEnvelope is not null, $"{path} missing t1TcpEnvelope");
-            Assert.Contains("t1_hv_tcp_envelope.glb", cell.T1TcpEnvelope!.ModelPath);
+            Assert.Contains("lfam3_flangeEnvelope.glb", cell.T1TcpEnvelope!.ModelPath);
         }
     }
 
     [Fact]
-    public void Envelope_ghost_opacity_is_five_percent()
+    public void Envelope_ghost_opacity_is_readable()
     {
-        Assert.Equal(0.05f, BaseBedGhosting.T1EnvelopeGhostOpacity);
+        Assert.Equal(0.22f, BaseBedGhosting.T1EnvelopeGhostOpacity);
         var root = new SceneNode { Name = BaseBedGhosting.T1TcpEnvelopeNodeName };
         var child = new SceneNode { Name = "mesh" };
         root.AddChild(child);

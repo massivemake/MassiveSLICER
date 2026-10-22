@@ -581,6 +581,8 @@ internal static class CellEnvironmentBuilder
                 n.IsAuthoringOverlay = true;
                 n.Selectable         = false;
                 n.Visible            = false;
+                // The view is inside this hull. Back-face cull would hide every wall.
+                n.CullFaces          = false;
             }
             envNodes.Add(root);
             System.Console.WriteLine(
