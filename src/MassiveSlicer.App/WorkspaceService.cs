@@ -55,9 +55,6 @@ internal static class WorkspaceService
 
         var state = new WorkspaceCaptureState { Document = doc };
 
-        string meshDir = WorkspaceLoader.MeshesDirFor(savePath);
-        Directory.CreateDirectory(meshDir);
-
         string? scrubModelName = null;
         string? scrubToolpathName = null;
         var activeScrub = viewport.ActiveScrubToolpath;
@@ -85,24 +82,12 @@ internal static class WorkspaceService
             if (viewport.FindParentOutlinerItem(item) is { IsPiecesGroup: true } piecesGroup)
                 entry.PiecesGroupName = piecesGroup.Name;
 
-            if (node.SourceFilePath is { } src && File.Exists(src))
-                entry.SourcePath = src;
-
-            // Always embed a portable copy of the mesh beside the .mass (workspace_meshes/)
-            // so the workspace opens on any machine, even when SourcePath is an absolute
-            // path from the machine it was saved on. Load prefers SourcePath, then a file
-            // beside the .mass, then this embedded copy.
+            // Geometry lives in the .mass. Do not store the import path — that is a
+            // link, and the file does not open once that path is gone.
             if (TryGetMesh(node) is { } mesh)
-            {
-                string fileName = $"{Guid.NewGuid():N}.stl";
-                string meshPath = Path.Combine(meshDir, fileName);
-                StlExporter.Write(meshPath, mesh);
-                entry.EmbeddedMeshPath = WorkspaceLoader.ToRelativeMeshPath(fileName);
-            }
-            else if (entry.SourcePath is null)
-            {
+                entry.EmbeddedMesh = StlExporter.ToBytes(mesh);
+            else
                 continue;
-            }
 
             foreach (var child in item.Children)
             {
@@ -185,24 +170,18 @@ internal static class WorkspaceService
                 IsScan         = true,
             };
 
-            if (OutlinerModelOps.ResolveSourceFilePath(node) is { } src && File.Exists(src))
-                entry.SourcePath = src;
-
-            // Prefer embedding the meshable scan so the .mass reloads without the Zivid SDK.
             if (TryGetMesh(node) is { } mesh)
-            {
-                string fileName = $"scan_{Guid.NewGuid():N}.stl";
-                string meshPath = Path.Combine(meshDir, fileName);
-                StlExporter.Write(meshPath, mesh);
-                entry.EmbeddedMeshPath = WorkspaceLoader.ToRelativeMeshPath(fileName);
-            }
-            else if (entry.SourcePath is null)
+                entry.EmbeddedMesh = StlExporter.ToBytes(mesh);
+            else if (OutlinerModelOps.ResolveSourceFilePath(node) is not { } zdfOnly
+                     || !zdfOnly.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase)
+                     || !File.Exists(zdfOnly))
             {
                 continue;
             }
 
-            // Copy .zdf (+ .json sidecar) beside the workspace for recovery / re-mesh.
-            if (entry.SourcePath is { } zdfSrc
+            // Copy .zdf (+ .json sidecar) beside the workspace for color re-mesh.
+            // The triangles themselves are EmbeddedMesh, not this path.
+            if (OutlinerModelOps.ResolveSourceFilePath(node) is { } zdfSrc
                 && zdfSrc.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase)
                 && File.Exists(zdfSrc))
             {
@@ -217,11 +196,10 @@ internal static class WorkspaceService
                     if (File.Exists(jsonSrc))
                         File.Copy(jsonSrc, Path.ChangeExtension(dest, ".json"), overwrite: true);
                     entry.ScanZdfPath = Path.Combine("workspace_scans", destName).Replace('\\', '/');
-                    entry.SourcePath  = Path.GetFullPath(dest);
                 }
                 catch
                 {
-                    entry.ScanZdfPath = entry.SourcePath;
+                    entry.ScanZdfPath ??= zdfSrc;
                 }
             }
 
@@ -246,6 +224,10 @@ internal static class WorkspaceService
             IsPaintEditOpen          = viewport.IsPaintEditOpen,
             IsSlicePlaneViewerActive = viewport.IsSlicePlaneViewerActive,
             ShowMultiPlanarPlanes    = viewport.ShowMultiPlanarPlanes,
+            SliceMethod              = viewport.AdditiveSettings?.Method.ToString(),
+            MultiPlanarPlanes        = viewport.AdditiveSettings?.MultiPlanarPlanes
+                .Select(r => new GuidePlaneDto { HeightPct = r.HeightPct, AngleX = r.AngleX, AngleY = r.AngleY })
+                .ToList(),
             XBracingShowHelper       = viewport.AdditiveSettings?.XBracingShowHelper,
             PaintHandActive          = viewport.PaintHandActive,
             PaintBoxSelectActive     = viewport.PaintBoxSelectActive,
@@ -392,7 +374,8 @@ internal static class WorkspaceService
                 node.LayerPreview = entry.LayerPreview;
                 if (zdfPath is not null)
                     node.SourceFilePath = zdfPath;
-                else if (entry.SourcePath is { } sp && File.Exists(sp))
+                else if (entry.EmbeddedMesh is not { Length: > 0 }
+                         && entry.SourcePath is { } sp && File.Exists(sp))
                     node.SourceFilePath = sp;
 
                 if (isScan)
@@ -535,8 +518,8 @@ internal static class WorkspaceService
     {
         foreach (var n in root.SelfAndDescendants())
         {
-            if (n.PendingMesh is { } pending) return pending;
-            if (n.Mesh?.PickingData is { } gpu) return gpu;
+            if (n.PendingMesh is { } pending && !n.IsAuthoringOverlay) return pending;
+            if (n.Mesh?.PickingData is { } gpu && !n.IsAuthoringOverlay) return gpu;
         }
         return null;
     }
@@ -570,6 +553,7 @@ internal static class WorkspaceService
             if (ImportHelper.IsSupported(p)) mesh = p;
         }
 
+        NoteMesh(MaterializeEmbeddedMesh(entry));
         NoteMesh(entry.SourcePath);
         if (mesh is null && entry.SourcePath is { } missingSrc)
             NoteMesh(TryResolveModelBesideWorkspace(workspacePath, missingSrc));
@@ -587,6 +571,27 @@ internal static class WorkspaceService
 
         zdfPath = foundZdf;
         return mesh;
+    }
+
+    /// <summary>
+    /// Writes the in-file STL to a temp path the importer can read. The .mass stays
+    /// the source of truth; this file is not stored back as a link.
+    /// </summary>
+    internal static string? MaterializeEmbeddedMesh(WorkspaceModelEntry entry)
+    {
+        if (entry.EmbeddedMesh is not { Length: > 0 } bytes) return null;
+        string dir = Path.Combine(Path.GetTempPath(), "MassiveSlicer", "embedded-mesh");
+        Directory.CreateDirectory(dir);
+        string name = string.IsNullOrWhiteSpace(entry.Name) ? "model" : entry.Name;
+        foreach (char c in Path.GetInvalidFileNameChars())
+            name = name.Replace(c, '_');
+        int sig = bytes.Length;
+        if (bytes.Length >= 8)
+            sig ^= BitConverter.ToInt32(bytes, 0) ^ BitConverter.ToInt32(bytes, bytes.Length - 4);
+        string file = Path.Combine(dir, $"{name}-{sig}.stl");
+        if (!File.Exists(file) || new FileInfo(file).Length != bytes.Length)
+            File.WriteAllBytes(file, bytes);
+        return file;
     }
 
     /// <summary>

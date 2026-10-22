@@ -199,7 +199,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal bool IsMillableWorkpiece(SceneNode? node)
     {
         if (node is null) return false;
-        if (IsEffectorNode(node) || IsModifierNode(node) || IsModifiersGroupNode(node))
+        if (IsEffectorNode(node) || IsModifierNode(node) || IsModifiersGroupNode(node)
+            || IsGuidePlaneNode(node) || IsPlanesGroupNode(node))
             return false;
 
         var item = FindUserMeshOutlinerItem(node);
@@ -6839,6 +6840,16 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
         SetActiveToolheadOutliner(null);
         item.IsOutlinerSelected = true;
+        if (item.IsGuidePlane || item.IsPlanesGroup)
+        {
+            var group = item.IsPlanesGroup ? item : FindParentOutlinerItem(item);
+            if (group is not null)
+            {
+                group.IsExpanded = true;
+                if (FindParentOutlinerItem(group) is { } mesh)
+                    mesh.IsExpanded = true;
+            }
+        }
 
         // Selecting an effector, a modifier plane, or a whole Modifiers group arms the move
         // gizmo immediately (same convention as the cut tool) — placing it is the whole point
@@ -7126,9 +7137,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal OutlinerItemViewModel? OwningModelItem(OutlinerItemViewModel? item)
     {
         if (item is null) return null;
-        if (item.IsModifier || item.IsModifiersGroup)
+        if (item.IsModifier || item.IsModifiersGroup || item.IsGuidePlane || item.IsPlanesGroup)
         {
-            var groupItem = item.IsModifiersGroup ? item : FindParentOutlinerItem(item);
+            var groupItem = item.IsModifiersGroup || item.IsPlanesGroup ? item : FindParentOutlinerItem(item);
             return groupItem is null ? null : FindParentOutlinerItem(groupItem);
         }
         if (!item.IsToolpath) return item;
@@ -7220,7 +7231,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal OutlinerItemViewModel? FindUserMeshOutlinerItem(SceneNode? node)
     {
         if (node is null) return null;
-        if (IsModifierNode(node) || IsModifiersGroupNode(node)) return null;
+        if (IsModifierNode(node) || IsModifiersGroupNode(node)
+            || IsGuidePlaneNode(node) || IsPlanesGroupNode(node)) return null;
         foreach (var item in EnumerateAllContentItems())
         {
             if (item.Node == node || item.Node.SelfAndDescendants().Any(n => n == node))
@@ -7566,6 +7578,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         if (_modifiersGroupItems.TryGetValue(node, out var groupItem)) return groupItem;
         if (FindModifierForNode(node) is { } modCut && _modifierOutlinerItems.TryGetValue(modCut, out var modItem))
             return modItem;
+        if (FindGuidePlaneItem(node) is { } planeItem) return planeItem;
 
         var item = FindToolheadOutlinerItem(node)
                    ?? FindUserMeshOutlinerItem(node)
@@ -7795,8 +7808,221 @@ public sealed partial class ViewportViewModel : ViewModelBase
         return groupItem;
     }
 
+    private float _guidePlaneMeshSize = -1f;
+
+    internal bool IsGuidePlaneNode(SceneNode? node)
+        => FindGuidePlaneItem(node) is { IsGuidePlane: true };
+
+    internal bool IsPlanesGroupNode(SceneNode? node)
+        => FindGuidePlaneItem(node) is { IsPlanesGroup: true };
+
+    /// <summary>The outliner row for a guide plane or its Planes group. Not the mesh.</summary>
+    internal OutlinerItemViewModel? FindGuidePlaneItem(SceneNode? node)
+    {
+        if (node is null) return null;
+        foreach (var model in GetUserModelItems())
+        {
+            var group = model.Children.FirstOrDefault(c => c.IsPlanesGroup);
+            if (group is null) continue;
+            if (group.Node == node) return group;
+            foreach (var child in group.Children)
+                if (child.Node == node) return child;
+        }
+        return null;
+    }
+
+    internal static string GuidePlaneLabel(MultiPlanarPlaneRow row)
+        => $"{row.HeightPct:0}%    X {row.AngleX:0.0}    Y {row.AngleY:0.0}";
+
     /// <summary>
-    /// Gets (or creates) <paramref name="ownerItem"/>'s "Modifiers" group: a real, selectable
+    /// Planes group under the mesh, one child per guide. Authoring overlay only —
+    /// never sliced, never saved as the part.
+    /// </summary>
+    internal void EnsureGuidePlaneOutliner(
+        OutlinerItemViewModel model,
+        IReadOnlyList<MultiPlanarPlaneRow> rows,
+        float size)
+    {
+        foreach (var other in GetUserModelItems())
+        {
+            if (ReferenceEquals(other, model)) continue;
+            if (other.Children.FirstOrDefault(c => c.IsPlanesGroup) is { } stale)
+                RemovePlanesGroup(other, stale);
+        }
+
+        var group = model.Children.FirstOrDefault(c => c.IsPlanesGroup);
+        if (group is null)
+        {
+            var groupNode = new SceneNode
+            {
+                Name = "Planes",
+                Selectable = true,
+                PickIgnore = true,
+                IsAuthoringOverlay = true,
+            };
+            model.Node.AddChild(groupNode);
+            group = CreateOutlinerItem(groupNode, _ => { }, canDelete: false);
+            group.IsPlanesGroup = true;
+            group.IsExpanded = true;
+            model.IsExpanded = true;
+            model.AddChild(group);
+        }
+
+        bool resize = MathF.Abs(size - _guidePlaneMeshSize) > 1f;
+        _guidePlaneMeshSize = size;
+        float parentScale = AxisScale(model.Node.WorldTransform);
+        var mesh = resize ? GuidePlaneQuad(size, parentScale) : null;
+
+        while (group.Children.Count > rows.Count)
+        {
+            var extra = group.Children[^1];
+            group.RemoveChild(extra);
+            PendingRemoveNodes.Enqueue(extra.Node);
+        }
+        while (group.Children.Count < rows.Count)
+        {
+            var node = new SceneNode
+            {
+                Name = "Plane",
+                Selectable = true,
+                PickIgnore = false,
+                CullFaces = false,
+                TranslucentPass = true,
+                KeepOwnMaterial = true,
+                IsAuthoringOverlay = true,
+                PendingMesh = mesh ?? GuidePlaneQuad(size, parentScale),
+            };
+            group.Node.AddChild(node);
+            PendingModelRefresh.Enqueue(node);
+            var item = CreateOutlinerItem(node, _ => { }, canDelete: false);
+            item.IsGuidePlane = true;
+            group.AddChild(item);
+        }
+
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var item = group.Children[i];
+            item.Node.PickIgnore = false;
+            item.Node.Selectable = true;
+            item.SetGuideLabel(GuidePlaneLabel(rows[i]));
+            if (mesh is not null)
+            {
+                item.Node.PendingMesh = mesh;
+                PendingModelRefresh.Enqueue(item.Node);
+            }
+        }
+        NotifyRenderNeeded();
+    }
+
+    internal void RefreshGuidePlaneNames(IReadOnlyList<MultiPlanarPlaneRow> rows)
+    {
+        var group = GetUserModelItems()
+            .Select(m => m.Children.FirstOrDefault(c => c.IsPlanesGroup))
+            .FirstOrDefault(g => g is not null);
+        if (group is null || group.Children.Count != rows.Count) return;
+        for (int i = 0; i < rows.Count; i++)
+            group.Children[i].SetGuideLabel(GuidePlaneLabel(rows[i]));
+    }
+
+    internal void ApplyGuidePlanePoses(
+        OutlinerItemViewModel model,
+        IReadOnlyList<Vector3> centers,
+        IReadOnlyList<Vector3> normals)
+    {
+        var group = model.Children.FirstOrDefault(c => c.IsPlanesGroup);
+        if (group is null || group.Children.Count != centers.Count || centers.Count != normals.Count)
+            return;
+        Matrix4.Invert(model.Node.WorldTransform, out var invParent);
+        for (int i = 0; i < centers.Count; i++)
+            group.Children[i].Node.LocalTransform = ParentLocalPose(centers[i], normals[i], invParent);
+    }
+
+    /// <summary>
+    /// Rotation and translation in the mesh's space, scale 1. The quad vertices
+    /// already carry the size, so leaving the inverse scale in this matrix
+    /// would shrink them, and omitting it while the vertices are in world
+    /// units would blow them up by the mesh's unit scale.
+    /// </summary>
+    private static Matrix4 ParentLocalPose(Vector3 center, Vector3 normal, Matrix4 invParent)
+    {
+        var raw = GuidePlaneWorld(center, normal) * invParent;
+        var x = raw.Row0.Xyz;
+        var y = raw.Row1.Xyz;
+        var z = raw.Row2.Xyz;
+        if (x.LengthSquared > 1e-8f) x = Vector3.Normalize(x);
+        if (y.LengthSquared > 1e-8f) y = Vector3.Normalize(y);
+        if (z.LengthSquared > 1e-8f) z = Vector3.Normalize(z);
+        var t = raw.Row3.Xyz;
+        return new Matrix4(
+            x.X, x.Y, x.Z, 0,
+            y.X, y.Y, y.Z, 0,
+            z.X, z.Y, z.Z, 0,
+            t.X, t.Y, t.Z, 1);
+    }
+
+    private static float AxisScale(Matrix4 m)
+    {
+        float sx = m.Row0.Xyz.Length;
+        float sy = m.Row1.Xyz.Length;
+        float sz = m.Row2.Xyz.Length;
+        return MathF.Max(MathF.Max(sx, MathF.Max(sy, sz)), 1e-4f);
+    }
+
+    internal void ClearGuidePlaneOutliner()
+    {
+        foreach (var model in GetUserModelItems().ToList())
+        {
+            if (model.Children.FirstOrDefault(c => c.IsPlanesGroup) is { } group)
+                RemovePlanesGroup(model, group);
+        }
+        _guidePlaneMeshSize = -1f;
+    }
+
+    private void RemovePlanesGroup(OutlinerItemViewModel model, OutlinerItemViewModel group)
+    {
+        model.RemoveChild(group);
+        PendingRemoveNodes.Enqueue(group.Node);
+        NotifyRenderNeeded();
+    }
+
+    private static Matrix4 GuidePlaneWorld(Vector3 center, Vector3 normal)
+    {
+        var n = normal.LengthSquared > 1e-8f ? Vector3.Normalize(normal) : Vector3.UnitZ;
+        var up = MathF.Abs(n.Z) < 0.9f ? Vector3.UnitZ : Vector3.UnitX;
+        var x = Vector3.Normalize(Vector3.Cross(up, n));
+        var y = Vector3.Cross(n, x);
+        return new Matrix4(
+            x.X, x.Y, x.Z, 0,
+            y.X, y.Y, y.Z, 0,
+            n.X, n.Y, n.Z, 0,
+            center.X, center.Y, center.Z, 1);
+    }
+
+    private static MeshData GuidePlaneQuad(float worldSize, float parentScale)
+    {
+        // Vertices are in the mesh node's space. A metres import is a ×1000 on
+        // that node; a world-sized quad under it would fill the shop.
+        float h = worldSize * 0.5f / MathF.Max(parentScale, 1e-4f);
+        var positions = new[]
+        {
+            new Vector3(-h, -h, 0), new Vector3(h, -h, 0),
+            new Vector3(h, h, 0), new Vector3(-h, h, 0),
+        };
+        var normals = new[] { Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ };
+        uint[] indices = [0, 1, 2, 0, 2, 3, 0, 2, 1, 0, 3, 2];
+        var color = new Vector4(0.443f, 0.655f, 0.165f, 0.35f);
+        return new MeshData(positions, normals, indices, "Plane", color, 0f, 1f,
+            uvs: null, tangents: null,
+            material: new MaterialData
+            {
+                BaseColorFactor = color,
+                MetallicFactor = 0f,
+                RoughnessFactor = 1f,
+                AlphaMode = AlphaMode.Blend,
+            });
+    }
+
+    /// <summary>Gets (or creates) <paramref name="ownerItem"/>'s "Modifiers" group: a real, selectable
     /// child SceneNode — selecting its outliner row arms the gizmo for the WHOLE stack at once,
     /// moving/rotating it moves every modifier under it together, for free, via ordinary
     /// parent-child transforms. Also where the Apply action lives (see IsModifiersGroup).

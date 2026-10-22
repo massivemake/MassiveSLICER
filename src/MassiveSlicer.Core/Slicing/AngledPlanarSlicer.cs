@@ -239,12 +239,10 @@ public static class AngledPlanarSlicer
 
         float cx = (xMin + xMax) * 0.5f;
         float cy = (yMin + yMax) * 0.5f;
-        bool axisX = settings.MultiPlanarAxisX;
-        // Thickness varies along the lean direction: X for tilt-about-Y, Y for
-        // tilt-about-X — the lever arm is the part's largest reach on that axis.
-        float lever = axisX
-            ? MathF.Max(MathF.Max(yMax - cy, cy - yMin), 1f)
-            : MathF.Max(MathF.Max(xMax - cx, cx - xMin), 1f);
+        // Either axis can lean, so the step clamp uses the larger reach.
+        float lever = MathF.Max(
+            MathF.Max(MathF.Max(xMax - cx, cx - xMin), MathF.Max(yMax - cy, cy - yMin)),
+            1f);
 
         float layerH = MathF.Max(settings.LayerHeight, 0.1f);
 
@@ -258,21 +256,31 @@ public static class AngledPlanarSlicer
         // layerH − Δθ·lever, so cap the per-layer rotation at 75% of the nominal.
         float maxStepRad = 0.75f * layerH / lever;
 
-        float ThetaAt(float f)
+        // Older files stored one angle and a global X-axis flag. Those planes
+        // have AngleX = 0, so the flag still moves that angle onto X.
+        bool legacyAxisX = settings.MultiPlanarAxisX && guides.All(g => g.AngleX == 0f);
+
+        static (float Y, float X) Components(MultiPlanarPlane p, bool onX)
+        {
+            float y = p.AngleY * MathF.PI / 180f;
+            float x = p.AngleX * MathF.PI / 180f;
+            return onX ? (0f, y) : (y, x);
+        }
+
+        (float Y, float X) LeanAt(float f)
         {
             float pct = f * 100f;
-            // Below first guide → hold first angle (project past the bottom guide).
-            if (pct <= guides[0].HeightPct) return guides[0].AngleDeg * MathF.PI / 180f;
+            if (pct <= guides[0].HeightPct) return Components(guides[0], legacyAxisX);
             for (int k = 1; k < guides.Length; k++)
             {
                 if (pct > guides[k].HeightPct) continue;
                 float span = MathF.Max(guides[k].HeightPct - guides[k - 1].HeightPct, 1e-3f);
                 float t = (pct - guides[k - 1].HeightPct) / span;
-                float a = guides[k - 1].AngleDeg + (guides[k].AngleDeg - guides[k - 1].AngleDeg) * t;
-                return a * MathF.PI / 180f;
+                var a = Components(guides[k - 1], legacyAxisX);
+                var b = Components(guides[k], legacyAxisX);
+                return (a.Y + (b.Y - a.Y) * t, a.X + (b.X - a.X) * t);
             }
-            // Above last guide → hold last angle (project past the top guide).
-            return guides[^1].AngleDeg * MathF.PI / 180f;
+            return Components(guides[^1], legacyAxisX);
         }
 
         var toolpath  = new Toolpath();
@@ -302,7 +310,8 @@ public static class AngledPlanarSlicer
         {
             float maxAbsTheta = 0f;
             foreach (var gp in guides)
-                maxAbsTheta = MathF.Max(maxAbsTheta, MathF.Abs(gp.AngleDeg) * MathF.PI / 180f);
+                maxAbsTheta = MathF.Max(maxAbsTheta,
+                    MathF.Max(MathF.Abs(gp.AngleY), MathF.Abs(gp.AngleX)) * MathF.PI / 180f);
             float zPad = lever * MathF.Tan(MathF.Min(maxAbsTheta, 75f * MathF.PI / 180f))
                        + layerH * 2f;
 
@@ -328,8 +337,7 @@ public static class AngledPlanarSlicer
             // corner under tilt; first-layer offset matches the classic bottom pad.
             float h0 = zMin - zPad + MathF.Max(settings.FirstLayerHeight, layerH * 0.5f);
             float hCeil = zMax + zPad + layerH * 4f;
-            float thetaWalk = ThetaAt(0f);
-            var refAxis = axisX ? new Vector3(1f, 0f, 0f) : new Vector3(0f, 1f, 0f);
+            var leanWalk = LeanAt(0f);
             bool seenHit = false;
             int emptyAfterHit = 0;
             const int emptyStop = 3; // a few empty planes past the mesh → done
@@ -341,10 +349,13 @@ public static class AngledPlanarSlicer
                 // Height fraction for guide interpolation is relative to the mesh
                 // body only — outside [zMin,zMax] f clamps so end angles hold.
                 float f = Math.Clamp((h0 - zMin) / (zMax - zMin), 0f, 1f);
-                float theta = Math.Clamp(ThetaAt(f), thetaWalk - maxStepRad, thetaWalk + maxStepRad);
-                var normal = axisX
-                    ? Vector3.Normalize(new Vector3(0f, -MathF.Sin(theta), MathF.Cos(theta)))
-                    : Vector3.Normalize(new Vector3(MathF.Sin(theta), 0f, MathF.Cos(theta)));
+                var lean = LeanAt(f);
+                float ty = Math.Clamp(lean.Y, leanWalk.Y - maxStepRad, leanWalk.Y + maxStepRad);
+                float tx = Math.Clamp(lean.X, leanWalk.X - maxStepRad, leanWalk.X + maxStepRad);
+                var normal = Vector3.Normalize(new Vector3(
+                    MathF.Sin(ty),
+                    -MathF.Sin(tx) * MathF.Cos(ty),
+                    MathF.Cos(tx) * MathF.Cos(ty)));
                 var anchor = new Vector3(cx, cy, h0);
                 float planeD = Vector3.Dot(anchor, normal);
                 bool hits = PlaneHitsAabb(normal, planeD, aabbMin, aabbMax);
@@ -353,9 +364,12 @@ public static class AngledPlanarSlicer
                 {
                     seenHit = true;
                     emptyAfterHit = 0;
+                    var refAxis = MathF.Abs(normal.Y) > MathF.Abs(normal.X)
+                        ? new Vector3(1f, 0f, 0f)
+                        : new Vector3(0f, 1f, 0f);
                     var u = Vector3.Normalize(Vector3.Cross(refAxis, normal));
                     var v = Vector3.Cross(normal, u);
-                    march.Add((h0, theta, normal, planeD, anchor, u, v));
+                    march.Add((h0, MathF.Max(MathF.Abs(ty), MathF.Abs(tx)), normal, planeD, anchor, u, v));
                 }
                 else if (seenHit)
                 {
@@ -366,8 +380,8 @@ public static class AngledPlanarSlicer
                 }
                 // else: still approaching the mesh from below — keep walking
 
-                thetaWalk = theta;
-                h0 += layerH / MathF.Max(MathF.Cos(theta), 0.2f);
+                leanWalk = (ty, tx);
+                h0 += layerH / MathF.Max(MathF.Cos(MathF.Max(MathF.Abs(ty), MathF.Abs(tx))), 0.2f);
             }
         }
         if (march.Count == 0) return toolpath;

@@ -1,3 +1,5 @@
+using Serialization = System.Text.Json.Serialization;
+
 namespace MassiveSlicer.Core.Models;
 
 /// <summary>
@@ -250,12 +252,21 @@ public sealed class AppPreferences
     /// </summary>
     public bool LightningTargetSupportSelections { get; set; }
 
-    /// <summary>Multi-Planar guide planes as [heightPct, angleDeg] pairs.</summary>
-    public List<double[]> MultiPlanarPlanes { get; set; } =
-        [[0, 0], [50, 15], [100, 30]];
+    /// <summary>Multi-Planar guides. Height %, X tilt, and Y tilt. Old files
+    /// that stored <c>[height, angleY]</c> still open.</summary>
+    [Serialization.JsonConverter(typeof(GuidePlaneListConverter))]
+    public List<GuidePlaneDto> MultiPlanarPlanes { get; set; } =
+    [
+        new() { HeightPct = 0, AngleY = 0 },
+        new() { HeightPct = 50, AngleY = 15 },
+        new() { HeightPct = 100, AngleY = 30 },
+    ];
 
     /// <summary>Multi-Planar: tilt about X instead of Y.</summary>
     public bool MultiPlanarAxisX { get; set; }
+
+    /// <summary>Multi-Planar: flip the guide lean on every other layer.</summary>
+    public bool MultiPlanarSwitchByLayer { get; set; }
 
     /// <summary>Brim: offset loops around the first layer for bed adhesion.</summary>
     public bool BrimEnabled { get; set; }

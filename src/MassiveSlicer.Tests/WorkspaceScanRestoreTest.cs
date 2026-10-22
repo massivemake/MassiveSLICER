@@ -71,6 +71,38 @@ public sealed class WorkspaceScanRestoreTest
     }
 
     [Fact]
+    public void ResolveRestoreMeshPath_prefers_in_file_mesh_over_source_link()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            byte[] stl = System.Text.Encoding.ASCII.GetBytes(MinimalStl());
+            string gltf = Path.Combine(dir, "rockV10.gltf");
+            File.WriteAllText(gltf, "{}");
+            string mass = Path.Combine(dir, "job.mass");
+
+            var entry = new WorkspaceModelEntry
+            {
+                Name         = "rockV10",
+                SourcePath   = gltf,
+                EmbeddedMesh = stl,
+            };
+
+            string? mesh = WorkspaceService.ResolveRestoreMeshPath(entry, mass, out string? zdfPath);
+            Assert.NotNull(mesh);
+            Assert.EndsWith(".stl", mesh, StringComparison.OrdinalIgnoreCase);
+            Assert.NotEqual(gltf, mesh);
+            Assert.Equal(stl, File.ReadAllBytes(mesh!));
+            Assert.Null(zdfPath);
+            Assert.False(Directory.Exists(Path.Combine(dir, "workspace_meshes")));
+        }
+        finally
+        {
+            TryDelete(dir);
+        }
+    }
+
+    [Fact]
     public void RestoreModels_loads_scan_from_embedded_stl_when_source_is_zdf()
     {
         var dir = NewTempDir();

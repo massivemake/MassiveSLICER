@@ -263,6 +263,36 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     internal void BumpMultiPlanarStamp() => MultiPlanarStamp++;
 
+    private bool _alignPickArmed;
+    /// <summary>A plane row is waiting for a face click.</summary>
+    public bool AlignPickArmed
+    {
+        get => _alignPickArmed;
+        private set => SetField(ref _alignPickArmed, value);
+    }
+
+    public MultiPlanarPlaneRow? ArmedAlignRow
+        => MultiPlanarPlanes.FirstOrDefault(r => r.IsAlignArmed);
+
+    internal void ToggleAlignPick(MultiPlanarPlaneRow row)
+    {
+        bool arm = !row.IsAlignArmed;
+        foreach (var other in MultiPlanarPlanes)
+            other.SetAlignArmed(false);
+        if (arm) row.SetAlignArmed(true);
+        SyncAlignPickArmed();
+    }
+
+    internal void CancelAlignPick()
+    {
+        foreach (var row in MultiPlanarPlanes)
+            row.SetAlignArmed(false);
+        SyncAlignPickArmed();
+    }
+
+    internal void SyncAlignPickArmed()
+        => AlignPickArmed = MultiPlanarPlanes.Any(r => r.IsAlignArmed);
+
     private bool _multiPlanarAxisX;
     /// <summary>False = tilt about Y (lean along X); true = tilt about X (lean along Y).</summary>
     public bool MultiPlanarAxisX
@@ -271,11 +301,19 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set { if (SetField(ref _multiPlanarAxisX, value)) BumpMultiPlanarStamp(); }
     }
 
+    private bool _multiPlanarSwitchByLayer;
+    /// <summary>Even layers keep the guide tilt. Odd layers lean the opposite way.</summary>
+    public bool MultiPlanarSwitchByLayer
+    {
+        get => _multiPlanarSwitchByLayer;
+        set { if (SetField(ref _multiPlanarSwitchByLayer, value)) BumpMultiPlanarStamp(); }
+    }
+
     public RelayCommand AddMultiPlanarPlaneCommand => _addMultiPlanarPlane ??= new RelayCommand(() =>
     {
         // Insert into the biggest height gap so new planes land somewhere useful.
         var sorted = MultiPlanarPlanes.OrderBy(r => r.HeightPct).ToList();
-        double bestGap = -1, at = 50, angle = 15;
+        double bestGap = -1, at = 50, angleX = 0, angleY = 15;
         for (int i = 1; i < sorted.Count; i++)
         {
             double gap = sorted[i].HeightPct - sorted[i - 1].HeightPct;
@@ -283,10 +321,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             {
                 bestGap = gap;
                 at = (sorted[i].HeightPct + sorted[i - 1].HeightPct) * 0.5;
-                angle = (sorted[i].AngleDeg + sorted[i - 1].AngleDeg) * 0.5;
+                angleX = (sorted[i].AngleX + sorted[i - 1].AngleX) * 0.5;
+                angleY = (sorted[i].AngleY + sorted[i - 1].AngleY) * 0.5;
             }
         }
-        MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(Math.Round(at), Math.Round(angle, 1)));
+        MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(Math.Round(at), Math.Round(angleY, 1), Math.Round(angleX, 1)));
         BumpMultiPlanarStamp();
     });
     private RelayCommand? _addMultiPlanarPlane;

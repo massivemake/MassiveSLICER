@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-10-02** (File → Import Scaled Toolpath)
+Last updated: **2026-10-08** (`.mass` stores the mesh in the file)
 
 ---
 
@@ -521,6 +521,16 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-10-08 — `.mass` stores the mesh in the file
+
+- File → Save writes each model's triangles into the `.mass` (`EmbeddedMesh`). It does not store the import path, and it does not write `workspace_meshes/`.
+- Open uses those bytes first. An older file that only has a path or a sidecar still loads the old way.
+- Re-save an old workspace once if it should travel as a single file.
+
+### 2026-10-08 — Multi-Planar switch by layer
+
+- GEOMETRY Multi-Planar .mass saves HeightPct, AngleX, and AngleY by name. A zero tilt is written. Old [height, angleY] pairs still open.
 
 ### 2026-10-02 — Import Scaled Toolpath
 

@@ -85,6 +85,24 @@ public class MultiPlanarSlicerTest
     }
 
     [Fact]
+    public void EachGuideUsesItsOwnAxis()
+    {
+        var s = new SliceSettings
+        {
+            LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = 6f,
+            MultiPlanarPlanes = [new(0f, 20f, 0f), new(100f, 0f, 20f)],
+        };
+        var tp = AngledPlanarSlicer.SliceMultiPlanar([Cylinder()], s);
+        Assert.True(tp.Layers.Count > 20, $"only {tp.Layers.Count} layers");
+        var low = tp.Layers[tp.Layers.Count / 5];
+        var high = tp.Layers[tp.Layers.Count * 4 / 5];
+        Assert.True(MathF.Abs(low.PlaneNormal.X) > MathF.Abs(low.PlaneNormal.Y) + 0.05f,
+            $"low plane should lean on Y axis, normal={low.PlaneNormal}");
+        Assert.True(MathF.Abs(high.PlaneNormal.Y) > MathF.Abs(high.PlaneNormal.X) + 0.05f,
+            $"high plane should lean on X axis, normal={high.PlaneNormal}");
+    }
+
+    [Fact]
     public void FivePlaneStackInterpolatesThroughEveryGuide()
     {
         var s = new SliceSettings

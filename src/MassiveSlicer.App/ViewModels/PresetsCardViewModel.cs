@@ -46,6 +46,7 @@ public sealed class PrintPresetSample
     public double? TiltAngle { get; init; }
     public double? TiltAngleX { get; init; }
     public bool? MultiPlanarAxisX { get; init; }
+    public bool? MultiPlanarSwitchByLayer { get; init; }
     public List<PresetPlaneRow>? MultiPlanarPlanes { get; init; }
 
     // -- Slicing mode & method ------------------------------------------------
@@ -266,6 +267,7 @@ public sealed class PrintPresetSample
                 D(s, "Tilt angle", TiltAngle, "°");
                 D(s, "Tilt angle X", TiltAngleX, "°");
                 B(s, "Multi-Planar axis X", MultiPlanarAxisX);
+                B(s, "Switch by layer", MultiPlanarSwitchByLayer);
                 if (MultiPlanarPlanes is { Count: > 0 } planes)
                     s.Add($"Multi-Planar planes: {planes.Count} ({string.Join(", ", planes.Select(p => $"{p.HeightPct:0.#}%@{p.AngleDeg:0.#}°"))})");
             });
@@ -843,7 +845,8 @@ public sealed class PresetsCardViewModel : ViewModelBase
 
             BeadWidth = d.BeadWidth, LayerHeight = d.LayerHeight, TiltAngle = d.TiltAngle,
             TiltAngleX = d.TiltAngleX, MultiPlanarAxisX = d.MultiPlanarAxisX,
-            MultiPlanarPlanes = d.MultiPlanarPlanes.Select(r => new PresetPlaneRow { HeightPct = r.HeightPct, AngleDeg = r.AngleDeg }).ToList(),
+            MultiPlanarSwitchByLayer = d.MultiPlanarSwitchByLayer,
+            MultiPlanarPlanes = d.MultiPlanarPlanes.Select(r => new PresetPlaneRow { HeightPct = r.HeightPct, AngleDeg = r.AngleY, AngleX = r.AngleX }).ToList(),
 
             Method = FormatSliceMethod(d.Method), SeamMode = d.SeamMode, SlicingMode = d.SlicingMode,
             OrientationFollowPercent = d.OrientationFollowPercent, OrientationMaxTiltDeg = d.OrientationMaxTiltDeg,
@@ -1102,11 +1105,12 @@ public sealed class PresetsCardViewModel : ViewModelBase
         if (p.TiltAngle is { } tiltAngle) _additive.TiltAngle = tiltAngle;
         if (p.TiltAngleX is { } tiltAngleX) _additive.TiltAngleX = tiltAngleX;
         if (p.MultiPlanarAxisX is { } multiPlanarAxisX) _additive.MultiPlanarAxisX = multiPlanarAxisX;
+        if (p.MultiPlanarSwitchByLayer is { } multiPlanarSwitchByLayer) _additive.MultiPlanarSwitchByLayer = multiPlanarSwitchByLayer;
         if (p.MultiPlanarPlanes is { } planes)
         {
             _additive.MultiPlanarPlanes.Clear();
             foreach (var row in planes)
-                _additive.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(row.HeightPct, row.AngleDeg));
+                _additive.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(row.HeightPct, row.AngleDeg, row.AngleX));
         }
 
         if (p.Method is { } method) _additive.Method = ParseSliceMethod(method);
@@ -1363,8 +1367,9 @@ public sealed class PresetsCardViewModel : ViewModelBase
             TiltAngle = geometry ? a.TiltAngle : null,
             TiltAngleX = geometry ? a.TiltAngleX : null,
             MultiPlanarAxisX = geometry ? a.MultiPlanarAxisX : null,
+            MultiPlanarSwitchByLayer = geometry ? a.MultiPlanarSwitchByLayer : null,
             MultiPlanarPlanes = geometry
-                ? a.MultiPlanarPlanes.Select(r => new PresetPlaneRow { HeightPct = r.HeightPct, AngleDeg = r.AngleDeg }).ToList()
+                ? a.MultiPlanarPlanes.Select(r => new PresetPlaneRow { HeightPct = r.HeightPct, AngleDeg = r.AngleY, AngleX = r.AngleX }).ToList()
                 : null,
 
             Method = slicing ? FormatSliceMethod(a.Method) : null,
@@ -1585,7 +1590,8 @@ public sealed class PresetsCardViewModel : ViewModelBase
 
         BeadWidth = p.BeadWidth, LayerHeight = p.LayerHeight, TiltAngle = p.TiltAngle, TiltAngleX = p.TiltAngleX,
         MultiPlanarAxisX = p.MultiPlanarAxisX,
-        MultiPlanarPlanes = p.MultiPlanarPlanes?.Select(r => new Core.IO.PresetPlaneRow { HeightPct = r.HeightPct, AngleDeg = r.AngleDeg }).ToList(),
+        MultiPlanarSwitchByLayer = p.MultiPlanarSwitchByLayer,
+        MultiPlanarPlanes = p.MultiPlanarPlanes?.Select(r => new Core.IO.PresetPlaneRow { HeightPct = r.HeightPct, AngleDeg = r.AngleDeg, AngleX = r.AngleX }).ToList(),
 
         Method = p.Method, SeamMode = p.SeamMode, SlicingMode = p.SlicingMode,
         OrientationFollowPercent = p.OrientationFollowPercent, OrientationMaxTiltDeg = p.OrientationMaxTiltDeg,
@@ -1665,7 +1671,8 @@ public sealed class PresetsCardViewModel : ViewModelBase
 
         BeadWidth = r.BeadWidth, LayerHeight = r.LayerHeight, TiltAngle = r.TiltAngle, TiltAngleX = r.TiltAngleX,
         MultiPlanarAxisX = r.MultiPlanarAxisX,
-        MultiPlanarPlanes = r.MultiPlanarPlanes?.Select(row => new PresetPlaneRow { HeightPct = row.HeightPct, AngleDeg = row.AngleDeg }).ToList(),
+        MultiPlanarSwitchByLayer = r.MultiPlanarSwitchByLayer,
+        MultiPlanarPlanes = r.MultiPlanarPlanes?.Select(row => new PresetPlaneRow { HeightPct = row.HeightPct, AngleDeg = row.AngleDeg, AngleX = row.AngleX }).ToList(),
 
         Method = r.Method, SeamMode = r.SeamMode, SlicingMode = r.SlicingMode,
         OrientationFollowPercent = r.OrientationFollowPercent, OrientationMaxTiltDeg = r.OrientationMaxTiltDeg,

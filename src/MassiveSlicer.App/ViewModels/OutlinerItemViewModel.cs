@@ -19,6 +19,8 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     // -- Type badge -----------------------------------------------------------
     public string TypeIcon =>
         IsPiecesGroup ? "mdi-source-fork"
+        : IsPlanesGroup ? "mdi-layers-triple-outline"
+        : IsGuidePlane ? "mdi-rhombus-outline"
         : IsModifiersGroup ? "mdi-layers-outline"
         : IsModifier ? "mdi-crop"
         : IsEffector ? "mdi-white-balance-sunny"
@@ -32,6 +34,8 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 
     public string TypeColor =>
         IsPiecesGroup ? "#4FC3B0"
+        : IsPlanesGroup ? "#71a72a"
+        : IsGuidePlane ? "#8bc43a"
         : IsModifiersGroup ? "#E8A33D"
         : IsModifier ? "#E8A33D"
         : IsEffector ? "#A6DE38"
@@ -45,6 +49,8 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 
     public string TypeTip =>
         IsPiecesGroup ? "Applied pieces — result of running the modifier stack, from an Apply press"
+        : IsPlanesGroup ? "Multi-Planar guide planes for this mesh"
+        : IsGuidePlane ? "Guide plane — height and X/Y tilt"
         : IsModifiersGroup ? "Modifier stack — select to move/rotate all together, or Apply"
         : IsModifier ? "Cut modifier"
         : IsEffector ? "Effector"
@@ -161,6 +167,18 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     /// grouping — pieces inside are NOT real scene children of it, so each stays independently
     /// movable afterward.</summary>
     public bool IsPiecesGroup { get; set; }
+
+    /// <summary>Multi-Planar guide stack under the mesh it slices.</summary>
+    public bool IsPlanesGroup { get; set; }
+
+    /// <summary>One guide plane inside a Planes group.</summary>
+    public bool IsGuidePlane { get; set; }
+
+    internal void SetGuideLabel(string label)
+    {
+        _displayName = label;
+        OnPropertyChanged(nameof(Name));
+    }
 
     private bool _isLocked;
     /// <summary>Locked rows can't be selected (outliner or viewport); toggled via the padlock.</summary>

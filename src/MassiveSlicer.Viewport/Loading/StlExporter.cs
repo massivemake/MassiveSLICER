@@ -9,10 +9,21 @@ public static class StlExporter
     public static void Write(string path, MeshData mesh)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-
-        var triangles = EnumerateTriangles(mesh).ToList();
         using var fs = File.Create(path);
-        using var w  = new BinaryWriter(fs);
+        Write(fs, mesh);
+    }
+
+    public static byte[] ToBytes(MeshData mesh)
+    {
+        using var ms = new MemoryStream();
+        Write(ms, mesh);
+        return ms.ToArray();
+    }
+
+    public static void Write(Stream stream, MeshData mesh)
+    {
+        var triangles = EnumerateTriangles(mesh).ToList();
+        using var w = new BinaryWriter(stream, System.Text.Encoding.ASCII, leaveOpen: true);
 
         w.Write(new byte[80]);
         w.Write((uint)triangles.Count);

@@ -9,6 +9,7 @@ public sealed class PresetPlaneRow
 {
     public double HeightPct { get; set; }
     public double AngleDeg { get; set; }
+    public double AngleX { get; set; }
 }
 
 /// <summary>
@@ -43,6 +44,7 @@ public sealed class PrintPresetRecord
     public double? TiltAngle { get; set; }
     public double? TiltAngleX { get; set; }
     public bool? MultiPlanarAxisX { get; set; }
+    public bool? MultiPlanarSwitchByLayer { get; set; }
     public List<PresetPlaneRow>? MultiPlanarPlanes { get; set; }
 
     // -- Slicing mode & method ------------------------------------------------
