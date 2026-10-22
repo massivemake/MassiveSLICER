@@ -81,7 +81,9 @@ public static class BeadTravelRouter
 
         int Node(Vector2 p)
         {
-            long key = ((long)MathF.Round(p.X * 20f) << 32) ^ (uint)MathF.Round(p.Y * 20f);
+            int ix = (int)MathF.Round(p.X * 20f);
+            int iy = (int)MathF.Round(p.Y * 20f);
+            long key = ((long)ix << 32) | (uint)iy;
             if (weld.TryGetValue(key, out int id)) return id;
             id = nodes.Count;
             nodes.Add(p);

@@ -199,7 +199,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal bool IsMillableWorkpiece(SceneNode? node)
     {
         if (node is null) return false;
-        if (IsEffectorNode(node) || IsTcpAttractorNode(node) || IsModifierNode(node) || IsModifiersGroupNode(node))
+        if (IsEffectorNode(node) || IsTcpAttractorNode(node) || IsProjectionGuideNode(node)
+            || IsModifierNode(node) || IsModifiersGroupNode(node))
             return false;
 
         var item = FindUserMeshOutlinerItem(node);
@@ -3756,6 +3757,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// what KRL export writes ($VEL.CP and $ANOUT[4]): print speed × per-move
     /// scale, and geometry RPM % × speed/height scales capped at 100 %.
     /// </summary>
+    Toolpath? _speedLabelPath;
+    bool _speedLabelIsMill;
+
     public string ToolpathScrubSpeedRpmLabel
     {
         get
@@ -3763,6 +3767,21 @@ public sealed partial class ViewportViewModel : ViewModelBase
             if (AdditiveSettings is not { } add || ActiveScrubToolpath is not { } tp
                 || _scrubLayerEnds is null || _scrubLayerEnds.Length == 0)
                 return string.Empty;
+            if (!ReferenceEquals(_speedLabelPath, tp))
+            {
+                _speedLabelPath = tp;
+                _speedLabelIsMill = false;
+                foreach (var layer in tp.Layers)
+                {
+                    foreach (var move in layer.Moves)
+                    {
+                        if (move.Kind != MoveKind.Mill) continue;
+                        _speedLabelIsMill = true;
+                        break;
+                    }
+                    if (_speedLabelIsMill) break;
+                }
+            }
             int li = GetScrubLayerIndex();
             if (li >= tp.Layers.Count) return string.Empty;
             var moves = tp.Layers[li].Moves;
@@ -3779,7 +3798,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             }
             if (mv.Kind == MoveKind.Travel)
             {
-                bool millTravel = tp.Layers.Any(l => l.Moves.Any(m => m.Kind == MoveKind.Mill));
+                bool millTravel = _speedLabelIsMill;
                 double tSpeed = mv.TravelSpeedMps is { } o
                     ? o * 1000.0
                     : millTravel && SubtractiveSettings is { } millT
@@ -3957,6 +3976,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowPlaybackTimeline));
                 ExportKrlCommand?.RaiseCanExecuteChanged();
                 SendToRobotCommand?.RaiseCanExecuteChanged();
+                TogglePlaybackCommand?.RaiseCanExecuteChanged();
             }
         }
     }
@@ -4011,6 +4031,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         ActiveScrubToolpath = toolpath;
         RebuildScrubLayerEnds(toolpath);
         ExportKrlCommand?.RaiseCanExecuteChanged();
+        TogglePlaybackCommand?.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(ToolpathScrubSpeedRpmLabel));
         if (_isSlicePlaneViewerActive)
             RefreshSlicePlaneStats();
@@ -4048,6 +4069,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         RebuildScrubLayerEnds(toolpath);
         ExportKrlCommand?.RaiseCanExecuteChanged();
         UpdateSliceCommand?.RaiseCanExecuteChanged();
+        TogglePlaybackCommand?.RaiseCanExecuteChanged();
 
         int previous    = _toolpathScrubIndex;
         int previousMax = _toolpathScrubMax;
@@ -4580,7 +4602,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
     // ── View mode (Body / Toolpath / Both) ─────────────────────────────────
     private string _viewMode = "Body";
 
-    /// <summary>Viewport content mode: Body, Toolpath, Speed, RPM, Preview (mesh + paths).</summary>
+    /// <summary>Viewport content mode: Body, Toolpath, Speed, RPM, Thermal, Preview, SDF.</summary>
     public string ViewMode
     {
         get => _viewMode;
@@ -4603,6 +4625,68 @@ public sealed partial class ViewportViewModel : ViewModelBase
     public RelayCommand<string> SetViewModeCommand => _setViewModeCommand ??=
         new RelayCommand<string>(m => ViewMode = m ?? "Body");
     private RelayCommand<string>? _setViewModeCommand;
+
+    // SDF ambient occlusion. Strength, radius, and floor cannot go past the
+    // recovered IceSL deposition pass. The depth window is this viewport's choice.
+    private float _sdfAoStrength = 1000f;
+    private float _sdfAoRadius = 10f;
+    private float _sdfAoFloorPercent = 10f;
+    private float _sdfAoDepthMm = 1000f;
+
+    /// <summary>Occlusion factor. 1000 matches IceSL. 0 leaves grooves undarkened.</summary>
+    public float SdfAoStrength
+    {
+        get => _sdfAoStrength;
+        set
+        {
+            if (SetField(ref _sdfAoStrength, Math.Clamp(value, 0f, 1000f)))
+                NotifyRenderNeeded();
+        }
+    }
+
+    /// <summary>Samples on each side of the shaded pixel. 10 is IceSL's full window.</summary>
+    public float SdfAoRadius
+    {
+        get => _sdfAoRadius;
+        set
+        {
+            float v = MathF.Round(Math.Clamp(value, 0f, 10f));
+            if (SetField(ref _sdfAoRadius, v))
+                NotifyRenderNeeded();
+        }
+    }
+
+    /// <summary>Minimum groove brightness, in percent. 10 matches IceSL. 100 removes the darkening.</summary>
+    public float SdfAoFloorPercent
+    {
+        get => _sdfAoFloorPercent;
+        set
+        {
+            float v = MathF.Round(Math.Clamp(value, 10f, 100f));
+            if (SetField(ref _sdfAoFloorPercent, v))
+                NotifyRenderNeeded();
+        }
+    }
+
+    /// <summary>Depth band in mm around the focus. Wider makes the same groove lighter.</summary>
+    public float SdfAoDepthMm
+    {
+        get => _sdfAoDepthMm;
+        set
+        {
+            if (SetField(ref _sdfAoDepthMm, Math.Clamp(value, 200f, 8000f)))
+                NotifyRenderNeeded();
+        }
+    }
+
+    public RelayCommand ResetSdfAoCommand => _resetSdfAoCommand ??= new RelayCommand(() =>
+    {
+        SdfAoStrength = 1000f;
+        SdfAoRadius = 10f;
+        SdfAoFloorPercent = 10f;
+        SdfAoDepthMm = 1000f;
+    });
+    private RelayCommand? _resetSdfAoCommand;
 
     // ── Simulate timeline (Toolpath view): sweep the whole path in 6 s ─────
     private const double SimDurationSeconds = 6.0;
@@ -4966,7 +5050,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// </summary>
     internal const string EditProfileKey = "Edit";
 
-    private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Thermal", "Preview"];
+    private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Thermal", "Preview", "SDF"];
     private readonly Dictionary<string, ViewDisplayProfile> _viewProfiles = BuildDefaultProfiles();
     private bool _applyingViewProfile;
 
@@ -5012,6 +5096,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         switch (mode)
         {
             case "Preview":   // printed-part look: bead surface only
+            case "SDF":       // same surface slot, drawn as a rounded deposited bead
                 p.ShowBead = true;  p.ShowExtrusionMoves = false;
                 p.ShowTravelMoves = false; p.ShowZHopMoves = false; p.ShowWipeMoves = false; p.ShowSeam = false;
                 break;
@@ -5513,7 +5598,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 ToolpathScrubIndex = 0;
             IsPlaying = starting;
             OnPlaybackToggled?.Invoke(IsPlaying);
-        }, canExecute: () => _isToolpathSelected);
+        }, canExecute: () => _isToolpathSelected || (_isScrubSessionActive && ActiveScrubToolpath is not null));
         GizmoMoveCommand   = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Translate ? GizmoMode.None : GizmoMode.Translate);
         GizmoRotateCommand = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Rotate    ? GizmoMode.None : GizmoMode.Rotate);
         GizmoScaleCommand  = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Scale     ? GizmoMode.None : GizmoMode.Scale);
@@ -7684,6 +7769,15 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// Direct or nested toolpath child of <paramref name="parent"/> matching
     /// <paramref name="kind"/> (print and mill sit as siblings).
     /// </summary>
+    /// <summary>True when any user model already has a mill toolpath child.</summary>
+    internal bool HasMillToolpath()
+    {
+        foreach (var item in EnumerateUserModelItems())
+            if (FindToolpathChild(item, OutlinerToolpathKind.Mill) is not null)
+                return true;
+        return false;
+    }
+
     internal static OutlinerItemViewModel? FindToolpathChild(
         OutlinerItemViewModel parent, OutlinerToolpathKind kind)
     {

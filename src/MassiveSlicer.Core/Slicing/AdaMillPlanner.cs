@@ -5,7 +5,7 @@ namespace MassiveSlicer.Core.Slicing;
 
 /// <summary>
 /// AdaOne subtractive planner. Routes each <see cref="MillOperationKind"/> to a real path:
-/// planar facing/clearing (raster), multi-axis finishing (surface follow), cutout (closed
+/// planar facing/clearing (raster), multi-axis finishing (geodesic surface offsets), cutout (closed
 /// polyline + axial stepdown), contouring (waterline), drilling (plunge/peck), swarf (side
 /// contact), morph (blend top/bottom loops).
 /// </summary>
@@ -20,7 +20,7 @@ public static class AdaMillPlanner
         return s.Operation switch
         {
             MillOperationKind.PlanarFacing       => Planar(req, lockAxis: true),
-            MillOperationKind.PlanarClearing     => Planar(req, lockAxis: true),
+            MillOperationKind.PlanarClearing     => Projection(req),
             MillOperationKind.MultiAxisFinishing => Finishing(req),
             MillOperationKind.Cutout             => Cutout(req),
             MillOperationKind.Contouring         => Contouring(req),
@@ -48,6 +48,35 @@ public static class AdaMillPlanner
     {
         public float Height => MaxZ - MinZ;
         public Vector3 Center => new((MinX + MaxX) * 0.5f, (MinY + MaxY) * 0.5f, (MinZ + MaxZ) * 0.5f);
+    }
+
+    static Toolpath Projection(AdaMillRequest req)
+    {
+        var s = req.Settings;
+        var bounds = BoundsOf(req.Positions);
+        var center = s.HasProjectionCenter
+            ? s.ProjectionCenter
+            : new Vector3(bounds.Center.X, bounds.Center.Y, bounds.MinZ);
+        var guide = new ProjectionSetup
+        {
+            Shape = s.ProjectionShape,
+            Center = center,
+            BaseDiameterMm = s.ProjectionBaseDiameterMm,
+            TopDiameterMm = s.ProjectionTopDiameterMm,
+            HeightMm = s.ProjectionHeightMm,
+            Inward = s.ProjectionInward,
+            NormalInfluence = s.ProjectionNormalInfluence,
+            SliceDirection = s.ProjectionSliceDirection,
+            UseE1 = s.ProjectionUseE1 && s.ProjectionShape == ProjectionShape.Cylinder,
+            RotaryCenter = s.HasProjectionRotary ? s.ProjectionRotaryCenter : center,
+            RotarySign = MathF.Abs(s.ProjectionRotarySign) < 0.1f ? -1f : s.ProjectionRotarySign,
+            AxisX = s.ProjectionAxisX.LengthSquared() > 1e-8f ? s.ProjectionAxisX : Vector3.UnitX,
+            AxisZ = s.ProjectionAxisZ.LengthSquared() > 1e-8f ? s.ProjectionAxisZ : Vector3.UnitZ,
+        };
+        var tp = ProjectionMill.Generate(
+            req.Positions, req.Normals, req.Indices, guide, s.ToMillSettings(), req.ReportProgress);
+        ApplyEngagement(tp, s);
+        return tp;
     }
 
     static Toolpath Planar(AdaMillRequest req, bool lockAxis)
@@ -78,8 +107,7 @@ public static class AdaMillPlanner
     {
         var s = req.Settings;
         var mill = s.ToMillSettings();
-        var tp = SurfaceFollowMillGenerator.GenerateMultiAxis(
-            req.Positions, req.Normals, req.Indices, mill);
+        var tp = GeodesicFinishMill.Generate(req.Positions, req.Normals, req.Indices, mill);
         if (s.StabilizeHeadRotation)
             SmoothMillNormals(tp);
         ApplyEngagement(tp, s);

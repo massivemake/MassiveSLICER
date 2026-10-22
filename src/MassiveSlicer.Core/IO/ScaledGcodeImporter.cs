@@ -3,7 +3,6 @@ using System.IO.Compression;
 using System.Numerics;
 using System.Text;
 using MassiveSlicer.Core.Models;
-using MassiveSlicer.Core.Slicing;
 
 namespace MassiveSlicer.Core.IO;
 
@@ -13,9 +12,8 @@ namespace MassiveSlicer.Core.IO;
 /// it at full size for MassiveDRIVE. Machine prime lines, nozzle wipes, and
 /// spiral Z-lifts are not part of the part. A desktop Z hop is dropped.
 /// What remains is the travel, so MassiveSLICER can put its own wipe and
-/// Z hop on that move. Ends within 3× bead width are stitched, and an infill
-/// end that meets a wall is bridged onto that line, so each layer is one
-/// continuous path where the beads allow it.
+/// Z hop on that move. A G0 stays a travel. A G1 whose extruder value rises
+/// stays a print move. Import does not stitch or bridge.
 /// </summary>
 public static class ScaledGcodeImporter
 {
@@ -139,7 +137,6 @@ public static class ScaledGcodeImporter
 
         var size = new Vector3((maxX - minX) * factor, (maxY - minY) * factor, (maxZ - minZ) * factor);
         tp.BeadWidthMm = Math.Max(0.1f, raw.BeadWidthMm * factor);
-        BeadTravelRouter.Reroute(tp, tp.BeadWidthMm);
         return new Result(
             tp,
             moves,

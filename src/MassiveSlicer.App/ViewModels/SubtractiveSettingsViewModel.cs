@@ -273,7 +273,7 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     public bool IsContouring         => SelectedOperation == MillOperationKind.Contouring;
     public bool IsSwarf              => SelectedOperation == MillOperationKind.Swarf;
     public bool IsMorph              => SelectedOperation == MillOperationKind.Morph;
-    public bool ShowsPlanarToolAxis  => IsPlanarFacing || IsPlanarClearing || IsContouring;
+    public bool ShowsPlanarToolAxis  => IsPlanarFacing || IsContouring;
     public bool ShowsCutoutCard      => IsCutout;
     public bool ShowsClearingCard    => IsPlanarClearing;
     public bool ShowsDrillingCard    => IsDrilling;
@@ -557,9 +557,6 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     public static IReadOnlyList<AdaMillingDirection> MillingDirectionOptions { get; } =
         [AdaMillingDirection.TowardSurface, AdaMillingDirection.FromSurface];
 
-    public static IReadOnlyList<AdaToolCompensation> ToolCompensationOptions { get; } =
-        [AdaToolCompensation.Off, AdaToolCompensation.Left, AdaToolCompensation.Right];
-
     public static IReadOnlyList<AdaCutoutOrientationMode> CutoutOrientationOptions { get; } =
         [AdaCutoutOrientationMode.Auto, AdaCutoutOrientationMode.SelectedEdges, AdaCutoutOrientationMode.Sketch];
 
@@ -794,8 +791,90 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         MorphSteps                  = MorphSteps,
         LeadInMm                    = (float)LeadInMm,
         LeadOutMm                   = (float)LeadOutMm,
-        ToolCompensation            = ToolCompensation,
+        ProjectionShape             = ProjectionShape,
+        ProjectionBaseDiameterMm    = (float)ProjectionBaseDiameterMm,
+        ProjectionTopDiameterMm     = (float)ProjectionTopDiameterMm,
+        ProjectionHeightMm          = (float)ProjectionHeightMm,
+        ProjectionInward            = ProjectionInward,
+        ProjectionUseE1             = ProjectionUseE1,
+        ProjectionSliceDirection    = ProjectionSliceDirection,
+        ProjectionNormalInfluence   = (float)ProjectionNormalInfluence,
+        // Cutter-radius compensation left the mill panel. Attractors aim the tool instead.
+        ToolCompensation            = AdaToolCompensation.Off,
     };
+
+    Core.Models.ProjectionShape _projectionShape = Core.Models.ProjectionShape.Cylinder;
+    double _projectionBaseDiameterMm = 400;
+    double _projectionTopDiameterMm = 400;
+    double _projectionHeightMm = 300;
+    bool _projectionInward;
+    bool _projectionUseE1;
+    double _projectionNormalInfluence = 0.35;
+
+    public Core.Models.ProjectionShape ProjectionShape
+    {
+        get => _projectionShape;
+        set
+        {
+            if (!SetField(ref _projectionShape, value)) return;
+            OnPropertyChanged(nameof(IsProjectionCylinder));
+            OnPropertyChanged(nameof(IsProjectionSphere));
+            OnPropertyChanged(nameof(IsProjectionCube));
+        }
+    }
+
+    public bool IsProjectionCylinder => _projectionShape == Core.Models.ProjectionShape.Cylinder;
+
+    public static IReadOnlyList<Core.Models.ProjectionSliceDirection> ProjectionSliceOptions { get; } =
+        [Core.Models.ProjectionSliceDirection.Horizontal, Core.Models.ProjectionSliceDirection.Vertical];
+
+    Core.Models.ProjectionSliceDirection _projectionSliceDirection = Core.Models.ProjectionSliceDirection.Horizontal;
+
+    public Core.Models.ProjectionSliceDirection ProjectionSliceDirection
+    {
+        get => _projectionSliceDirection;
+        set => SetField(ref _projectionSliceDirection, value);
+    }
+    public bool IsProjectionSphere   => _projectionShape == Core.Models.ProjectionShape.Sphere;
+    public bool IsProjectionCube     => _projectionShape == Core.Models.ProjectionShape.Cube;
+
+    public double ProjectionBaseDiameterMm
+    {
+        get => _projectionBaseDiameterMm;
+        set => SetField(ref _projectionBaseDiameterMm, Math.Clamp(value, 10, 8000));
+    }
+
+    public double ProjectionTopDiameterMm
+    {
+        get => _projectionTopDiameterMm;
+        set => SetField(ref _projectionTopDiameterMm, Math.Clamp(value, 10, 8000));
+    }
+
+    public double ProjectionHeightMm
+    {
+        get => _projectionHeightMm;
+        set => SetField(ref _projectionHeightMm, Math.Clamp(value, 10, 8000));
+    }
+
+    public bool ProjectionInward
+    {
+        get => _projectionInward;
+        set => SetField(ref _projectionInward, value);
+    }
+
+    /// <summary>Cylinder only. Spin E1 (the rotary) and keep the arm on one side.</summary>
+    public bool ProjectionUseE1
+    {
+        get => _projectionUseE1;
+        set => SetField(ref _projectionUseE1, value);
+    }
+
+    /// <summary>0 = helper surface angle. 1 = the part's surface normal.</summary>
+    public double ProjectionNormalInfluence
+    {
+        get => _projectionNormalInfluence;
+        set => SetField(ref _projectionNormalInfluence, Math.Clamp(value, 0, 1));
+    }
 
     // -- Relief heightmap (kept for old .mass files; not the mill product) ------
 
@@ -938,6 +1017,12 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
             MorphSteps = MorphSteps,
             LeadInMm = LeadInMm,
             LeadOutMm = LeadOutMm,
+            ProjectionShape = ProjectionShape.ToString(),
+            ProjectionBaseDiameterMm = ProjectionBaseDiameterMm,
+            ProjectionTopDiameterMm = ProjectionTopDiameterMm,
+            ProjectionHeightMm = ProjectionHeightMm,
+            ProjectionInward = ProjectionInward,
+            ProjectionNormalInfluence = ProjectionNormalInfluence,
             ToolCompensation = ToolCompensation.ToString(),
             TopHeightMm = TopHeightMm,
             BottomHeightMm = BottomHeightMm,
@@ -1046,10 +1131,76 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         SurfaceFinishingCutDepthMm = s.SurfaceFinishingCutDepthMm;
         if (s.MorphSteps >= 2) MorphSteps = s.MorphSteps;
         LeadInMm = s.LeadInMm;
+        if (s.ProjectionBaseDiameterMm > 0) ProjectionBaseDiameterMm = s.ProjectionBaseDiameterMm;
+        if (s.ProjectionTopDiameterMm > 0) ProjectionTopDiameterMm = s.ProjectionTopDiameterMm;
+        if (s.ProjectionHeightMm > 0) ProjectionHeightMm = s.ProjectionHeightMm;
+        ProjectionInward = s.ProjectionInward;
+        ProjectionNormalInfluence = s.ProjectionNormalInfluence;
+        if (Enum.TryParse<Core.Models.ProjectionShape>(s.ProjectionShape, ignoreCase: true, out var projShape))
+            ProjectionShape = projShape;
         LeadOutMm = s.LeadOutMm;
         if (Enum.TryParse<AdaToolCompensation>(s.ToolCompensation, ignoreCase: true, out var comp))
             ToolCompensation = comp;
         TopHeightMm = s.TopHeightMm;
         BottomHeightMm = s.BottomHeightMm;
     }
+
+    /// <summary>
+    /// True when a milling-tab edit should rebuild an existing mill toolpath.
+    /// Expanders, status lines, and the toolhead Y/X/Z sliders are left out:
+    /// those sliders retarget IK and do not change the cut path.
+    /// </summary>
+    public static bool AffectsMillToolpath(string? propertyName)
+    {
+        if (string.IsNullOrEmpty(propertyName)) return false;
+        return !RealtimeMillIgnore.Contains(propertyName);
+    }
+
+    static readonly HashSet<string> RealtimeMillIgnore =
+    [
+        nameof(StepBitsExpanded),
+        nameof(StepToolpathingExpanded),
+        nameof(StepMoreExpanded),
+        nameof(StepOperationExpanded),
+        nameof(BitName),
+        nameof(SelectedOperationDisplayName),
+        nameof(SelectedOperationDescription),
+        nameof(SelectedOperationIcon),
+        nameof(IsMultiAxisFinishing),
+        nameof(IsDrilling),
+        nameof(IsPlanarFacing),
+        nameof(IsPlanarClearing),
+        nameof(IsCutout),
+        nameof(IsContouring),
+        nameof(IsSwarf),
+        nameof(IsMorph),
+        nameof(ShowsPlanarToolAxis),
+        nameof(ShowsCutoutCard),
+        nameof(ShowsClearingCard),
+        nameof(ShowsDrillingCard),
+        nameof(ShowsSwarfCard),
+        nameof(ShowsFinishingCard),
+        nameof(ShowsMorphCard),
+        nameof(ShowsContouringCard),
+        nameof(ShowsPassRaster),
+        nameof(IsAreaWholeModel),
+        nameof(IsAreaFace),
+        nameof(IsAreaBox),
+        nameof(IsAreaLasso),
+        nameof(IsAreaBrush),
+        nameof(AreaSelectTool),
+        nameof(AreaSelectStatus),
+        nameof(PlanarAxisStatus),
+        nameof(IsPlanarAxisCustom),
+        nameof(IsProjectionCylinder),
+        nameof(IsProjectionSphere),
+        nameof(IsProjectionCube),
+        nameof(ToolheadA),
+        nameof(ToolheadB),
+        nameof(ToolheadC),
+        nameof(PreviewCylinderLengthMm),
+        nameof(MillAnalysisText),
+        nameof(HeaderTemplate),
+        nameof(FooterTemplate),
+    ];
 }

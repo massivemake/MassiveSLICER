@@ -18,33 +18,36 @@ public enum MillAreaSelectTool
 }
 
 /// <summary>
-/// AdaOne / Eidos subtractive strategy selected in MILL → 2 OPERATION.
+/// MassiveSLICER / Eidos subtractive strategy selected in MILL → 2 OPERATION.
 /// Fresh baseline — not the old PlanarCut / relief mill catalog.
 /// </summary>
 public enum MillOperationKind
 {
-    /// <summary>AdaOne SURFACE_FINISHING: tool axis tracks the surface normal.</summary>
+    /// <summary>MassiveSLICER SURFACE_FINISHING: tool axis tracks the surface normal.</summary>
     MultiAxisFinishing,
 
-    /// <summary>AdaOne drilling: plunge or peck through selected holes.</summary>
+    /// <summary>MassiveSLICER drilling: plunge or peck through selected holes.</summary>
     Drilling,
 
-    /// <summary>AdaOne planar facing: raster a plane.</summary>
+    /// <summary>MassiveSLICER planar facing: raster a plane.</summary>
     PlanarFacing,
 
-    /// <summary>AdaOne HORIZONTAL_CLEARING: 2.5D area clear / pocket roughing.</summary>
+    /// <summary>Projection finish from a helper shape. Kept the old name so saved mills still open.</summary>
     PlanarClearing,
 
-    /// <summary>AdaOne cutout: closed outline, then step deeper each pass.</summary>
+    /// <summary>Same operation as <see cref="PlanarClearing"/>. The mill menu calls it Projection.</summary>
+    Projection = PlanarClearing,
+
+    /// <summary>MassiveSLICER cutout: closed outline, then step deeper each pass.</summary>
     Cutout,
 
-    /// <summary>AdaOne contouring: waterline loops at each Z.</summary>
+    /// <summary>MassiveSLICER contouring: waterline loops at each Z.</summary>
     Contouring,
 
-    /// <summary>AdaOne swarf: side-of-tool contact on a guide surface.</summary>
+    /// <summary>MassiveSLICER swarf: side-of-tool contact on a guide surface.</summary>
     Swarf,
 
-    /// <summary>AdaOne morph: blend a top rail into a bottom rail.</summary>
+    /// <summary>MassiveSLICER morph: blend a top rail into a bottom rail.</summary>
     Morph,
 }
 
@@ -63,56 +66,56 @@ public sealed class MillOperationInfo
             Kind = MillOperationKind.MultiAxisFinishing,
             DisplayName = "Multi-axis finishing",
             Icon = "mdi-axis-arrow",
-            Description = "AdaOne multi-axis finishing (SURFACE_FINISHING): tool axis tracks the surface normal. Stabilize head rotation smooths ABC between moves.",
+            Description = "Geodesic offsets along the surface. The tool axis follows the surface normal.",
         },
         new()
         {
             Kind = MillOperationKind.Drilling,
             DisplayName = "Drilling",
             Icon = "mdi-screw-flat-top",
-            Description = "AdaOne drilling: plunge or peck cycle through selected holes, with clearance / feed / retract and breakthrough.",
+            Description = "MassiveSLICER drilling: plunge or peck cycle through selected holes, with clearance / feed / retract and breakthrough.",
         },
         new()
         {
             Kind = MillOperationKind.PlanarFacing,
             DisplayName = "Planar facing",
             Icon = "mdi-arrow-collapse-down",
-            Description = "AdaOne planar facing: raster a plane. Set the plane (TOOL AXIS) and surface; optional axial pass stack.",
+            Description = "MassiveSLICER planar facing: raster a plane. Set the plane (TOOL AXIS) and surface; optional axial pass stack.",
         },
         new()
         {
             Kind = MillOperationKind.PlanarClearing,
-            DisplayName = "Planar clearing",
-            Icon = "mdi-arrow-expand-all",
-            Description = "AdaOne planar clearing (HORIZONTAL_CLEARING): 2.5D area clear with waterfall / all-around / flick-ends / infill.",
+            DisplayName = "Projection",
+            Icon = "mdi-cylinder",
+            Description = "Project a finish from a helper cylinder, sphere, or cube onto the part. Blend the shape angle with the surface normal.",
         },
         new()
         {
             Kind = MillOperationKind.Cutout,
             DisplayName = "Cutout",
             Icon = "mdi-content-cut",
-            Description = "AdaOne cutout: one closed outline, then step deeper each pass (cut depth / layer height). Toward-surface or from-surface.",
+            Description = "MassiveSLICER cutout: one closed outline, then step deeper each pass (cut depth / layer height). Toward-surface or from-surface.",
         },
         new()
         {
             Kind = MillOperationKind.Contouring,
             DisplayName = "Contouring",
             Icon = "mdi-vector-polyline",
-            Description = "AdaOne contouring: waterline loops at each Z. Waterfall links levels; max-depth optional.",
+            Description = "MassiveSLICER contouring: waterline loops at each Z. Waterfall links levels; max-depth optional.",
         },
         new()
         {
             Kind = MillOperationKind.Swarf,
             DisplayName = "Swarf",
             Icon = "mdi-rotate-3d-variant",
-            Description = "AdaOne swarf: side-of-tool contact on a guide surface, with lead and lean.",
+            Description = "MassiveSLICER swarf: side-of-tool contact on a guide surface, with lead and lean.",
         },
         new()
         {
             Kind = MillOperationKind.Morph,
             DisplayName = "Morph",
             Icon = "mdi-set-merge",
-            Description = "AdaOne morph: blend a top rail into a bottom rail over N steps.",
+            Description = "MassiveSLICER morph: blend a top rail into a bottom rail over N steps.",
         },
     ];
 

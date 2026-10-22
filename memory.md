@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-10-21** (Signed Distance shells)
+Last updated: **2026-10-21** (SDF ambient occlusion menu)
 
 ---
 
@@ -521,6 +521,40 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-10-21 — SDF ambient occlusion menu
+
+- A caret sits beside the SDF pill. It opens Advanced viewing: Strength (0–1000), Radius (0–10), Floor (10–100%), and Depth window (200–8000 mm). Reset restores the IceSL strength, radius, and floor, and the 1000 mm depth window.
+- The four values are stored on app preferences and written to `prefs.json` with the other viewport settings. They also travel in a saved workspace. Quit and `bash run.sh`. The robot was not started.
+
+### 2026-10-21 — SDF bead uses the Preview lime
+
+- The rounded bead was stuck on the colour baked at upload, usually the near-white material default. Preview recolours from the live bead colour `(0.655, 0.906, 0.05)`. SDF now uses that same uniform. Grooves still darken from the deposition pass.
+- File: `ToolpathRenderer.cs`. Quit and `bash run.sh`. The robot was not started.
+
+### 2026-10-21 — SDF bead ambient occlusion
+
+- SDF view runs IceSL's deposition second pass on the rounded bead. The bead is drawn into its own color and packed-Z targets, a 21×21 screen-space pass shades it (`N = 10`, `occ_fact = 1000`, floor `0.1 + 0.9 * ao`, result `ao * nrm.z * color`), then those pixels are copied back onto the scene. The robot and the bed are not in that average.
+- IceSL's near and far were not recovered. This camera's far plane is 100 m, which would hide a millimetre groove at that factor, so Z is normalized over a 1 m band around the focus (500 mm each side). That band is a viewport choice, not an IceSL constant.
+- The SDF bead no longer uses the Lambert term while this pass is on. If the pass cannot be created, the bead stays Lambert.
+- Files: `SceneRenderer.cs`, `ToolpathRenderer.cs`. Windows Debug build of the Viewport project succeeded. Not checked in the Mac window. Quit and `bash run.sh`. The robot was not started.
+
+### 2026-10-21 — Projection E1 draw and backfaces
+
+- Cylinder projection with E1 still sends the arm to the station. The drawn path is wound back onto the part and follows the rotary pivot's real motion (not a separate world-Z spin). A wrong multiply order had thrown that line off the stanchion once the timeline sat on a turned E1. Regenerate the projection after restart.
+- A ray that meets a face from behind does not cut. Faces whose normal points at the ray still do, including the far outer skin once E1 turns it to the station.
+- Tests: `ProjectionMillTest` (5). Not committed. Quit and `bash run.sh`. The robot was not started.
+
+### 2026-10-21 — Mill tab realtime
+
+- With a mill toolpath in the scene and Realtime unpaused, milling-tab edits rebuild that path. The old trigger only listed stepover, stepdown, operation, and a few passes, so projection, tool axis, feeds, and the rest of the LFAM 3 mill tab did nothing. Toolhead Y/X/Z still retargets IK and does not rebuild the cut path.
+- Tests: `MillRealtimeTest` (3). Not committed. Quit and `bash run.sh`. The robot was not started.
+
+### 2026-10-21 — Toolhead orientation keyframes
+
+- Create Keyframe on the preview timeline stores toolhead global orientation (Y / X / Z). Moving those sliders while the key is selected saves the new angles on that key. Playback eases from one key into the next. Outside that span it eases back to the orientation the sliders had when the first key was created.
+- Y is KUKA B, X is KUKA C, Z is KUKA A. Clear restores that unkeyed orientation. KRL and Drive read the eased angle per move. Mill play also honors the sliders when no key exists.
+- Console: `tcpkey add`, `tcpkey clear`, then `mill y 94` (or x / z). Tests: `ToolheadOrientEaseTest` (7). Not committed. The open app shows it after quit and `bash run.sh`. The robot was not started.
 
 ### 2026-10-21 — IceSL gcode travels
 

@@ -4,10 +4,12 @@ using MassiveSlicer.Core.Models;
 namespace MassiveSlicer.Core.Slicing.Effects;
 
 /// <summary>
-/// Blends each print move's approach normal toward the nearest TCP attractor.
+/// Blends each move's approach normal toward the nearest TCP attractor.
 /// Weight is a smoothstep of distance to the cylinder origin: 1 on the cylinder,
-/// 0 at the sphere radius. The strongest attractor wins. Mill moves and layer
-/// stitches are left alone, and a move outside every sphere keeps the normal it had.
+/// 0 at the sphere radius. The strongest attractor wins. <see cref="Apply"/> leaves
+/// mill moves and layer stitches alone. <see cref="ApplyMill"/> tilts a mill path
+/// the same way, so the cutter matches the amber cylinder. A move outside every
+/// sphere keeps the normal it had.
 /// </summary>
 public static class TcpAttractorEffect
 {
@@ -73,6 +75,18 @@ public static class TcpAttractorEffect
     }
 
     public static Toolpath Apply(Toolpath source, IReadOnlyList<TcpAttractor> attractors)
+        => Blend(source, attractors, includeMill: false);
+
+    /// <summary>
+    /// TCP Adjust for a mill toolpath. The spindle cutter (T12 +Z) is the opposite
+    /// of the stored surface normal. On the cylinder that cutter matches the amber
+    /// axis; farther out it keeps the surface aim. Print <see cref="Apply"/> still
+    /// leaves mill moves alone.
+    /// </summary>
+    public static Toolpath ApplyMill(Toolpath source, IReadOnlyList<TcpAttractor> attractors)
+        => Blend(source, attractors, includeMill: true);
+
+    static Toolpath Blend(Toolpath source, IReadOnlyList<TcpAttractor> attractors, bool includeMill)
     {
         if (attractors is null || attractors.Count == 0) return source;
 
@@ -98,7 +112,7 @@ public static class TcpAttractorEffect
             nl.Contours.AddRange(layer.Contours);
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Mill || move.IsLayerStitch)
+                if (move.IsLayerStitch || (!includeMill && move.Kind == MoveKind.Mill))
                 {
                     nl.Moves.Add(move);
                     continue;
@@ -122,7 +136,19 @@ public static class TcpAttractorEffect
                 }
 
                 var baseNormal = move.Normal.LengthSquared() > 1e-8f ? move.Normal : layer.PlaneNormal;
-                nl.Moves.Add(move with { Normal = BlendNormal(baseNormal, bestAxis, bestW) });
+                Vector3 aimed;
+                if (includeMill)
+                {
+                    // Cutter points opposite the stored normal. Pull that cutter
+                    // toward the cylinder, then store the outward normal again.
+                    var cutter = baseNormal.LengthSquared() > 1e-8f
+                        ? -Vector3.Normalize(baseNormal)
+                        : -Vector3.UnitZ;
+                    aimed = -BlendNormal(cutter, bestAxis, bestW);
+                }
+                else
+                    aimed = BlendNormal(baseNormal, bestAxis, bestW);
+                nl.Moves.Add(move with { Normal = aimed });
             }
             dst.Layers.Add(nl);
         }

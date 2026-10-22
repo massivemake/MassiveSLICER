@@ -95,6 +95,22 @@ public sealed class AdaMachiningSettings
 
     public float LeadInMm { get; set; }
     public float LeadOutMm { get; set; }
+
+    public ProjectionShape ProjectionShape { get; set; } = ProjectionShape.Cylinder;
+    public float ProjectionBaseDiameterMm { get; set; } = 400f;
+    public float ProjectionTopDiameterMm { get; set; } = 400f;
+    public float ProjectionHeightMm { get; set; } = 300f;
+    public bool ProjectionInward { get; set; }
+    public bool ProjectionUseE1 { get; set; }
+    public ProjectionSliceDirection ProjectionSliceDirection { get; set; } = ProjectionSliceDirection.Horizontal;
+    public float ProjectionNormalInfluence { get; set; } = 0.35f;
+    public bool HasProjectionRotary { get; set; }
+    public Vector3 ProjectionRotaryCenter { get; set; }
+    public float ProjectionRotarySign { get; set; } = -1f;
+    public bool HasProjectionCenter { get; set; }
+    public Vector3 ProjectionCenter { get; set; }
+    public Vector3 ProjectionAxisX { get; set; } = Vector3.UnitX;
+    public Vector3 ProjectionAxisZ { get; set; } = Vector3.UnitZ;
     public AdaToolCompensation ToolCompensation { get; set; } = AdaToolCompensation.Off;
 
     public MillSettings ToMillSettings() => new()
@@ -122,4 +138,6 @@ public sealed class AdaMillRequest
     public required IReadOnlyList<int> Indices { get; init; }
     public Vector3? ApproachAxis { get; init; }
     public IReadOnlyList<Vector3>? DrillHoles { get; init; }
+    /// <summary>0–100 while a long mill, such as projection, is running.</summary>
+    public Action<float>? ReportProgress { get; init; }
 }

@@ -26,6 +26,44 @@ public sealed class ContinuousLayerStitchTest
         tp.Layers[0].Moves.Where(m => m.Kind == MoveKind.Extrude).ToList();
 
     [Fact]
+    public void LoopPlusASpur_StaysOnTheBeads()
+    {
+        var tp = LayerOf(
+            (new(0, 0, 1), new(20, 0, 1)),
+            (new(20, 0, 1), new(20, 20, 1)),
+            (new(20, 20, 1), new(0, 20, 1)),
+            (new(0, 20, 1), new(0, 0, 1)),
+            (new(20, 10, 1), new(30, 10, 1)));
+
+        ContinuousLayerStitch.Apply(tp, beadWidth: 4f);
+
+        foreach (var move in Extrude(tp))
+        {
+            float len = Vector3.Distance(move.From, move.To);
+            Assert.True(len < 22f, $"chord {move.From} -> {move.To} is {len:0.0} mm");
+        }
+    }
+
+    [Fact]
+    public void PointsBelowZero_DoNotDrawAChord()
+    {
+        var tp = LayerOf(
+            (new(0, -40, 1), new(10, -40, 1)),
+            (new(10, -40, 1), new(10, -30, 1)),
+            (new(10, -30, 1), new(0, -30, 1)),
+            (new(0, -30, 1), new(0, -40, 1)),
+            (new(100, -40, 1), new(110, -40, 1)));
+
+        ContinuousLayerStitch.Apply(tp, beadWidth: 4f);
+
+        foreach (var move in Extrude(tp))
+        {
+            float len = Vector3.Distance(move.From, move.To);
+            Assert.True(len < 20f, $"chord {move.From} -> {move.To} is {len:0.0} mm");
+        }
+    }
+
+    [Fact]
     public void GapBetweenEnds_BecomesOneBridge()
     {
         var tp = LayerOf(

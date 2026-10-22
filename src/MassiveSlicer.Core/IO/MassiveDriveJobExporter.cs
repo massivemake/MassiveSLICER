@@ -144,8 +144,8 @@ public static class MassiveDriveJobExporter
                 bool layerChange = move.IsLayerChange || (prevLayer >= 0 && layer.Index != prevLayer && kind == "print");
                 prevLayer = layer.Index;
 
-                var from = Pose(move.From, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
-                var to = Pose(move.To, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
+                var from = Pose(move.From, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s, move);
+                var to = Pose(move.To, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s, move);
 
                 string? comment = null;
                 if (move.IsPreTravelStart && move.IsPostTravelEnd)
@@ -327,17 +327,19 @@ public static class MassiveDriveJobExporter
         Vector3 layerNormal,
         Vector3 moveNormal,
         float tcpYawDeg,
-        MassiveDriveExportSettings s)
+        MassiveDriveExportSettings s,
+        ToolpathMove? move = null)
     {
         var n = moveNormal.LengthSquared() > 1e-12f ? moveNormal : layerNormal;
         if (n.LengthSquared() < 1e-12f)
             n = Vector3.UnitZ;
 
+        float oa = move?.KeyframeToolheadA ?? s.ToolheadOffsetA;
+        float ob = move?.KeyframeToolheadB ?? s.ToolheadOffsetB;
+        float oc = move?.KeyframeToolheadC ?? s.ToolheadOffsetC;
         var (a, b, c) = s.MillOrientation
-            ? KukaOrientation.AbcFromMillNormal(
-                n, tcpYawDeg, s.ToolheadOffsetA, s.ToolheadOffsetB, s.ToolheadOffsetC)
-            : KukaOrientation.AbcFromNormal(
-                n, s.ToolheadOffsetA, s.ToolheadOffsetB, s.ToolheadOffsetC, tcpYawDeg);
+            ? KukaOrientation.AbcFromMillNormal(n, tcpYawDeg, oa, ob, oc)
+            : KukaOrientation.AbcFromNormal(n, oa, ob, oc, tcpYawDeg);
 
         var basePt = ToBase(p, s);
         return new MassiveDrivePose(

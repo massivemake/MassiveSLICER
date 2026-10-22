@@ -64,6 +64,9 @@ public static class ToolpathClone
                 RpmPercentOverride = move.RpmPercentOverride,
                 TcpYawDeg         = move.TcpYawDeg,
                 E1Mm              = move.E1Mm,
+                KeyframeToolheadA = move.KeyframeToolheadA,
+                KeyframeToolheadB = move.KeyframeToolheadB,
+                KeyframeToolheadC = move.KeyframeToolheadC,
             });
         }
         return layerCopy;

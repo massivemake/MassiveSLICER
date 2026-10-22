@@ -160,6 +160,21 @@ public sealed class AppPreferences
     public float CavityWorldValley  { get; set; } = 1f;
     public float CavityWorldDistance { get; set; } = 5f;
 
+    // SDF bead ambient occlusion. Strength, radius, and floor top out at the
+    // recovered IceSL deposition pass. The depth window is a viewport choice:
+    // IceSL's own near and far were not recovered.
+    /// <summary>Occlusion factor. 1000 matches IceSL. 0 leaves grooves undarkened.</summary>
+    public float SdfAoStrength { get; set; } = 1000f;
+    /// <summary>Samples on each side of the pixel. 10 matches IceSL's 21×21 window.</summary>
+    public int SdfAoRadius { get; set; } = 10;
+    /// <summary>Minimum groove brightness, as a fraction. IceSL keeps 0.1.</summary>
+    public float SdfAoFloor { get; set; } = 0.1f;
+    /// <summary>Depth band in mm around the focus. Wider makes the same groove lighter.</summary>
+    public float SdfAoDepthMm { get; set; } = 1000f;
+    /// <summary>True once these four values have been saved. Older files leave it false
+    /// so opening them does not reset a setup the user already stored.</summary>
+    public bool SdfAoCustomized { get; set; }
+
     // ── Toolpath colors (AARRGGBB hex) ────────────────────────────────────
 
     public string ToolpathExtrudeColor    { get; set; } = "#FFFFFFFF";

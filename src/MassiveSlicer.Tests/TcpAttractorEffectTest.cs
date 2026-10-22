@@ -70,6 +70,38 @@ public class TcpAttractorEffectTest
     }
 
     [Fact]
+    public void Mill_move_on_the_cylinder_matches_the_cylinder_axis()
+    {
+        var axis = TcpAttractorEffect.AxisFromLean(25f, -15f);
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(-5, 0, 10), new Vector3(5, 0, 10), MoveKind.Mill)
+            { Normal = Vector3.UnitZ });
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+
+        var result = TcpAttractorEffect.ApplyMill(tp, [At(new Vector3(0, 0, 10), 200f, axis)]);
+        var cutter = -Vector3.Normalize(result.Layers[0].Moves[0].Normal);
+        Assert.True(Vector3.Dot(cutter, axis) > 0.999f);
+    }
+
+    [Fact]
+    public void Mill_cutter_leans_toward_the_cylinder_as_it_gets_closer()
+    {
+        var far = MillPath(new Vector3(500, 0, 10), Vector3.UnitZ);
+        var farCut = -Vector3.Normalize(
+            TcpAttractorEffect.ApplyMill(far, [At(new Vector3(0, 0, 10), 100f, Vector3.UnitX)])
+                .Layers[0].Moves[0].Normal);
+        Assert.True(Vector3.Dot(farCut, -Vector3.UnitZ) > 0.999f);
+
+        var mid = MillPath(new Vector3(100, 0, 10), Vector3.UnitZ);
+        var midCut = -Vector3.Normalize(
+            TcpAttractorEffect.ApplyMill(mid, [At(new Vector3(0, 0, 10), 200f, Vector3.UnitX)])
+                .Layers[0].Moves[0].Normal);
+        Assert.True(Vector3.Dot(midCut, Vector3.UnitX) > 0.2f && Vector3.Dot(midCut, Vector3.UnitX) < 0.99f);
+        Assert.True(midCut.Z < -0.2f);
+    }
+
+    [Fact]
     public void Mill_and_layer_stitch_are_not_tilted()
     {
         var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
@@ -95,6 +127,15 @@ public class TcpAttractorEffectTest
 
     static TcpAttractor At(Vector3 position, float radius, Vector3 axis)
         => new(position, radius, axis);
+
+    static Toolpath MillPath(Vector3 at, Vector3 surfaceNormal)
+    {
+        var layer = new ToolpathLayer(0, at.Z) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(at, at, MoveKind.Mill) { Normal = surfaceNormal });
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+        return tp;
+    }
 
     static Toolpath Path(Vector3 from, Vector3 to, Vector3 normal)
     {

@@ -3669,7 +3669,6 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             var text = MassiveSlicer.Core.IO.ScaledGcodeImporter.ReadGcodeText(path);
             var result = MassiveSlicer.Core.IO.ScaledGcodeImporter.Import(text, sourcePercent, off);
-            var stitch = MassiveSlicer.Core.Slicing.ContinuousLayerStitch.Apply(result.Toolpath, result.BeadWidthMm);
             if (result.MoveCount == 0)
             {
                 Console.LogError($"[scaled] No print moves in {System.IO.Path.GetFileName(path)}.");
@@ -3704,7 +3703,6 @@ public sealed class MainWindowViewModel : ViewModelBase
                 $"{System.IO.Path.GetFileName(path)} at {sourcePercent:0.##}% → ×{result.ScaleFactor:0.##}. " +
                 $"Size {result.SizeMm.X:0} × {result.SizeMm.Y:0} × {result.SizeMm.Z:0} mm. " +
                 $"Centred on the print surface ({off.X:0}, {off.Y:0}, {off.Z:0}). " +
-                $"Stitch {stitch}. " +
                 $"Wipe {add.WipeModeDisplay} {add.WipeLengthMm:0.#} mm, Z hop {add.ZHopMm:0.#} mm, {wipes} wipe move(s). " +
                 "Select it in the outliner, then Send to MassiveDRIVE. The robot was not started.");
             return true;
@@ -4607,6 +4605,14 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.CavityWorldRidge          = copy.CavityWorldRidge;
         live.CavityWorldValley         = copy.CavityWorldValley;
         live.CavityWorldDistance       = copy.CavityWorldDistance;
+        if (copy.SdfAoCustomized)
+        {
+            live.SdfAoStrength   = copy.SdfAoStrength;
+            live.SdfAoRadius     = copy.SdfAoRadius;
+            live.SdfAoFloor      = copy.SdfAoFloor;
+            live.SdfAoDepthMm    = copy.SdfAoDepthMm;
+            live.SdfAoCustomized = true;
+        }
         live.ToolpathExtrudeColor    = copy.ToolpathExtrudeColor;
         live.ToolpathTravelColor     = copy.ToolpathTravelColor;
         live.ToolpathSeamColor       = copy.ToolpathSeamColor;
@@ -4840,6 +4846,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         vp.CavityWorldRidge         = p.CavityWorldRidge;
         vp.CavityWorldValley        = p.CavityWorldValley;
         vp.CavityWorldDistance      = p.CavityWorldDistance;
+        vp.SdfAoStrength            = p.SdfAoStrength;
+        vp.SdfAoRadius              = p.SdfAoRadius;
+        vp.SdfAoFloorPercent        = p.SdfAoFloor * 100f;
+        vp.SdfAoDepthMm             = p.SdfAoDepthMm;
         vp.ShowAxes     = p.ShowAxes;
         vp.ShowBedGrid  = p.ShowBedGrid;
         vp.ActivePreset = p.ActivePreset;
@@ -5245,6 +5255,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.CavityWorldRidge          = vp.CavityWorldRidge;
         p.CavityWorldValley         = vp.CavityWorldValley;
         p.CavityWorldDistance       = vp.CavityWorldDistance;
+        p.SdfAoStrength             = vp.SdfAoStrength;
+        p.SdfAoRadius               = (int)Math.Round(vp.SdfAoRadius);
+        p.SdfAoFloor                = vp.SdfAoFloorPercent / 100f;
+        p.SdfAoDepthMm              = vp.SdfAoDepthMm;
+        p.SdfAoCustomized           = true;
         p.ShowAxes     = vp.ShowAxes;
         p.ShowBedGrid  = vp.ShowBedGrid;
         p.ActivePreset = vp.ActivePreset;

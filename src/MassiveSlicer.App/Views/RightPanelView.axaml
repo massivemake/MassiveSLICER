@@ -3561,7 +3561,7 @@
                             </Expander.Header>
                             <StackPanel Margin="0,0,0,6">
                                 <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
-                                           Text="AdaOne milling strategies. Geometry, passes, travel, and engagement follow the selected operation. Cutting data comes from the bit library."/>
+                                           Text="MassiveSLICER milling strategies. Geometry, passes, travel, and engagement follow the selected operation. Cutting data comes from the bit library."/>
 
                                 <Border Margin="10,0,10,8" Padding="10,8" CornerRadius="6"
                                         Background="{DynamicResource Bg1}"
@@ -3612,11 +3612,11 @@
                                     <Button Classes="PatternTile"
                                             Classes.active="{Binding Subtractive.IsPlanarClearing}"
                                             Command="{Binding Subtractive.SetOperationCommand}"
-                                            CommandParameter="PlanarClearing"
-                                            ToolTip.Tip="2.5D area clear / pocket roughing">
+                                            CommandParameter="Projection"
+                                            ToolTip.Tip="Project a finish from a cylinder, sphere, or cube">
                                         <StackPanel Spacing="4" HorizontalAlignment="Center">
-                                            <ia:Icon Value="mdi-arrow-expand-all" FontSize="18" HorizontalAlignment="Center"/>
-                                            <TextBlock Text="Planar clearing" FontSize="9" HorizontalAlignment="Center"/>
+                                            <ia:Icon Value="mdi-cylinder" FontSize="18" HorizontalAlignment="Center"/>
+                                            <TextBlock Text="Projection" FontSize="9" HorizontalAlignment="Center"/>
                                         </StackPanel>
                                     </Button>
                                     <Button Classes="PatternTile"
@@ -3653,7 +3653,7 @@
                                             Classes.active="{Binding Subtractive.IsMorph}"
                                             Command="{Binding Subtractive.SetOperationCommand}"
                                             CommandParameter="Morph"
-                                            ToolTip.Tip="AdaOne morph — blend top and bottom rails">
+                                            ToolTip.Tip="MassiveSLICER morph — blend top and bottom rails">
                                         <StackPanel Spacing="4" HorizontalAlignment="Center">
                                             <ia:Icon Value="mdi-set-merge" FontSize="18" HorizontalAlignment="Center"/>
                                             <TextBlock Text="Morph" FontSize="9" HorizontalAlignment="Center"/>
@@ -3665,6 +3665,99 @@
                                            Text="{Binding Subtractive.SelectedOperationDescription}"/>
 
                                 <!-- SELECT AREA — which part of the model this operation machines -->
+                                <Expander Classes="SectionExpander" Header="PROJECTION"
+                                          IsExpanded="True"
+                                          IsVisible="{Binding Subtractive.ShowsClearingCard}">
+                                    <StackPanel Margin="0,2,0,6" Spacing="6">
+                                        <TextBlock Classes="LabelMuted" FontSize="10" TextWrapping="Wrap" Margin="8,2,8,0"
+                                                   Text="Drop a helper on the bed. The finish is projected from that shape onto the part."/>
+                                        <UniformGrid Columns="3" Margin="6,0,6,0">
+                                            <Button Classes="PatternTile"
+                                                    Classes.active="{Binding Subtractive.IsProjectionCylinder}"
+                                                    Command="{Binding $parent[Window].DataContext.Viewport.AddProjectionGuideCommand}"
+                                                    CommandParameter="Cylinder"
+                                                    ToolTip.Tip="Place a cylinder in the middle of the bed">
+                                                <StackPanel Spacing="3" HorizontalAlignment="Center">
+                                                    <ia:Icon Value="mdi-cylinder" FontSize="16" HorizontalAlignment="Center"/>
+                                                    <TextBlock Text="Cylinder" FontSize="9" HorizontalAlignment="Center"/>
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Classes="PatternTile"
+                                                    Classes.active="{Binding Subtractive.IsProjectionSphere}"
+                                                    Command="{Binding $parent[Window].DataContext.Viewport.AddProjectionGuideCommand}"
+                                                    CommandParameter="Sphere"
+                                                    ToolTip.Tip="Place a sphere in the middle of the bed">
+                                                <StackPanel Spacing="3" HorizontalAlignment="Center">
+                                                    <ia:Icon Value="mdi-sphere" FontSize="16" HorizontalAlignment="Center"/>
+                                                    <TextBlock Text="Sphere" FontSize="9" HorizontalAlignment="Center"/>
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Classes="PatternTile"
+                                                    Classes.active="{Binding Subtractive.IsProjectionCube}"
+                                                    Command="{Binding $parent[Window].DataContext.Viewport.AddProjectionGuideCommand}"
+                                                    CommandParameter="Cube"
+                                                    ToolTip.Tip="Place a cube in the middle of the bed">
+                                                <StackPanel Spacing="3" HorizontalAlignment="Center">
+                                                    <ia:Icon Value="mdi-cube-outline" FontSize="16" HorizontalAlignment="Center"/>
+                                                    <TextBlock Text="Cube" FontSize="9" HorizontalAlignment="Center"/>
+                                                </StackPanel>
+                                            </Button>
+                                        </UniformGrid>
+                                        <Grid Margin="8,0,8,0" ColumnDefinitions="*,100">
+                                            <TextBlock Text="Base diameter" Classes="LabelMuted" VerticalAlignment="Center"
+                                                       ToolTip.Tip="Cylinder and sphere diameter, or the cube width."/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.ProjectionBaseDiameterMm, Mode=TwoWay}"
+                                                               Minimum="10" Maximum="8000" Increment="10" FormatString="F0" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
+                                        <Grid Margin="8,0,8,0" ColumnDefinitions="*,100"
+                                              IsVisible="{Binding Subtractive.IsProjectionCylinder}">
+                                            <TextBlock Text="Top diameter" Classes="LabelMuted" VerticalAlignment="Center"
+                                                       ToolTip.Tip="Different from the base tapers the cylinder."/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.ProjectionTopDiameterMm, Mode=TwoWay}"
+                                                               Minimum="10" Maximum="8000" Increment="10" FormatString="F0" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
+                                        <Grid Margin="8,0,8,0" ColumnDefinitions="*,100"
+                                              IsVisible="{Binding !Subtractive.IsProjectionSphere}">
+                                            <TextBlock Text="Height" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.ProjectionHeightMm, Mode=TwoWay}"
+                                                               Minimum="10" Maximum="8000" Increment="10" FormatString="F0" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
+                                        <CheckBox Margin="8,0,8,0" Content="Project inward" FontSize="11"
+                                                  IsChecked="{Binding Subtractive.ProjectionInward, Mode=TwoWay}"
+                                                  ToolTip.Tip="Off projects out from the shape. On projects back toward its interior."/>
+                                        <Grid Margin="8,0,8,0" ColumnDefinitions="*,140"
+                                              IsVisible="{Binding Subtractive.IsProjectionCylinder}">
+                                            <TextBlock Text="Slice direction" Classes="LabelMuted" VerticalAlignment="Center"
+                                                       ToolTip.Tip="Horizontal walks around the cylinder. Vertical walks up and down it."/>
+                                            <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                                                      ItemsSource="{x:Static vm:SubtractiveSettingsViewModel.ProjectionSliceOptions}"
+                                                      SelectedItem="{Binding Subtractive.ProjectionSliceDirection, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <CheckBox Margin="8,0,8,0" Content="E1 movement" FontSize="11"
+                                                  IsVisible="{Binding Subtractive.IsProjectionCylinder}"
+                                                  IsChecked="{Binding Subtractive.ProjectionUseE1, Mode=TwoWay}"
+                                                  ToolTip.Tip="Spin the rotary table so the arm stays on one side of the cylinder. Rotate the helper so its side faces the robot."/>
+                                        <Grid Margin="8,0,8,2" ColumnDefinitions="*,*,44">
+                                            <TextBlock Text="Surface normal" Classes="LabelMuted" VerticalAlignment="Center"
+                                                       ToolTip.Tip="0% follows the helper angle. 100% follows the part surface normal."/>
+                                            <Slider Grid.Column="1" Minimum="0" Maximum="1"
+                                                    Value="{Binding Subtractive.ProjectionNormalInfluence, Mode=TwoWay}"
+                                                    VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                            <TextBlock Grid.Column="2" Classes="LabelMuted" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                                       Text="{Binding Subtractive.ProjectionNormalInfluence, StringFormat={}{0:P0}}"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </Expander>
+
                                 <Expander Classes="SectionExpander" Header="SELECT AREA" IsExpanded="True">
                                     <StackPanel Margin="0,2,0,6" Spacing="6">
                                         <TextBlock Classes="LabelMuted" FontSize="10" TextWrapping="Wrap" Margin="8,2,8,2"
@@ -3748,61 +3841,128 @@
                                     </StackPanel>
                                 </Expander>
 
-                                <Expander Classes="SectionExpander" Header="TOOL AXIS"
-                                          IsExpanded="True"
-                                          IsVisible="{Binding Subtractive.ShowsPlanarToolAxis}">
+                                <Expander Classes="SectionExpander" Header="TOOL AXIS" IsExpanded="True">
                                     <StackPanel Margin="0,2,0,6" Spacing="6">
-                                        <TextBlock Classes="LabelMuted" FontSize="10" TextWrapping="Wrap" Margin="8,2,8,0"
-                                                   Text="T12 +Z (bit into the work). Raster projects from the opposite direction. Default is world -Z. Use Painted area after Box / Face, or Camera view after orbiting the wall."/>
-                                        <Grid Margin="8,0,8,0" ColumnDefinitions="*,160">
-                                            <TextBlock Text="Axis" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                            <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
-                                                      ItemsSource="{x:Static vm:SubtractiveSettingsViewModel.PlanarToolAxisOptions}"
-                                                      SelectedItem="{Binding Subtractive.PlanarToolAxis, Mode=TwoWay}"/>
-                                        </Grid>
-                                        <Grid Margin="8,0,8,0" ColumnDefinitions="*,100">
-                                            <TextBlock Text="Tilt" Classes="LabelMuted" VerticalAlignment="Center"
-                                                       ToolTip.Tip="Tilt T12 +Z off the chosen axis (deg)"/>
-                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                <NumericUpDown Value="{Binding Subtractive.PlanarTiltDeg, Mode=TwoWay}"
-                                                               Minimum="-90" Maximum="90" Increment="1" FormatString="F1" FontSize="11"/>
-                                                <TextBlock Grid.Column="1" Text="°" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                        <StackPanel Spacing="6" IsVisible="{Binding Subtractive.ShowsPlanarToolAxis}">
+                                            <TextBlock Classes="LabelMuted" FontSize="10" TextWrapping="Wrap" Margin="8,2,8,0"
+                                                       Text="T12 +Z (bit into the work). Raster projects from the opposite direction. Default is world -Z. Use Painted area after Box / Face, or Camera view after orbiting the wall."/>
+                                            <Grid Margin="8,0,8,0" ColumnDefinitions="*,160">
+                                                <TextBlock Text="Axis" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                                                          ItemsSource="{x:Static vm:SubtractiveSettingsViewModel.PlanarToolAxisOptions}"
+                                                          SelectedItem="{Binding Subtractive.PlanarToolAxis, Mode=TwoWay}"/>
                                             </Grid>
-                                        </Grid>
-                                        <Grid Margin="8,0,8,0" ColumnDefinitions="*,100">
-                                            <TextBlock Text="Azimuth" Classes="LabelMuted" VerticalAlignment="Center"
-                                                       ToolTip.Tip="Which way the tilt leans around the tool axis (deg)"/>
-                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                <NumericUpDown Value="{Binding Subtractive.PlanarAzimuthDeg, Mode=TwoWay}"
-                                                               Minimum="-180" Maximum="180" Increment="5" FormatString="F1" FontSize="11"/>
-                                                <TextBlock Grid.Column="1" Text="°" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            <Grid Margin="8,0,8,0" ColumnDefinitions="*,100">
+                                                <TextBlock Text="Tilt" Classes="LabelMuted" VerticalAlignment="Center"
+                                                           ToolTip.Tip="Tilt T12 +Z off the chosen axis (deg)"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                    <NumericUpDown Value="{Binding Subtractive.PlanarTiltDeg, Mode=TwoWay}"
+                                                                   Minimum="-90" Maximum="90" Increment="1" FormatString="F1" FontSize="11"/>
+                                                    <TextBlock Grid.Column="1" Text="°" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </Grid>
                                             </Grid>
-                                        </Grid>
-                                        <Grid Margin="8,2,8,0" ColumnDefinitions="*,56,56,56"
-                                              IsVisible="{Binding Subtractive.IsPlanarAxisCustom}">
-                                            <TextBlock Text="T12 +Z" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                            <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.PlanarCustomX, Mode=TwoWay}"
-                                                           Increment="0.1" FormatString="F2" FontSize="10"/>
-                                            <NumericUpDown Grid.Column="2" Value="{Binding Subtractive.PlanarCustomY, Mode=TwoWay}"
-                                                           Increment="0.1" FormatString="F2" FontSize="10" Margin="2,0,0,0"/>
-                                            <NumericUpDown Grid.Column="3" Value="{Binding Subtractive.PlanarCustomZ, Mode=TwoWay}"
-                                                           Increment="0.1" FormatString="F2" FontSize="10" Margin="2,0,0,0"/>
-                                        </Grid>
-                                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="8,2,8,0">
-                                            <Button Content="From painted area"
-                                                    Command="{Binding Subtractive.CapturePlanarFromPaintCommand}"
-                                                    ToolTip.Tip="Average the painted / boxed face and point T12 into it"/>
-                                            <Button Content="From camera"
-                                                    Command="{Binding Subtractive.CapturePlanarFromCameraCommand}"
-                                                    ToolTip.Tip="Point T12 along the current viewport look"/>
+                                            <Grid Margin="8,0,8,0" ColumnDefinitions="*,100">
+                                                <TextBlock Text="Azimuth" Classes="LabelMuted" VerticalAlignment="Center"
+                                                           ToolTip.Tip="Which way the tilt leans around the tool axis (deg)"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                    <NumericUpDown Value="{Binding Subtractive.PlanarAzimuthDeg, Mode=TwoWay}"
+                                                                   Minimum="-180" Maximum="180" Increment="5" FormatString="F1" FontSize="11"/>
+                                                    <TextBlock Grid.Column="1" Text="°" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Grid>
+                                            <Grid Margin="8,2,8,0" ColumnDefinitions="*,56,56,56"
+                                                  IsVisible="{Binding Subtractive.IsPlanarAxisCustom}">
+                                                <TextBlock Text="T12 +Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.PlanarCustomX, Mode=TwoWay}"
+                                                               Increment="0.1" FormatString="F2" FontSize="10"/>
+                                                <NumericUpDown Grid.Column="2" Value="{Binding Subtractive.PlanarCustomY, Mode=TwoWay}"
+                                                               Increment="0.1" FormatString="F2" FontSize="10" Margin="2,0,0,0"/>
+                                                <NumericUpDown Grid.Column="3" Value="{Binding Subtractive.PlanarCustomZ, Mode=TwoWay}"
+                                                               Increment="0.1" FormatString="F2" FontSize="10" Margin="2,0,0,0"/>
+                                            </Grid>
+                                            <StackPanel Orientation="Horizontal" Spacing="6" Margin="8,2,8,0">
+                                                <Button Content="From painted area"
+                                                        Command="{Binding Subtractive.CapturePlanarFromPaintCommand}"
+                                                        ToolTip.Tip="Average the painted / boxed face and point T12 into it"/>
+                                                <Button Content="From camera"
+                                                        Command="{Binding Subtractive.CapturePlanarFromCameraCommand}"
+                                                        ToolTip.Tip="Point T12 along the current viewport look"/>
+                                            </StackPanel>
+                                            <Border Margin="8,2,8,4" Padding="8,6" CornerRadius="5"
+                                                    Background="{DynamicResource Bg1}"
+                                                    BorderBrush="{DynamicResource Border1}"
+                                                    BorderThickness="1">
+                                                <TextBlock FontSize="10" Opacity="0.85" TextWrapping="Wrap"
+                                                           Text="{Binding Subtractive.PlanarAxisStatus}"/>
+                                            </Border>
                                         </StackPanel>
-                                        <Border Margin="8,2,8,4" Padding="8,6" CornerRadius="5"
-                                                Background="{DynamicResource Bg1}"
-                                                BorderBrush="{DynamicResource Border1}"
-                                                BorderThickness="1">
-                                            <TextBlock FontSize="10" Opacity="0.85" TextWrapping="Wrap"
-                                                       Text="{Binding Subtractive.PlanarAxisStatus}"/>
-                                        </Border>
+
+                                        <Expander Classes="SectionExpander" Header="ATTRACTOR" IsExpanded="False">
+                                            <StackPanel Margin="0,2,0,6">
+                                                <TextBlock Text="Place a sphere in the scene. The amber cylinder is the cutter angle. Closer to the sphere, the tool axis leans toward that angle. On the cylinder, it matches."
+                                                           Classes="LabelMuted" Margin="8,0,8,6" TextWrapping="Wrap"/>
+                                                <Grid Margin="8,0,8,4" ColumnDefinitions="*,*">
+                                                    <Button Grid.Column="0" Classes="ToolbarButton" Margin="0,0,4,0"
+                                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                                            Command="{Binding $parent[Window].DataContext.Viewport.AddTcpAttractorCommand}"
+                                                            ToolTip.Tip="Add a spherical attractor. Move places it. Rotate aims the cylinder.">
+                                                        <TextBlock Text="ADD ATTRACTOR" FontSize="11"/>
+                                                    </Button>
+                                                    <Button Grid.Column="1" Classes="ToolbarButton" Margin="4,0,0,0"
+                                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                                            Command="{Binding $parent[Window].DataContext.Viewport.RemoveTcpAttractorCommand}"
+                                                            IsEnabled="{Binding $parent[Window].DataContext.Viewport.HasSelectedTcpAttractor}"
+                                                            ToolTip.Tip="Remove the selected attractor.">
+                                                        <TextBlock Text="REMOVE" FontSize="11"/>
+                                                    </Button>
+                                                </Grid>
+                                                <ItemsControl ItemsSource="{Binding $parent[Window].DataContext.Viewport.TcpAttractors}" Margin="8,0,8,4">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Button Classes="ToolbarButton" HorizontalAlignment="Stretch"
+                                                                    HorizontalContentAlignment="Left" Margin="0,2" Padding="8,4"
+                                                                    Content="{Binding Name}"
+                                                                    Command="{Binding $parent[Window].DataContext.Viewport.SelectTcpAttractorCommand}"
+                                                                    CommandParameter="{Binding}"/>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.HasSelectedTcpAttractor}" Spacing="4">
+                                                    <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.SelectedTcpAttractorName}"
+                                                               Classes="LabelMuted" Margin="8,2,8,0" FontSize="11"/>
+                                                    <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56">
+                                                        <TextBlock Grid.Column="0" Text="Influence (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                                   ToolTip.Tip="Sphere radius. Outside it the mill path is unchanged. On the cylinder the cutter matches the cylinder."/>
+                                                        <Slider Grid.Column="1" Minimum="20" Maximum="2000"
+                                                                Value="{Binding $parent[Window].DataContext.Viewport.TcpRadiusMm, Mode=TwoWay}"
+                                                                VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                                        <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                                                 Text="{Binding $parent[Window].DataContext.Viewport.TcpRadiusMm, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                                                 TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                                    </Grid>
+                                                    <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56">
+                                                        <TextBlock Grid.Column="0" Text="Lean X (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                                   ToolTip.Tip="Tilts the cylinder from upright toward −Y. ±80°. Rotate gizmo aims it too."/>
+                                                        <Slider Grid.Column="1" Minimum="-80" Maximum="80"
+                                                                Value="{Binding $parent[Window].DataContext.Viewport.TcpLeanXDeg, Mode=TwoWay}"
+                                                                VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                                        <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                                                 Text="{Binding $parent[Window].DataContext.Viewport.TcpLeanXDeg, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                                                 TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                                    </Grid>
+                                                    <Grid Margin="8,0,8,2" ColumnDefinitions="*,*,56">
+                                                        <TextBlock Grid.Column="0" Text="Lean Y (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                                   ToolTip.Tip="Tilts the cylinder from upright toward +X. ±80°."/>
+                                                        <Slider Grid.Column="1" Minimum="-80" Maximum="80"
+                                                                Value="{Binding $parent[Window].DataContext.Viewport.TcpLeanYDeg, Mode=TwoWay}"
+                                                                VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                                        <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                                                 Text="{Binding $parent[Window].DataContext.Viewport.TcpLeanYDeg, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                                                 TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                                    </Grid>
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Expander>
                                     </StackPanel>
                                 </Expander>
                             </StackPanel>
@@ -3823,7 +3983,7 @@
                             </Expander.Header>
                             <StackPanel Margin="0,0,0,6">
                                 <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
-                                           Text="AdaOne passes, travel, engagement, and motion for the selected operation. Feeds and RPM seed from the active bit preset."/>
+                                           Text="MassiveSLICER passes, travel, engagement, and motion for the selected operation. Feeds and RPM seed from the active bit preset."/>
 
                                 <Expander Classes="SectionExpander" Header="PASSES" IsExpanded="True">
                                     <StackPanel Margin="0,2,0,6" Spacing="4">
@@ -3928,19 +4088,6 @@
                                             </Grid>
                                         </StackPanel>
 
-                                        <StackPanel IsVisible="{Binding Subtractive.ShowsClearingCard}" Margin="0,6,0,0" Spacing="4">
-                                            <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10"
-                                                       Text="PLANAR CLEARING — waterfall / all-around / flick ends"/>
-                                            <CheckBox Margin="8,0,8,2" Content="Waterfall mill" FontSize="11"
-                                                      IsChecked="{Binding Subtractive.WaterfallMill, Mode=TwoWay}"/>
-                                            <CheckBox Margin="8,0,8,2" Content="All-around mill" FontSize="11"
-                                                      IsChecked="{Binding Subtractive.AllAroundMill, Mode=TwoWay}"/>
-                                            <CheckBox Margin="8,0,8,2" Content="Flick ends" FontSize="11"
-                                                      IsChecked="{Binding Subtractive.FlickEnds, Mode=TwoWay}"/>
-                                            <CheckBox Margin="8,0,8,2" Content="Infill" FontSize="11"
-                                                      IsChecked="{Binding Subtractive.ClearingInfill, Mode=TwoWay}"/>
-                                        </StackPanel>
-
                                         <StackPanel IsVisible="{Binding Subtractive.ShowsContouringCard}" Margin="0,6,0,0" Spacing="4">
                                             <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10"
                                                        Text="CONTOURING — waterline loops at each Z"/>
@@ -4000,7 +4147,7 @@
                                                        Text="MULTI-AXIS FINISHING"/>
                                             <CheckBox Margin="8,0,8,2" Content="Stabilize head rotation" FontSize="11"
                                                       IsChecked="{Binding Subtractive.StabilizeHeadRotation, Mode=TwoWay}"
-                                                      ToolTip.Tip="AdaOne smoothLayerOriTransitions — lerp tool ABC along the path"/>
+                                                      ToolTip.Tip="MassiveSLICER smooths the tool angle along the path"/>
                                             <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                                 <TextBlock Text="Cut depth" Classes="LabelMuted" VerticalAlignment="Center"/>
                                                 <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
@@ -4036,7 +4183,7 @@
                                         </Grid>
                                         <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                             <TextBlock Text="Feed height" Classes="LabelMuted" VerticalAlignment="Center"
-                                                       ToolTip.Tip="AdaOne feed height — drop from clearance to this before the cut"/>
+                                                       ToolTip.Tip="MassiveSLICER feed height — drop from clearance to this before the cut"/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
                                                 <NumericUpDown Classes="Length" Value="{Binding Subtractive.FeedHeightMm, Mode=TwoWay}"
                                                                Minimum="0" Maximum="500" Increment="1" FormatString="F2" FontSize="11"/>
@@ -4153,7 +4300,7 @@
                                 <Expander Classes="SectionExpander" Header="ENGAGEMENT" IsExpanded="False">
                                     <StackPanel Margin="0,2,0,6" Spacing="4">
                                         <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
-                                                   Text="AdaOne milling engagement — lead-in / lead-out at the start and end of each pass."/>
+                                                   Text="MassiveSLICER milling engagement — lead-in / lead-out at the start and end of each pass."/>
                                         <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                             <TextBlock Text="Lead in" Classes="LabelMuted" VerticalAlignment="Center"/>
                                             <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
@@ -4172,26 +4319,6 @@
                                         </Grid>
                                     </StackPanel>
                                 </Expander>
-
-                                <Expander Classes="SectionExpander" Header="TOOL COMPENSATION" IsExpanded="False">
-                                    <StackPanel Margin="0,2,0,6" Spacing="4">
-                                        <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
-                                                   Text="AdaOne cutting-tool compensation — offset the programmed path by the cutter radius."/>
-                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,140">
-                                            <TextBlock Text="Compensation" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                            <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
-                                                      ItemsSource="{x:Static vm:SubtractiveSettingsViewModel.ToolCompensationOptions}"
-                                                      SelectedItem="{Binding Subtractive.ToolCompensation, Mode=TwoWay}"/>
-                                        </Grid>
-                                    </StackPanel>
-                                </Expander>
-
-                                <Button Margin="10,10,10,8"
-                                        Content="Generate Toolpath"
-                                        Classes="PrimaryButton"
-                                        HorizontalAlignment="Stretch"
-                                        ToolTip.Tip="Build an AdaOne mill toolpath from the current bit, operation, area selection, and toolpathing settings."
-                                        Command="{Binding $parent[Window].DataContext.Viewport.GenerateMillFromSettingsCommand}"/>
                             </StackPanel>
                         </Expander>
 
@@ -4211,87 +4338,11 @@
                             </Expander.Header>
                             <StackPanel Margin="0,0,0,6">
                                 <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55" Margin="10,4,10,6"
-                                           Text="Catch-all for stock, surface, placement, and output controls until they move under BITS / OPERATION."/>
-
-                                <Expander Classes="SectionExpander" Header="RELIEF HEIGHTMAP" IsExpanded="False">
-                                    <StackPanel Margin="0,2,0,6">
-                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,Auto">
-                                            <TextBox Grid.Column="0" Classes="PanelTextBox" FontSize="11"
-                                                     Watermark="grayscale .png / .jpg"
-                                                     Text="{Binding Subtractive.HeightmapPath, Mode=TwoWay}"/>
-                                            <Button Grid.Column="1" Content="Browse" Margin="4,0,0,0" FontSize="11"
-                                                    Classes="ToolbarButton"
-                                                    Command="{Binding Subtractive.BrowseHeightmapCommand}"
-                                                    ToolTip.Tip="Pick a grayscale relief image (white = high surface)"/>
-                                        </Grid>
-                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                                            <TextBlock Grid.Column="0" Text="Height scale (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Subtractive.HeightScaleMm, Mode=TwoWay}"
-                                                           Minimum="0" Maximum="200" Increment="0.5" FormatString="F1" FontSize="11"/>
-                                        </Grid>
-                                        <CheckBox Margin="8,0,8,4" Content="Invert (black = high)" FontSize="11"
-                                                  IsChecked="{Binding Subtractive.InvertHeightmap, Mode=TwoWay}"/>
-                                    </StackPanel>
-                                </Expander>
-
-                                <Expander Classes="SectionExpander" Header="DISPLACED SURFACE" IsExpanded="False">
-                                    <StackPanel Margin="0,2,0,6">
-                                        <TextBlock Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"
-                                                   Text="Pushes the low-poly mesh along its normals by the map above (or the model's normal map if none). This is the surface the mill follows."/>
-                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                                            <TextBlock Grid.Column="0" Text="Displacement distance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Subtractive.DisplacementDistanceMm, Mode=TwoWay}"
-                                                           Minimum="0" Maximum="100" Increment="0.25" FormatString="F2" FontSize="11"/>
-                                        </Grid>
-                                        <Button Margin="8,2,8,4"
-                                                Content="Preview Displaced Surface"
-                                                Classes="SecondaryButton"
-                                                HorizontalAlignment="Stretch"
-                                                ToolTip.Tip="Build and show the detailed surface from the model's maps (the geometry the mill rides)"
-                                                Command="{Binding $parent[Window].DataContext.Viewport.PreviewDisplacedCommand}"/>
-                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                                            <TextBlock Grid.Column="0" Text="Analysis tolerance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Subtractive.AnalysisToleranceMm, Mode=TwoWay}"
-                                                           Minimum="0.01" Maximum="5" Increment="0.05" FormatString="F2" FontSize="11"/>
-                                        </Grid>
-                                        <Button Margin="8,0,8,4"
-                                                Content="Generate Multi-Axis Toolpath"
-                                                Classes="PrimaryButton"
-                                                HorizontalAlignment="Stretch"
-                                                ToolTip.Tip="Surface-following finish pass over the displaced surface (tool axis follows the surface normal)"
-                                                Command="{Binding $parent[Window].DataContext.Viewport.GenerateMultiAxisCommand}"/>
-                                        <Border Margin="8,0,8,6" Padding="6" CornerRadius="5" Background="{DynamicResource Bg1}"
-                                                IsVisible="{Binding Subtractive.MillAnalysisText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                                            <TextBlock Text="{Binding Subtractive.MillAnalysisText}" Classes="LabelMuted"
-                                                       FontSize="11" TextWrapping="Wrap"/>
-                                        </Border>
-                                    </StackPanel>
-                                </Expander>
-
-                                <Expander Classes="SectionExpander" Header="PLACEMENT" IsExpanded="False">
-                                    <StackPanel Margin="0,2,0,6">
-                                        <CheckBox Margin="8,0,8,4" Content="Reference Z from part top" FontSize="11"
-                                                  IsChecked="{Binding Subtractive.AutoReferenceFromTop, Mode=TwoWay}"/>
-                                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,80" IsEnabled="{Binding !Subtractive.AutoReferenceFromTop}">
-                                            <TextBlock Grid.Column="0" Text="Reference Z (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                            <NumericUpDown Classes="Length" Grid.Column="1" Value="{Binding Subtractive.ReferencePlaneZ, Mode=TwoWay}"
-                                                           Increment="1" FormatString="F1" FontSize="11"/>
-                                        </Grid>
-                                        <CheckBox Margin="8,0,8,8" Content="Footprint from part bounds" FontSize="11"
-                                                  IsChecked="{Binding Subtractive.AutoFootprint, Mode=TwoWay}"/>
-                                    </StackPanel>
-                                </Expander>
+                                           Text="Export the mill program."/>
 
                                 <Expander Classes="SectionExpander" Header="OUTPUT" IsExpanded="True">
                                     <StackPanel Margin="0,2,0,6" Spacing="4">
                                         <Button Margin="8,4,8,4"
-                                                Content="Generate Mill Toolpath"
-                                                Classes="PrimaryButton"
-                                                HorizontalAlignment="Stretch"
-                                                ToolTip.Tip="Carve the relief into the selected blank (relief milling)"
-                                                Command="{Binding $parent[Window].DataContext.Viewport.MillCommand}"/>
-
-                                        <Button Margin="8,0,8,4"
                                                 Content="Export Mill KRL"
                                                 Classes="PrimaryButton"
                                                 HorizontalAlignment="Stretch"

@@ -63,6 +63,38 @@ public class NewtonPrimaryIkTest
             $"{folder} print joints left the usable range: {FmtJoints(solved)}");
     }
 
+    [Fact]
+    public void Milling_home_matches_world_down_at_a_small_yaw()
+    {
+        var previous = Directory.GetCurrentDirectory();
+        Directory.SetCurrentDirectory("/Users/thomboessel/MassiveSLICER");
+        try
+        {
+            var cell = ReadCell("LFAM3", "lfam3.json");
+            var joints = cell.Robot.Joints;
+            var robotWorld = Chain(cell).RobotWorld;
+            var tcp = CutterTcpLocal("LFAM3", cell);
+            var t12 = Tool12Abc();
+            var ruler = Make(cell, robotWorld, tcp, joints, toolFrameRoll: 0f, t12.A, t12.B, t12.C, newton: false);
+            var down = new Vector3(0f, 0f, 1f);
+            float at0 = ruler.OrientationError(MillStart, ruler.TargetRotFromMillNormal(down, 0f)) * (180f / MathF.PI);
+            float best = 999f;
+            int bestYaw = 0;
+            for (int y = -180; y <= 180; y++)
+            {
+                float deg = ruler.OrientationError(MillStart, ruler.TargetRotFromMillNormal(down, y)) * (180f / MathF.PI);
+                if (deg < best) { best = deg; bestYaw = y; }
+            }
+            Assert.True(at0 > 2f, $"yaw 0 already matched the milling home ({at0:0.00}°)");
+            Assert.InRange(bestYaw, -8, 0);
+            Assert.True(best < 1f, $"best yaw {bestYaw} still {best:0.00}° off XHOME1");
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(previous);
+        }
+    }
+
     [Theory]
     [MemberData(nameof(Cells))]
     public void Mill_from_mill_start_keeps_cutter_and_a4(string folder, string file)

@@ -72,6 +72,9 @@ public sealed class SceneRenderer : IDisposable
         public System.Numerics.Vector3      Origin   { get; init; }
     }
     private readonly Dictionary<SceneNode, ToolpathEntry> _toolpaths = [];
+    // Extra draw rotation so an E1 toolpath spins with the rotary. Identity otherwise.
+    // Kept off LocalTransform — scrub IK reads that as the station pose.
+    private readonly Dictionary<SceneNode, Matrix4> _toolpathRotarySpin = [];
     private bool _disposed;
     private bool _initialised;
 
@@ -104,9 +107,20 @@ public sealed class SceneRenderer : IDisposable
     private int _sceneFbo,    _sceneColorTex, _sceneDepthTex;
     private int _normalFbo,   _sceneNormalTex;
     private int _maskFbo,     _maskColorTex;
+    // SDF beads get their own color + packed-Z targets so IceSL's deposition
+    // SSAO samples beads only, not the robot or the bed.
+    private int _beadFbo, _beadColorTex, _beadZTex, _beadDepthTex;
+    private int _beadShadeFbo, _beadShadeTex;
     private int _fsqVao,      _fsqVbo;          // fullscreen quad
     private Shader? _maskShader;                // flat-white mask renderer
     private Shader? _compositeShader;           // Roberts Cross + scene blend
+    private Shader? _beadAoShader;
+    private Shader? _beadCompositeShader;
+    private static readonly DrawBuffersEnum[] BeadDrawBuffers =
+    [
+        DrawBuffersEnum.ColorAttachment0,
+        DrawBuffersEnum.ColorAttachment1,
+    ];
     private int _fboWidth, _fboHeight;
 
     private ShaderMode _shaderMode = ShaderMode.Standard;
@@ -277,6 +291,88 @@ public sealed class SceneRenderer : IDisposable
 
             vec3 outlineColor = vec3(0.35, 1.0, 0.05);
             fragColor = vec4(mix(rgb, outlineColor, edge), 1.0);
+        }
+        """;
+
+    // IceSL deposition SSAO (sh_deposition pass 2). Samples the bead g-buffer only.
+    // N = 10, occ_fact = 1000, 10% floor, then ao * nrm.z * material.
+    // ASCII only: a non-ASCII byte in a shader string has failed the Mac driver before.
+    private static readonly string BeadAoFragSrc = """
+        #version 330 core
+        in vec2 vUV;
+        uniform sampler2D uColor;
+        uniform sampler2D uZ;
+        uniform vec2 uSize;
+        uniform float uOcc;
+        uniform float uFloor;
+        uniform int uRadius;
+        out vec4 fragColor;
+
+        float decode_zvalue(vec3 z_color)
+        {
+            return ((z_color.x / 256.0) + (z_color.y / 256.0 / 256.0) + (z_color.z / 256.0 / 256.0 / 256.0)) * 255.0;
+        }
+
+        void main()
+        {
+            vec2 pixel = vec2(1.0) / uSize;
+            vec4 ztex = texture(uZ, vUV);
+            if (ztex.w == 0.0) discard;
+            vec4 color = texture(uColor, vUV);
+
+            float z_00 = decode_zvalue(ztex.xyz);
+            float z_10 = decode_zvalue(texture(uZ, vUV + vec2(pixel.x, 0.0)).xyz);
+            float z_01 = decode_zvalue(texture(uZ, vUV + vec2(0.0, pixel.y)).xyz);
+
+            const float attenuation = 0.1 / 2.0;
+            vec3 p = vec3(attenuation / uSize.x, 0.0, z_10 - z_00);
+            vec3 q = vec3(0.0, attenuation / uSize.y, z_01 - z_00);
+            vec3 nrm = normalize(cross(p, q));
+
+            const int N = 10;
+            int rad = uRadius;
+            if (rad < 0) rad = 0;
+            if (rad > N) rad = N;
+            float z_average = 0.0;
+            int num = 0;
+            for (int j = -N; j <= N; j++)
+            {
+                for (int i = -N; i <= N; i++)
+                {
+                    if (i > rad || i < -rad || j > rad || j < -rad) continue;
+                    vec4 p_ij = texture(uZ, vUV + pixel * vec2(float(i), float(j)));
+                    if (p_ij.w != 0.0) {
+                        z_average += decode_zvalue(p_ij.xyz);
+                        num++;
+                    }
+                }
+            }
+            // The center sample is inside the window, so num is at least 1.
+            if (num == 0) discard;
+            z_average /= float(num);
+
+            float ao = 1.0;
+            if (z_average < z_00) {
+                ao = max(0.0, 1.0 - uOcc * (z_00 - z_average));
+                ao = uFloor + (1.0 - uFloor) * ao;
+            }
+            fragColor = vec4(ao * nrm.z * color.xyz, color.w);
+        }
+        """;
+
+    // Copies shaded beads onto the scene. Alpha 0 is an empty g-buffer pixel.
+    // Depth comes from the bead depth target so later tests still see the bead.
+    private static readonly string BeadCompositeFragSrc = """
+        #version 330 core
+        in vec2 vUV;
+        uniform sampler2D uBead;
+        uniform sampler2D uDepth;
+        out vec4 fragColor;
+        void main() {
+            vec4 c = texture(uBead, vUV);
+            if (c.a == 0.0) discard;
+            fragColor = vec4(c.rgb, 1.0);
+            gl_FragDepth = texture(uDepth, vUV).r;
         }
         """;
 
@@ -600,6 +696,16 @@ public sealed class SceneRenderer : IDisposable
     public bool ShowWipeMoves { get; set; } = true;
     public bool ShowSeam           { get; set; } = true;
     public bool ShowBead           { get; set; } = false;
+    /// <summary>SDF view: draw the rounded bead instead of the box bead mesh.</summary>
+    public bool ShowSdfBead        { get; set; } = false;
+    /// <summary>IceSL occlusion factor. 1000 is the recovered value.</summary>
+    public float SdfAoStrength { get; set; } = 1000f;
+    /// <summary>Samples each side. 10 is IceSL's full window.</summary>
+    public int SdfAoRadius { get; set; } = 10;
+    /// <summary>Minimum groove brightness. 0.1 matches IceSL.</summary>
+    public float SdfAoFloor { get; set; } = 0.1f;
+    /// <summary>Focus depth band in mm. Not an IceSL constant.</summary>
+    public float SdfAoDepthMm { get; set; } = 1000f;
     public bool ShowBeadOverhang        { get; set; } = false;
     public bool ShowOrientationPreview  { get; set; } = false;
 
@@ -798,10 +904,12 @@ public sealed class SceneRenderer : IDisposable
     public void AddToolpath(Toolpath toolpath, SceneNode node,
         float beadWidth = 6f, float layerHeight = 3f,
         System.Numerics.Vector3 materialColor = default,
-        Toolpath? beadToolpath = null)
+        Toolpath? beadToolpath = null,
+        System.Numerics.Vector3? rotaryCenter = null,
+        float rotarySign = -1f)
     {
         var centroid = ComputeToolpathCentroid(toolpath);
-        var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
+        var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath, rotaryCenter, rotarySign);
         renderer.SetBeadColor(_toolpathBeadColor);
         renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
         renderer.SetRpmOverLimitVisible(_toolpathRpmOverLimitVisible);
@@ -880,11 +988,13 @@ public sealed class SceneRenderer : IDisposable
     public void ReplaceToolpath(Toolpath toolpath, SceneNode node,
         float beadWidth = 6f, float layerHeight = 3f,
         System.Numerics.Vector3 materialColor = default,
-        Toolpath? beadToolpath = null)
+        Toolpath? beadToolpath = null,
+        System.Numerics.Vector3? rotaryCenter = null,
+        float rotarySign = -1f)
     {
         RemoveToolpathIfExists(node);
         var centroid = ComputeToolpathCentroid(toolpath);
-        var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
+        var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath, rotaryCenter, rotarySign);
         renderer.SetBeadColor(_toolpathBeadColor);
         renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
         renderer.SetRpmOverLimitVisible(_toolpathRpmOverLimitVisible);
@@ -905,6 +1015,7 @@ public sealed class SceneRenderer : IDisposable
             entry.Renderer.Dispose();
             _toolpaths.Remove(node);
         }
+        _toolpathRotarySpin.Remove(node);
     }
 
     /// <summary>Disposes every registered toolpath renderer (e.g. before a full cell swap).</summary>
@@ -913,6 +1024,26 @@ public sealed class SceneRenderer : IDisposable
         foreach (var entry in _toolpaths.Values)
             entry.Renderer.Dispose();
         _toolpaths.Clear();
+        _toolpathRotarySpin.Clear();
+    }
+
+    /// <summary>
+    /// Spins a toolpath draw about the rotary centre. The node's LocalTransform stays
+    /// the station pose scrub IK uses.
+    /// </summary>
+    public void SetToolpathRotarySpin(SceneNode node, Matrix4 spin)
+    {
+        if (spin == Matrix4.Identity)
+            _toolpathRotarySpin.Remove(node);
+        else
+            _toolpathRotarySpin[node] = spin;
+    }
+
+    Matrix4 ToolpathDraw(SceneNode node)
+    {
+        var local = node.LocalTransform;
+        // Local first (station centroid → on-part point), then the pivot's motion.
+        return _toolpathRotarySpin.TryGetValue(node, out var spin) ? local * spin : local;
     }
 
     /// <summary>
@@ -1223,6 +1354,19 @@ public sealed class SceneRenderer : IDisposable
         _sequencePath     = new SequencePathRenderer();
         _maskShader       = new Shader(MaskVertSrc, MaskFragSrc);
         _compositeShader  = new Shader(CompositeVertSrc, CompositeFragSrc);
+        try
+        {
+            _beadAoShader = new Shader(CompositeVertSrc, BeadAoFragSrc);
+            _beadCompositeShader = new Shader(CompositeVertSrc, BeadCompositeFragSrc);
+        }
+        catch (Exception ex)
+        {
+            _beadAoShader?.Dispose();
+            _beadAoShader = null;
+            _beadCompositeShader?.Dispose();
+            _beadCompositeShader = null;
+            Console.Error.WriteLine($"[viewport] bead ambient occlusion unavailable: {ex.Message}");
+        }
 
         // Default 1x1 grey layer texture used before any slice has been run.
         _layerColorTexDefault = GL.GenTexture();
@@ -1393,10 +1537,18 @@ public sealed class SceneRenderer : IDisposable
         }
 
         // Draw toolpaths after meshes so the polygon-offset pass has written depth first.
+        // SDF view redirects beads into a g-buffer so the IceSL SSAO pass can
+        // darken grooves, then composites them back with the scene depth.
+        bool sdfAo = ShowSdfBead && _beadAoShader is not null && _beadCompositeShader is not null
+            && _beadFbo != 0 && !SlicePlaneViewerActive;
+        if (sdfAo)
+            BeginBeadGBuffer(viewportWidth, viewportHeight);
+        BeadAoClip(out float aoNear, out float aoFar);
         foreach (var (tpNode, entry) in _toolpaths)
         {
             if (!tpNode.Visible) continue;
-            var toolpathMvp = tpNode.LocalTransform * mvp;
+            var draw = ToolpathDraw(tpNode);
+            var toolpathMvp = draw * mvp;
             bool isSelected = IsToolpathHighlighted(tpNode);
             // Sticky scrub / edit mode: apply the layer window to the scrubbed
             // toolpath even when the mesh (or another node) is the selection.
@@ -1404,7 +1556,7 @@ public sealed class SceneRenderer : IDisposable
                 && (isSelected
                     || (ToolpathActiveScrubNode is not null
                         && ReferenceEquals(tpNode, ToolpathActiveScrubNode)));
-            var eyeLocal = (new Vector4(Camera.Eye, 1f) * tpNode.LocalTransform.Inverted()).Xyz;
+            var eyeLocal = (new Vector4(Camera.Eye, 1f) * draw.Inverted()).Xyz;
 
             // 2D Slice Plane Viewer: ALWAYS multi-pass only — ignore sim-progress and the
             // dual-slider full window (those stacked every layer into a solid blob when
@@ -1433,12 +1585,18 @@ public sealed class SceneRenderer : IDisposable
             if (ToolpathSimProgress >= 0f)
                 scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
 
+            if (ShowSdfBead)
+            {
+                var drawView = draw * view;
+                entry.Renderer.SetSdfOcclusionCamera(drawView, aoNear, aoFar, sdfAo);
+            }
+
             entry.Renderer.Draw(toolpathMvp, selected: isSelected || ToolpathFullAppearance,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
                 showLightning: ShowLightningMoves,
                 showWipe: ShowWipeMoves,
                 showZHop: ShowZHopMoves,
-                showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
+                showSeam: ShowSeam, showBead: ShowBead, showSdfBead: ShowSdfBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
                 scrubIndex: scrub,
                 eyeLocal: eyeLocal, lineOpacity: ToolpathLineOpacity,
@@ -1447,6 +1605,8 @@ public sealed class SceneRenderer : IDisposable
                 showDepthLines: ShowDepthAwareLines,
                 viewportW: _viewportWidthPx, viewportH: _viewportHeightPx);
         }
+        if (sdfAo)
+            FinishBeadAo(viewportWidth, viewportHeight);
 
         // Slice measurement grid AFTER toolpaths so centre-lines stay readable and
         // alpha blends over the dark backdrop (not under opaque white lines).
@@ -1543,7 +1703,7 @@ public sealed class SceneRenderer : IDisposable
                 foreach (var (tpNode, entry) in _toolpaths)
                 {
                     if (!tpNode.Visible) continue;
-                    var tpMvp = tpNode.LocalTransform * mvp;
+                    var tpMvp = ToolpathDraw(tpNode) * mvp;
                     entry.Renderer.DrawCavityPunch(tpMvp,
                         lines: ShowExtrusionMoves || ShowTravelMoves || ShowLightningMoves || ShowWipeMoves,
                         bead: ShowBead);
@@ -2355,6 +2515,8 @@ public sealed class SceneRenderer : IDisposable
         _toolpaths.Clear();
         _maskShader?.Dispose();
         _compositeShader?.Dispose();
+        _beadAoShader?.Dispose();
+        _beadCompositeShader?.Dispose();
         if (_layerColorTex != 0)        GL.DeleteTexture(_layerColorTex);
         if (_layerColorTexDefault != 0) GL.DeleteTexture(_layerColorTexDefault);
         if (_layerBoundaryTex != 0)     GL.DeleteTexture(_layerBoundaryTex);
@@ -2702,6 +2864,11 @@ public sealed class SceneRenderer : IDisposable
             AttachNormalFbo(_sceneNormalTex, _sceneDepthTex);
         }
 
+        if (_beadAoShader is not null && _beadCompositeShader is not null)
+            EnsureBeadAoTargets(w, h);
+        else
+            DestroyBeadAoTargets();
+
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         GL.BindTexture(TextureTarget.Texture2D, 0);
 
@@ -2718,6 +2885,7 @@ public sealed class SceneRenderer : IDisposable
 
     private void DestroyFbos()
     {
+        DestroyBeadAoTargets();
         if (_fboWidth == 0) return;
         GL.Finish();
         GL.DeleteFramebuffer(_sceneFbo);
@@ -2728,6 +2896,192 @@ public sealed class SceneRenderer : IDisposable
         GL.DeleteTexture(_sceneNormalTex);
         GL.DeleteTexture(_maskColorTex);
         _fboWidth = _fboHeight = 0;
+    }
+
+    /// <summary>
+    /// Depth window for IceSL's deposition occlusion factor of 1000.
+    /// IceSL's own near and far were not recovered. This camera's far plane is 100 m,
+    /// and 1000 times a millimetre groove over that range is invisible.
+    /// The band around the focus is a viewport choice so that factor can see bead
+    /// grooves. The SDF menu stores its width. 1000 mm is the default. It is not an IceSL constant.
+    /// </summary>
+    private void BeadAoClip(out float zNear, out float zFar)
+    {
+        float eyeDist = Vector3.Distance(Camera.Eye, Camera.Target);
+        float half = Math.Clamp(SdfAoDepthMm, 200f, 8000f) * 0.5f;
+        zNear = MathF.Max(0.1f, eyeDist - half);
+        zFar = eyeDist + half;
+    }
+
+    private static void ClampColorTexture(int tex)
+    {
+        GL.BindTexture(TextureTarget.Texture2D, tex);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS,
+                        (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
+                        (int)TextureWrapMode.ClampToEdge);
+    }
+
+    private void EnsureBeadAoTargets(int w, int h)
+    {
+        DestroyBeadAoTargets();
+        _beadFbo = GL.GenFramebuffer();
+        _beadShadeFbo = GL.GenFramebuffer();
+        _beadColorTex = GL.GenTexture();
+        _beadZTex = GL.GenTexture();
+        _beadShadeTex = GL.GenTexture();
+        _beadDepthTex = CreateDepthTexture(w, h);
+        InitColorTexture(_beadColorTex, w, h, linearFilter: false);
+        InitColorTexture(_beadZTex, w, h, linearFilter: false);
+        InitColorTexture(_beadShadeTex, w, h, linearFilter: false);
+        ClampColorTexture(_beadColorTex);
+        ClampColorTexture(_beadZTex);
+        ClampColorTexture(_beadShadeTex);
+
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _beadFbo);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                FramebufferAttachment.ColorAttachment0,
+                                TextureTarget.Texture2D, _beadColorTex, 0);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                FramebufferAttachment.ColorAttachment1,
+                                TextureTarget.Texture2D, _beadZTex, 0);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                FramebufferAttachment.DepthStencilAttachment,
+                                TextureTarget.Texture2D, _beadDepthTex, 0);
+        GL.DrawBuffers(BeadDrawBuffers.Length, BeadDrawBuffers);
+        var beadStatus = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _beadShadeFbo);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                FramebufferAttachment.ColorAttachment0,
+                                TextureTarget.Texture2D, _beadShadeTex, 0);
+        var shadeStatus = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        if (beadStatus == FramebufferErrorCode.FramebufferComplete
+            && shadeStatus == FramebufferErrorCode.FramebufferComplete)
+            return;
+
+        Console.Error.WriteLine(
+            $"[viewport] bead ambient occlusion targets incomplete: bead={beadStatus} shade={shadeStatus}");
+        DestroyBeadAoTargets();
+    }
+
+    private void DestroyBeadAoTargets()
+    {
+        if (_beadFbo == 0 && _beadShadeFbo == 0 && _beadColorTex == 0 && _beadDepthTex == 0)
+            return;
+
+        GL.Finish();
+        if (_beadFbo != 0)
+        {
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _beadFbo);
+            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                    FramebufferAttachment.ColorAttachment0,
+                                    TextureTarget.Texture2D, 0, 0);
+            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                    FramebufferAttachment.ColorAttachment1,
+                                    TextureTarget.Texture2D, 0, 0);
+            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                    FramebufferAttachment.DepthStencilAttachment,
+                                    TextureTarget.Texture2D, 0, 0);
+        }
+        if (_beadShadeFbo != 0)
+        {
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _beadShadeFbo);
+            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                    FramebufferAttachment.ColorAttachment0,
+                                    TextureTarget.Texture2D, 0, 0);
+        }
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        GL.Finish();
+
+        if (_beadFbo != 0) GL.DeleteFramebuffer(_beadFbo);
+        if (_beadShadeFbo != 0) GL.DeleteFramebuffer(_beadShadeFbo);
+        if (_beadColorTex != 0) GL.DeleteTexture(_beadColorTex);
+        if (_beadZTex != 0) GL.DeleteTexture(_beadZTex);
+        if (_beadDepthTex != 0) GL.DeleteTexture(_beadDepthTex);
+        if (_beadShadeTex != 0) GL.DeleteTexture(_beadShadeTex);
+        _beadFbo = _beadShadeFbo = 0;
+        _beadColorTex = _beadZTex = _beadDepthTex = _beadShadeTex = 0;
+    }
+
+    private void BeginBeadGBuffer(int w, int h)
+    {
+        GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _sceneFbo);
+        GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _beadFbo);
+        GL.BlitFramebuffer(0, 0, w, h, 0, 0, w, h,
+            ClearBufferMask.DepthBufferBit, BlitFramebufferFilter.Nearest);
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _beadFbo);
+        GL.DrawBuffers(BeadDrawBuffers.Length, BeadDrawBuffers);
+        GL.Viewport(0, 0, w, h);
+        GL.Disable(EnableCap.Blend);
+        GL.Enable(EnableCap.DepthTest);
+        GL.DepthFunc(DepthFunction.Less);
+        GL.DepthMask(true);
+        GL.ColorMask(true, true, true, true);
+        GL.ClearColor(0f, 0f, 0f, 0f);
+        GL.Clear(ClearBufferMask.ColorBufferBit);
+    }
+
+    private void FinishBeadAo(int w, int h)
+    {
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _beadShadeFbo);
+        GL.Viewport(0, 0, w, h);
+        GL.Disable(EnableCap.DepthTest);
+        GL.Disable(EnableCap.Blend);
+        GL.Disable(EnableCap.CullFace);
+        GL.ClearColor(0f, 0f, 0f, 0f);
+        GL.Clear(ClearBufferMask.ColorBufferBit);
+
+        _beadAoShader!.Use();
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, _beadColorTex);
+        _beadAoShader.SetInt("uColor", 0);
+        GL.ActiveTexture(TextureUnit.Texture1);
+        GL.BindTexture(TextureTarget.Texture2D, _beadZTex);
+        _beadAoShader.SetInt("uZ", 1);
+        _beadAoShader.SetVector2("uSize", new Vector2(w, h));
+        _beadAoShader.SetFloat("uOcc", Math.Clamp(SdfAoStrength, 0f, 1000f));
+        _beadAoShader.SetFloat("uFloor", Math.Clamp(SdfAoFloor, 0.1f, 1f));
+        _beadAoShader.SetInt("uRadius", Math.Clamp(SdfAoRadius, 0, 10));
+        GL.BindVertexArray(_fsqVao);
+        GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
+
+        // The g-buffer pass already kept only beads in front of the scene.
+        // A second Less test against the sampled depth drops those pixels when
+        // the 24-bit depth rounds one step farther, so write depth without testing.
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFbo);
+        GL.Disable(EnableCap.DepthTest);
+        GL.DepthMask(true);
+        GL.Disable(EnableCap.Blend);
+        _beadCompositeShader!.Use();
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, _beadShadeTex);
+        _beadCompositeShader.SetInt("uBead", 0);
+        GL.ActiveTexture(TextureUnit.Texture1);
+        GL.BindTexture(TextureTarget.Texture2D, _beadDepthTex);
+        _beadCompositeShader.SetInt("uDepth", 1);
+        GL.BindVertexArray(_fsqVao);
+        GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
+        GL.BindVertexArray(0);
+
+        GL.ActiveTexture(TextureUnit.Texture1);
+        GL.BindTexture(TextureTarget.Texture2D, 0);
+        GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, 0);
+
+        bool arctic = _shaderMode == ShaderMode.Arctic;
+        var bg = DarkMattePresentation ? DarkMatteBackground
+               : arctic ? ArcticShaderBackground
+               : DarkShaderBackground;
+        GL.ClearColor(bg.X, bg.Y, bg.Z, 1f);
+        GL.Enable(EnableCap.Blend);
+        GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        GL.Enable(EnableCap.CullFace);
+        GL.Enable(EnableCap.DepthTest);
+        GL.DepthFunc(DepthFunction.Less);
+        GL.DepthMask(true);
     }
 
     // -- Fullscreen quad -------------------------------------------------------

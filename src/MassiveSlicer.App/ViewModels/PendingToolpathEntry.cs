@@ -53,4 +53,16 @@ public sealed class PendingToolpathEntry
     /// it 179mm off, and it grew every time the part was resized again.
     /// </remarks>
     public bool RebaseToFreshCentroid { get; init; }
+
+    /// <summary>
+    /// Table angle when a rotary mill path was raycast. Draw spin is live E1 minus this
+    /// so the line stays on the mesh. Null uses the E1 at GPU upload.
+    /// </summary>
+    public float? RotaryE1AtGenerate { get; init; }
+
+    /// <summary>World centre used to unwind E1 hits. The draw rewind must use this same point.</summary>
+    public System.Numerics.Vector3? RotaryCenter { get; init; }
+
+    /// <summary>Rotary pivot world matrix at the raycast. Later frames map the path with this.</summary>
+    public Matrix4? RotaryWorldAtGenerate { get; init; }
 }

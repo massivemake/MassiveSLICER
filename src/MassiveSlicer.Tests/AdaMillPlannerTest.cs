@@ -88,9 +88,56 @@ public sealed class AdaMillPlannerTest
     [Fact]
     public void MultiAxisFinishing_covers_the_box()
     {
+        var info = MillOperationInfo.Find(MillOperationKind.MultiAxisFinishing);
+        Assert.Equal("Multi-axis finishing", info!.DisplayName);
+
         var tp = AdaMillPlanner.Generate(BoxReq(MillOperationKind.MultiAxisFinishing));
-        Assert.True(MillCuts(tp) > 0);
+        var cuts = tp.Layers.SelectMany(l => l.Moves).Where(m => m.Kind == MoveKind.Mill).ToList();
+        Assert.True(cuts.Count > 4, $"mill cuts={cuts.Count}");
+        Assert.Contains(cuts, m => m.Normal.X * m.Normal.X + m.Normal.Y * m.Normal.Y > 0.2f);
     }
+
+    [Fact]
+    public void MultiAxisFinishing_offsets_an_open_sheet_in_from_the_boundary()
+    {
+        const int n = 5;
+        const float pitch = 10f;
+        var pos = new Vector3[n * n];
+        var nrm = new Vector3[n * n];
+        for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+        {
+            pos[y * n + x] = new(x * pitch, y * pitch, 0);
+            nrm[y * n + x] = Vector3.UnitZ;
+        }
+
+        var idx = new List<int>();
+        for (int y = 0; y < n - 1; y++)
+        for (int x = 0; x < n - 1; x++)
+        {
+            int i = y * n + x;
+            idx.Add(i); idx.Add(i + 1); idx.Add(i + n);
+            idx.Add(i + 1); idx.Add(i + n + 1); idx.Add(i + n);
+        }
+
+        var settings = Base(MillOperationKind.MultiAxisFinishing);
+        settings.StepoverMm = 8;
+        var tp = AdaMillPlanner.Generate(new AdaMillRequest
+        {
+            Settings = settings,
+            Positions = pos,
+            Normals = nrm,
+            Indices = idx.ToArray(),
+        });
+
+        var cuts = tp.Layers.SelectMany(l => l.Moves).Where(m => m.Kind == MoveKind.Mill).ToList();
+        Assert.True(cuts.Count > 4, $"mill cuts={cuts.Count}");
+        Assert.Contains(cuts, m => Inset(m.From) && Inset(m.To));
+        Assert.All(cuts, m => Assert.True(m.Normal.Z > 0.8f, $"normal {m.Normal}"));
+        Assert.All(cuts, m => Assert.True(MathF.Abs(m.From.Z) < 0.5f && MathF.Abs(m.To.Z) < 0.5f));
+    }
+
+    static bool Inset(Vector3 p) => p.X > 4f && p.X < 36f && p.Y > 4f && p.Y < 36f;
 
     [Fact]
     public void Morph_emits_step_count_layers()

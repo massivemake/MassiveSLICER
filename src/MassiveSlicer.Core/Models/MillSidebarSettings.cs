@@ -78,6 +78,13 @@ public sealed class MillSidebarSettings
     public bool DrillingPeck { get; set; }
     public double DrillingPeckDepthMm { get; set; } = 2;
     public bool WaterfallMill { get; set; }
+
+    public string ProjectionShape { get; set; } = "Cylinder";
+    public double ProjectionBaseDiameterMm { get; set; } = 400;
+    public double ProjectionTopDiameterMm { get; set; } = 400;
+    public double ProjectionHeightMm { get; set; } = 300;
+    public bool ProjectionInward { get; set; }
+    public double ProjectionNormalInfluence { get; set; } = 0.35;
     public bool AllAroundMill { get; set; }
     public bool FlickEnds { get; set; }
     public bool ClearingInfill { get; set; } = true;

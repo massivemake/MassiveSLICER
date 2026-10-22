@@ -212,7 +212,7 @@ public class ScaledGcodeImporterTest
     }
 
     [Fact]
-    public void Travel_across_an_opening_follows_the_printed_wall()
+    public void Travel_across_an_opening_stays_a_travel()
     {
         const string gcode = """
             G90
@@ -229,10 +229,11 @@ public class ScaledGcodeImporterTest
             G1 X30 Y40 E0.90
             """;
         var result = ScaledGcodeImporter.Import(gcode, 100f, Vector3.Zero);
-        var travels = result.Toolpath.Layers.SelectMany(l => l.Moves).Where(m => m.Kind == MoveKind.Travel).ToList();
-        Assert.DoesNotContain(travels, m => Vector3.Distance(m.From, m.To) > 50f);
-        Assert.Contains(travels, m =>
-            MathF.Abs(m.To.Y - m.From.Y) < 0.2f && MathF.Abs(m.To.X - m.From.X) > 20f);
+        var moves = result.Toolpath.Layers.SelectMany(l => l.Moves).ToList();
+        var travels = moves.Where(m => m.Kind == MoveKind.Travel).ToList();
+        Assert.Contains(travels, m => Vector3.Distance(m.From, m.To) > 50f);
+        Assert.DoesNotContain(moves.Where(m => m.Kind == MoveKind.Extrude),
+            m => Vector3.Distance(m.From, m.To) > 45f);
         Assert.Equal(0.8f, result.BeadWidthMm, 2);
         Assert.Equal(0.8f, result.Toolpath.BeadWidthMm, 2);
     }

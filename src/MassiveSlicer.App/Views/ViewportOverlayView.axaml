@@ -57,6 +57,79 @@
                 <Button Classes="ViewPill" Content="Preview"
                         Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Preview}"
                         Command="{Binding SetViewModeCommand}" CommandParameter="Preview"/>
+                <StackPanel Orientation="Horizontal" Spacing="0">
+                    <Button Classes="ViewPill" Content="SDF"
+                            Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=SDF}"
+                            Command="{Binding SetViewModeCommand}" CommandParameter="SDF"
+                            ToolTip.Tip="Rounded deposited bead. Width by layer height, with rounded corners and end caps."/>
+                    <Button Classes="SdfAoCaret" ToolTip.Tip="Advanced viewing options for the SDF bead">
+                        <ia:Icon Value="mdi-chevron-down" FontSize="13"
+                                 Foreground="{DynamicResource TextSecondary}"/>
+                        <Button.Flyout>
+                            <Flyout Placement="BottomEdgeAlignedRight">
+                                <StackPanel Width="260" Spacing="7" Margin="2">
+                                    <TextBlock Text="ADVANCED VIEWING" Classes="LabelMuted"
+                                               FontSize="10" LetterSpacing="1"/>
+                                    <TextBlock Text="Ambient occlusion" FontSize="12" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextPrimary}"/>
+                                    <Grid ColumnDefinitions="*,118,36" RowDefinitions="Auto,Auto,Auto,Auto">
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Strength" FontSize="11"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextSecondary}"
+                                                   ToolTip.Tip="IceSL uses 1000. Lower leaves grooves lighter. 0 turns the darkening off."/>
+                                        <Slider Grid.Row="0" Grid.Column="1" Minimum="0" Maximum="1000"
+                                                TickFrequency="50" IsSnapToTickEnabled="True"
+                                                Value="{Binding SdfAoStrength, Mode=TwoWay}"
+                                                Margin="6,0" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="2" FontSize="11" TextAlignment="Right"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding SdfAoStrength, StringFormat={}{0:0}}"/>
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Radius" FontSize="11"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextSecondary}"
+                                                   ToolTip.Tip="Samples on each side of a pixel. IceSL uses 10, a 21 by 21 window. 0 samples only the pixel itself."/>
+                                        <Slider Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="10"
+                                                TickFrequency="1" IsSnapToTickEnabled="True"
+                                                Value="{Binding SdfAoRadius, Mode=TwoWay}"
+                                                Margin="6,0" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="2" FontSize="11" TextAlignment="Right"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding SdfAoRadius, StringFormat={}{0:0}}"/>
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Floor" FontSize="11"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextSecondary}"
+                                                   ToolTip.Tip="Brightest a groove is allowed to fall to, in percent. IceSL keeps 10. 100 removes the darkening."/>
+                                        <Slider Grid.Row="2" Grid.Column="1" Minimum="10" Maximum="100"
+                                                TickFrequency="5" IsSnapToTickEnabled="True"
+                                                Value="{Binding SdfAoFloorPercent, Mode=TwoWay}"
+                                                Margin="6,0" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="2" FontSize="11" TextAlignment="Right"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding SdfAoFloorPercent, StringFormat={}{0:0}%}"/>
+
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Depth" FontSize="11"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextSecondary}"
+                                                   ToolTip.Tip="Millimetres of depth around the focus. Wider makes the same groove lighter. Default 1000. This window is not an IceSL value."/>
+                                        <Slider Grid.Row="3" Grid.Column="1" Minimum="200" Maximum="8000"
+                                                TickFrequency="100" IsSnapToTickEnabled="True"
+                                                Value="{Binding SdfAoDepthMm, Mode=TwoWay}"
+                                                Margin="6,0" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="2" FontSize="11" TextAlignment="Right"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding SdfAoDepthMm, StringFormat={}{0:0}}"/>
+                                    </Grid>
+                                    <Button Content="Reset" HorizontalAlignment="Right"
+                                            Classes="ToolbarButton" Padding="10,3" FontSize="11"
+                                            Command="{Binding ResetSdfAoCommand}"
+                                            ToolTip.Tip="Restore IceSL strength, radius, and floor, and the 1000 mm depth window."/>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
             </StackPanel>
         </Border>
         </Grid>
@@ -1661,9 +1734,8 @@
                     <StackPanel x:Name="ScrubPlayControls" Grid.Column="0" Orientation="Horizontal" Spacing="4"
                                 VerticalAlignment="Center" Margin="0,0,8,0">
                         <Button Classes="ToolbarButton"
-                                IsEnabled="{Binding !IsValidating}"
                                 Command="{Binding TogglePlaybackCommand}"
-                                ToolTip.Tip="Play / pause simulation (Space)"
+                                ToolTip.Tip="Play / pause the preview. Collisions and reachability marks stay on the timeline and do not block playback."
                                 Padding="6,4">
                             <Panel>
                                 <ia:Icon Value="mdi-play"  FontSize="16" IsVisible="{Binding !IsPlaying}"/>
@@ -1679,7 +1751,7 @@
                         <Button Classes="ToolbarButton" Padding="6,4"
                                 IsVisible="{Binding ShowTcpHelpers}"
                                 Command="{Binding AddTcpKeyframeCommand}"
-                                ToolTip.Tip="Add a TCP keyframe at this moment — drag the TCP first (or click to pin the nominal position). The offset eases in/out over nearby moves.">
+                                ToolTip.Tip="Add a keyframe at this moment. Drag the TCP to save a position offset, then set Toolhead global orientation — Y/X/Z is stored on this key and eases into the next keyframe or back to the unkeyed orientation.">
                             <ia:Icon Value="mdi-key-plus" FontSize="15"/>
                         </Button>
                         <Button Classes="ToolbarButton" Padding="6,4"
@@ -1693,7 +1765,9 @@
                                    FontSize="10"
                                    VerticalAlignment="Center"
                                    Margin="6,0,0,0"
-                                   MinWidth="110"
+                                   Width="168"
+                                   TextAlignment="Left"
+                                   TextTrimming="CharacterEllipsis"
                                    IsVisible="{Binding ToolpathScrubSpeedRpmLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                                    ToolTip.Tip="Linear speed and extruder RPM of the current move — the same $VEL.CP and $ANOUT[4] values the KRL export writes"/>
                     </StackPanel>
@@ -1731,7 +1805,7 @@
 
                     <!-- Move counter + analysing indicator + video export -->
                     <StackPanel x:Name="ScrubRightControls" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0" Spacing="6">
-                    <StackPanel VerticalAlignment="Center" Spacing="2">
+                    <StackPanel VerticalAlignment="Center" Spacing="2" Width="132">
                         <TextBlock IsVisible="{Binding IsValidating}"
                                    Text="Analysing…"
                                    Foreground="{DynamicResource TextSecondary}"
@@ -1740,6 +1814,7 @@
                         <StackPanel Orientation="Horizontal" Spacing="2">
                             <TextBox Text="{Binding ToolpathScrubText}"
                                      Classes="ScrubInput"
+                                     Width="52"
                                      ToolTip.Tip="Type a move number and press Enter"/>
                             <TextBlock Text="{Binding ToolpathScrubMaxLabel}"
                                        Classes="Readout"

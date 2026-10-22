@@ -796,6 +796,31 @@ public sealed partial class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "tcpkey",
+            Description = "Timeline keyframe at the scrub index. Later toolhead Y/X/Z edits save on that key and ease into the next key or the unkeyed orientation.",
+            Usage = "tcpkey <add|clear>",
+            Execute = (ctx, args) =>
+            {
+                var vp = ctx.Main.Viewport;
+                switch (args.Trim().ToLowerInvariant())
+                {
+                    case "add":
+                        vp.AddTcpKeyframeCommand.Execute(null);
+                        ctx.Log($"[tcpkey] add at move {vp.ToolpathScrubIndex}  ({vp.ScrubKeyframeMarkers.Count} key(s)). Set mill y/x/z to store that orientation on the selected key.");
+                        break;
+                    case "clear":
+                        vp.ClearTcpKeyframesCommand.Execute(null);
+                        ctx.Log("[tcpkey] cleared");
+                        break;
+                    default:
+                        ctx.LogError("[tcpkey] add | clear");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "simkey",
             Description = "Sim-timeline camera keyframes: add at current %, clear, or list",
             Usage = "simkey <add|clear|list>",
@@ -1157,7 +1182,7 @@ public sealed partial class ConsoleCommandRegistry
                         }
                         else
                         {
-                            ctx.LogError("[mill] op: MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf|Morph");
+                            ctx.LogError("[mill] op: MultiAxisFinishing|Drilling|PlanarFacing|Projection|Cutout|Contouring|Swarf|Morph");
                         }
                         break;
                     }

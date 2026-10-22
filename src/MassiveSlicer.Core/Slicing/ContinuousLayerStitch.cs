@@ -118,17 +118,11 @@ public static class ContinuousLayerStitch
                         if (UnusedAt(i)) { start = i; break; }
                 }
                 if (start < 0) break;
-                var edges = Euler(start);
-                if (edges.Count == 0) break;
-                var moves = new List<ToolpathMove>(edges.Count);
-                int at = start;
-                foreach (int ei in edges)
-                {
-                    var edge = _edges[ei];
-                    int next = edge.A == at ? edge.B : edge.A;
-                    moves.Add(Orient(edge.Move, _nodes[at], _nodes[next]));
-                    at = next;
-                }
+                var steps = Walk(start);
+                if (steps.Count == 0) break;
+                var moves = new List<ToolpathMove>(steps.Count);
+                foreach (var (ei, from, to) in steps)
+                    moves.Add(Orient(_edges[ei].Move, _nodes[from], _nodes[to]));
                 if (moves.Count > 0) trails.Add(moves);
             }
             return trails;
@@ -247,28 +241,23 @@ public static class ContinuousLayerStitch
             return true;
         }
 
-        List<int> Euler(int start)
+        List<(int Edge, int From, int To)> Walk(int start)
         {
-            var stack = new Stack<(int Node, int Via)>();
-            var taken = new List<int>();
-            stack.Push((start, -1));
-            while (stack.Count > 0)
+            var tour = new List<(int Edge, int From, int To)>();
+            void Dfs(int u)
             {
-                var (u, via) = stack.Peek();
-                int ei = Take(u);
-                if (ei >= 0)
+                while (true)
                 {
+                    int ei = Take(u);
+                    if (ei < 0) break;
                     int v = _edges[ei].A == u ? _edges[ei].B : _edges[ei].A;
-                    stack.Push((v, ei));
-                }
-                else
-                {
-                    stack.Pop();
-                    if (via >= 0) taken.Add(via);
+                    Dfs(v);
+                    tour.Add((ei, u, v));
                 }
             }
-            taken.Reverse();
-            return taken;
+            Dfs(start);
+            tour.Reverse();
+            return tour;
         }
 
         int Take(int node)
@@ -318,7 +307,11 @@ public static class ContinuousLayerStitch
 
         int Node(Vector2 p)
         {
-            long key = ((long)MathF.Round(p.X * 20f) << 32) ^ (uint)MathF.Round(p.Y * 20f);
+            // Cast through int. (uint) of a negative float is 0, which welded every
+            // point below Y = 0 that shared an X into one vertex and drew a chord.
+            int ix = (int)MathF.Round(p.X * 20f);
+            int iy = (int)MathF.Round(p.Y * 20f);
+            long key = ((long)ix << 32) | (uint)iy;
             if (_weld.TryGetValue(key, out int id)) return id;
             id = AddNode(p);
             _weld[key] = id;

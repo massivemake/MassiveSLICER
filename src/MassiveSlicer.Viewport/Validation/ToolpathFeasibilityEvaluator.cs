@@ -67,7 +67,10 @@ public static class ToolpathFeasibilityEvaluator
         NVec3 OriginColl,
         float BeadWidthColl,
         TkVector3 Robroot,
-        IReadOnlyList<JointConfig>? Joints = null);
+        IReadOnlyList<JointConfig>? Joints = null,
+        float[]? MoveOffsetA = null,
+        float[]? MoveOffsetB = null,
+        float[]? MoveOffsetC = null);
 
     /// <summary>
     /// Sequential keypoint stride. Adjacent print moves are 1–6 mm; a 256-move jump is
@@ -233,8 +236,10 @@ public static class ToolpathFeasibilityEvaluator
         var e1PerMove = new float[total];
         var targets   = new TkVector3[total];
         var normals   = new TkVector3[total];
+        var yaws      = new float[total];
         int mi        = 0;
         var lastNormN = NVec3.UnitZ; // last valid extrude normal; held through transitions
+        float lastYaw = 0f;
         var railCfg   = input.Rail;
         foreach (var layer in toolpath.Layers)
         {
@@ -270,7 +275,9 @@ public static class ToolpathFeasibilityEvaluator
                 {
                     effNorm   = move.Normal.LengthSquared() > 1e-6f ? move.Normal : NVec3.UnitZ;
                     lastNormN = effNorm;
+                    lastYaw   = move.TcpYawDeg;
                 }
+                yaws[mi] = lastYaw;
                 float nx = effNorm.X, ny = effNorm.Y, nz = effNorm.Z;
                 normals[mi] = TkVector3.Normalize(new TkVector3(
                     nx * wt.M11 + ny * wt.M21 + nz * wt.M31,
@@ -282,12 +289,28 @@ public static class ToolpathFeasibilityEvaluator
 
         if (ct.IsCancellationRequested) return null;
 
+        // Per-move toolhead keyframes when the timeline has them. Otherwise the
+        // single slider value, including mill — scrub already applies Y/X/Z and
+        // play interpolates these solutions, so the pass has to match.
+        var moveA = input.MoveOffsetA;
+        var moveB = input.MoveOffsetB;
+        var moveC = input.MoveOffsetC;
+        var offAs = new float[total];
+        var offBs = new float[total];
+        var offCs = new float[total];
+        for (int i = 0; i < total; i++)
+        {
+            offAs[i] = moveA is not null && (uint)i < (uint)moveA.Length ? moveA[i] : offA;
+            offBs[i] = moveB is not null && (uint)i < (uint)moveB.Length ? moveB[i] : offB;
+            offCs[i] = moveC is not null && (uint)i < (uint)moveC.Length ? moveC[i] : offC;
+        }
+
         var targetRots = new (TkVector3 r0, TkVector3 r1, TkVector3 r2)[total];
         for (int i = 0; i < total; i++)
         {
             targetRots[i] = millPath
-                ? solver.TargetRotFromMillNormal(normals[i])
-                : solver.TargetRotFromGlobalOrientation(normals[i], offA, offB, offC);
+                ? solver.TargetRotFromMillNormal(normals[i], yaws[i], offAs[i], offBs[i], offCs[i])
+                : solver.TargetRotFromGlobalOrientation(normals[i], offAs[i], offBs[i], offCs[i]);
         }
 
         if (ct.IsCancellationRequested) return null;
@@ -390,7 +413,7 @@ public static class ToolpathFeasibilityEvaluator
 
                 const int   Ramp  = 60;   // moves over which yaw ramps in/out
                 const float MinA5 = 6f;   // deg of wrist margin required
-                var yawByMove = new float[total];
+                var yawByMove = new float[total]; // extra spin on top of the move yaw
                 bool Bad(int i) => !result[i] || singularity[i];
 
                 int s0 = 0;
@@ -412,9 +435,9 @@ public static class ToolpathFeasibilityEvaluator
                             foreach (int ti in new[] { s0, (s0 + s1) / 2, s1 })
                             {
                                 var rot = millPath
-                                    ? solver.TargetRotFromMillNormal(normals[ti], y)
+                                    ? solver.TargetRotFromMillNormal(normals[ti], yaws[ti] + y, offAs[ti], offBs[ti], offCs[ti])
                                     : solver.TargetRotFromGlobalOrientation(
-                                        normals[ti], offA, offB, offC + y);
+                                        normals[ti], offAs[ti], offBs[ti], offCs[ti] + y);
                                 var sol = solver.Solve(targets[ti],
                                     solutions[Math.Max(0, ti - 1)], rot, maxIterations: 60);
                                 if (sol is null || MathF.Abs(sol[4]) < MinA5) { ok = false; break; }
@@ -442,9 +465,9 @@ public static class ToolpathFeasibilityEvaluator
                         for (int i = rIn; i <= rOut; i++)
                         {
                             var rot = millPath
-                                ? solver.TargetRotFromMillNormal(normals[i], yawByMove[i])
+                                ? solver.TargetRotFromMillNormal(normals[i], yaws[i] + yawByMove[i], offAs[i], offBs[i], offCs[i])
                                 : solver.TargetRotFromGlobalOrientation(
-                                    normals[i], offA, offB, offC + yawByMove[i]);
+                                    normals[i], offAs[i], offBs[i], offCs[i] + yawByMove[i]);
                             var sol = solver.Solve(targets[i], chunkSeed, rot, maxIterations: 40);
                             bool inEnv = sol is not null &&
                                 (cellJoints is null || JointLimitEnvelope.JointsInside(sol, cellJoints));
@@ -459,7 +482,7 @@ public static class ToolpathFeasibilityEvaluator
                 // Bake the repair into the toolpath so KRL export writes the
                 // rotated orientations.
                 for (int i = 0; i < total; i++)
-                    flatMoves[i].TcpYawDeg = yawByMove[i];
+                    flatMoves[i].TcpYawDeg = millPath ? yaws[i] + yawByMove[i] : yawByMove[i];
             }
         }
 
@@ -623,8 +646,11 @@ public static class ToolpathFeasibilityEvaluator
             float v1   = jV[i + 1];
             float vTop = vPeak[i];
 
-            if (d < 1e-6f)  { timesMs[i] = 1f;    continue; }
-            if (vTop < 1e-6f) { timesMs[i] = 1000f; continue; }
+            // A pure table turn has no XYZ length. 1 ms used to snap E1 across
+            // the ±180 stop while the arm lerped somewhere else.
+            float rotaryMs = RotaryMoveMs(moves, i);
+            if (d < 1e-6f)  { timesMs[i] = MathF.Max(1f, rotaryMs); continue; }
+            if (vTop < 1e-6f) { timesMs[i] = MathF.Max(1000f, rotaryMs); continue; }
 
             float dAccel  = (vTop * vTop - v0 * v0) / (2f * accelMmS2);
             float dDecel  = (vTop * vTop - v1 * v1) / (2f * accelMmS2);
@@ -642,9 +668,20 @@ public static class ToolpathFeasibilityEvaluator
                 vActual = MathF.Max(vActual, MathF.Max(v0, v1));
                 t       = (vActual - v0) / accelMmS2 + (vActual - v1) / accelMmS2;
             }
-            timesMs[i] = MathF.Max(t * 1000f, 0.1f);
+            timesMs[i] = MathF.Max(t * 1000f, MathF.Max(0.1f, rotaryMs));
         }
 
         return (timesMs, vPeak);
+    }
+
+    /// <summary>LFAM 3 rotary is degrees. 40°/s keeps a rewind inside the play clock.</summary>
+    const float RotaryDegPerSec = 40f;
+
+    static float RotaryMoveMs(List<ToolpathMove> moves, int i)
+    {
+        float e1 = moves[i].E1Mm;
+        float prev = i > 0 ? moves[i - 1].E1Mm : e1;
+        if (float.IsNaN(e1) || float.IsNaN(prev)) return 0f;
+        return MathF.Abs(e1 - prev) / RotaryDegPerSec * 1000f;
     }
 }

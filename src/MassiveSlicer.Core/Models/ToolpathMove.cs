@@ -125,4 +125,14 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     /// Filled by reachability-aware rail planning before KRL export.
     /// </summary>
     public float E1Mm { get; set; } = float.NaN;
+
+    /// <summary>
+    /// Toolhead global orientation saved by a timeline keyframe, degrees.
+    /// A is Z, B is Y, C is X — the same axes as the TOOLHEAD GLOBAL ORIENTATION sliders.
+    /// Null uses the export-wide toolhead offset. Set on the scrubbed path so play and
+    /// KRL ease from one key into the next, or back to the non-keyed orientation.
+    /// </summary>
+    public float? KeyframeToolheadA { get; set; }
+    public float? KeyframeToolheadB { get; set; }
+    public float? KeyframeToolheadC { get; set; }
 }

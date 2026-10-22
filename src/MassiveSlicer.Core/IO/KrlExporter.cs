@@ -776,10 +776,8 @@ public static class KrlExporter
                     var (ma, mb, mc) = move.IsLayerStitch
                         ? lastAbc
                         : effectiveNormal.LengthSquared() > 1e-6f
-                            ? KukaAbc(effectiveNormal, s, move.TcpYawDeg)
-                            : move.TcpYawDeg != 0f
-                                ? KukaAbc(layer.PlaneNormal, s, move.TcpYawDeg)
-                                : (la, lb, lc);
+                            ? KukaAbc(effectiveNormal, s, move.TcpYawDeg, move)
+                            : KukaAbc(layer.PlaneNormal, s, move.TcpYawDeg, move);
 
                     if (move.IsWipe)
                     {
@@ -1398,23 +1396,30 @@ public static class KrlExporter
     /// Computes KUKA A/B/C (ZYX Euler, degrees) for the given slice plane normal.
     /// Delegates to <see cref="KukaOrientation.AbcFromNormal"/> (shared with MassiveDRIVE export).
     /// </summary>
-    private static (float a, float b, float c) KukaAbc(Vector3 normal, KrlExportSettings s, float tcpYawDeg = 0f)
-        => KukaOrientation.AbcFromNormal(
-            normal,
-            s.ToolheadOffsetA,
-            s.ToolheadOffsetB,
-            s.ToolheadOffsetC,
-            tcpYawDeg);
+    private static (float a, float b, float c) KukaAbc(
+        Vector3 normal, KrlExportSettings s, float tcpYawDeg = 0f, ToolpathMove? move = null)
+    {
+        var (oa, ob, oc) = ToolheadOf(move, s.ToolheadOffsetA, s.ToolheadOffsetB, s.ToolheadOffsetC);
+        return KukaOrientation.AbcFromNormal(normal, oa, ob, oc, tcpYawDeg);
+    }
+
+    private static (float a, float b, float c) ToolheadOf(
+        ToolpathMove? move, float a, float b, float c)
+        => move is null
+            ? (a, b, c)
+            : (move.KeyframeToolheadA ?? a, move.KeyframeToolheadB ?? b, move.KeyframeToolheadC ?? c);
 
     /// <summary>Mill LIN ABC: cutter (tool Z) along −surface normal, not the extruder X-approach.</summary>
     private static (float a, float b, float c) MillAbc(
         ToolpathMove move, ToolpathLayer layer, KrlExportSettings s, float fa, float fb, float fc)
     {
+        var (oa, ob, oc) = ToolheadOf(move, s.ToolheadOffsetA, s.ToolheadOffsetB, s.ToolheadOffsetC);
         var n = move.Normal != Vector3.Zero ? move.Normal : layer.PlaneNormal;
         if (n == Vector3.Zero)
-            return (fa, fb, fc);
-        return KukaOrientation.AbcFromMillNormal(
-            n, move.TcpYawDeg, s.ToolheadOffsetA, s.ToolheadOffsetB, s.ToolheadOffsetC);
+            return move.KeyframeToolheadA is null && move.KeyframeToolheadB is null && move.KeyframeToolheadC is null
+                ? (fa, fb, fc)
+                : (oa, ob, oc);
+        return KukaOrientation.AbcFromMillNormal(n, move.TcpYawDeg, oa, ob, oc);
     }
 
 

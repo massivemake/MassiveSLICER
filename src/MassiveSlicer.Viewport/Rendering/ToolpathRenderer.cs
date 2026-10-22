@@ -1,5 +1,6 @@
 using System;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Slicing;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using NVec3 = System.Numerics.Vector3;
@@ -51,6 +52,7 @@ public sealed class ToolpathRenderer : IDisposable
 
     private readonly Shader _shader;
     private readonly Shader _beadShader;
+    private readonly Shader? _sdfShader;
     private readonly Shader _pointShader;
     /// <summary>Null if geometry-shader thick lines failed to compile (fallback to GL lines).</summary>
     private readonly Shader? _depthLineShader;
@@ -321,17 +323,34 @@ void main() {
     private int[] _wipeVertexCumulative = [];
     private static readonly Vector3 LightningColor = new(1.00f, 0.58f, 0.12f);
     private int[] _beadVertexCumulative    = [];
+    private int _sdfVao, _sdfBoxVbo, _sdfIbo, _sdfInstanceVbo, _sdfInstanceCount;
+    private int[] _sdfInstanceCumulative = [];
+    private Matrix4 _sdfView = Matrix4.Identity;
+    private float _sdfZNear = 1f;
+    private float _sdfZFar = 1000f;
+    private bool _sdfGBuffer;
     private int[] _seamVertexCumulative    = [];
     private int[] _allPointVertexCumulative = [];
+    // When set, E1 station points are drawn back on the part so a table spin can carry them.
+    private NVec3? _rotaryCenter;
+    private float _rotarySign = -1f;
 
     public ToolpathRenderer(Toolpath toolpath, NVec3 origin = default,
         float beadWidth = 6f, float layerHeight = 3f, NVec3 materialColor = default,
-        Toolpath? beadToolpath = null)
+        Toolpath? beadToolpath = null,
+        NVec3? rotaryCenter = null, float rotarySign = -1f)
     {
+        _rotaryCenter = rotaryCenter;
+        _rotarySign = rotarySign;
         _toolpath   = toolpath;
         _origin     = origin;
         _shader      = new Shader(VertSrc,      FragSrc);
         _beadShader  = new Shader(BeadVertSrc,  BeadFragSrc);
+        Shader? sdfShader = null;
+        try { sdfShader = new Shader(SdfVertSrc, SdfFragSrc); }
+        catch (Exception ex)
+        { System.Console.Error.WriteLine($"[toolpath] sdf bead shader unavailable: {ex.Message}"); }
+        _sdfShader = sdfShader;
         _pointShader = new Shader(PointVertSrc, PointFragSrc);
         Shader? depthLines = null;
         try
@@ -346,6 +365,13 @@ void main() {
         Upload(toolpath, origin);
         UploadBead(beadToolpath ?? toolpath, origin, beadWidth, layerHeight,
             materialColor == NVec3.Zero ? NVec3.One : materialColor);
+    }
+
+    /// <summary>Station point drawn back onto the part. NaN E1 stays where the robot goes.</summary>
+    NVec3 Place(NVec3 p, float e1)
+    {
+        if (_rotaryCenter is not { } c || float.IsNaN(e1)) return p;
+        return ProjectionMill.OnTable(p, e1, c, _rotarySign);
     }
 
     /// <summary>
@@ -584,8 +610,8 @@ void main() {
                         color = _wipeColor;
                     else
                         color = _extrudeColor;
-                    WriteVert(move.From, color);
-                    WriteVert(move.To,   color);
+                    WriteVert(Place(move.From, move.E1Mm), color);
+                    WriteVert(Place(move.To, move.E1Mm), color);
                 }
                 mi++;
             }
@@ -770,8 +796,8 @@ void main() {
             foreach (var move in layer.Moves)
                 if (move.Kind == MoveKind.Travel && IsVerticalHop(move) == zhopOnly)
                 {
-                    WriteTr(move.From, color);
-                    WriteTr(move.To,   color);
+                    WriteTr(Place(move.From, move.E1Mm), color);
+                    WriteTr(Place(move.To, move.E1Mm), color);
                 }
 
         return trData;
@@ -938,10 +964,10 @@ void main() {
                 {
                     if (pts is null)
                     {
-                        pts = [move.From]; flats = []; hhs = [BeadHalfHeight(lh, flow, move.HeightScale)];
+                        pts = [Place(move.From, move.E1Mm)]; flats = []; hhs = [BeadHalfHeight(lh, flow, move.HeightScale)];
                         raw.Add((pts, flats, hhs, layerUp));
                     }
-                    pts.Add(move.To);
+                    pts.Add(Place(move.To, move.E1Mm));
                     flats!.Add(flatIdx);
                     hhs!.Add(BeadHalfHeight(lh, flow, move.HeightScale));
                 }
@@ -1131,6 +1157,7 @@ void main() {
         _beadCount = ii;
 
         BuildBeadVertexCumulative();
+        UploadSdf();
     }
 
     /// <summary>
@@ -1248,6 +1275,248 @@ void main() {
         return verts;
     }
 
+    // Rounded bead. Distance matches BeadSdf in the C++ tree: width by layer height,
+    // corner radius is the smaller half-extent, ends rounded by that radius.
+    // Row-vector MVP, same convention as the line shader in this file.
+    private static readonly string SdfVertSrc = """
+        #version 330 core
+        layout(location = 0) in vec3 aCorner;
+        layout(location = 1) in vec3 aA;
+        layout(location = 2) in vec3 aB;
+        layout(location = 3) in vec3 aUp;
+        layout(location = 4) in vec3 aColor;
+        layout(location = 5) in vec2 aRadii;
+        uniform mat4 uMVP;
+        uniform float uPad;
+        out vec3 vSurf;
+        flat out vec3 vCenter;
+        flat out vec3 vT;
+        flat out vec3 vR;
+        flat out vec3 vU;
+        flat out vec3 vColor;
+        flat out float vL;
+        flat out float vHw;
+        flat out float vHh;
+        void main() {
+            vec3 dir = aB - aA;
+            float L = length(dir);
+            vec3 T = L > 1e-5 ? dir / L : vec3(1.0, 0.0, 0.0);
+            vec3 U = aUp - T * dot(aUp, T);
+            if (dot(U, U) < 1e-8) {
+                vec3 helper = abs(T.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+                U = helper - T * dot(helper, T);
+            }
+            U = normalize(U);
+            vec3 R = normalize(cross(T, U));
+            float hw = aRadii.x;
+            float hh = aRadii.y;
+            float rad = min(hw, hh);
+            vec3 halfBox = vec3(L * 0.5 + rad + uPad, hw + uPad, hh + uPad);
+            vec3 center = (aA + aB) * 0.5;
+            vec3 world = center
+                + T * (aCorner.x * halfBox.x)
+                + R * (aCorner.y * halfBox.y)
+                + U * (aCorner.z * halfBox.z);
+            vSurf = world;
+            vCenter = center;
+            vT = T; vR = R; vU = U;
+            vColor = aColor;
+            vL = L; vHw = hw; vHh = hh;
+            gl_Position = vec4(world, 1.0) * uMVP;
+        }
+        """;
+
+    private static readonly string SdfFragSrc = """
+        #version 330 core
+        in vec3 vSurf;
+        flat in vec3 vCenter;
+        flat in vec3 vT;
+        flat in vec3 vR;
+        flat in vec3 vU;
+        flat in vec3 vColor;
+        flat in float vL;
+        flat in float vHw;
+        flat in float vHh;
+        uniform mat4 uMVP;
+        uniform mat4 uView;
+        uniform vec3 uCamera;
+        uniform float uPad;
+        uniform float uZNear;
+        uniform float uZFar;
+        uniform float uGBuffer;
+        uniform vec3 uBeadColor;
+        layout(location = 0) out vec4 fragColor;
+        layout(location = 1) out vec4 fragZ;
+        float sdBead(vec3 p, float L, float hw, float hh) {
+            float rad = min(hw, hh);
+            vec3 b = vec3(L * 0.5, max(hw - rad, 0.0), max(hh - rad, 0.0));
+            vec3 q = abs(p) - b;
+            return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - rad;
+        }
+        void main() {
+            vec3 rd = normalize(vSurf - uCamera);
+            float rad = min(vHw, vHh);
+            vec3 halfBox = vec3(vL * 0.5 + rad + uPad, vHw + uPad, vHh + uPad);
+            vec3 roF = vec3(dot(uCamera - vCenter, vT), dot(uCamera - vCenter, vR), dot(uCamera - vCenter, vU));
+            vec3 rdF = vec3(dot(rd, vT), dot(rd, vR), dot(rd, vU));
+            float tEnter = -1e9;
+            float tExit = 1e9;
+            for (int axis = 0; axis < 3; axis++) {
+                float o = axis == 0 ? roF.x : (axis == 1 ? roF.y : roF.z);
+                float d = axis == 0 ? rdF.x : (axis == 1 ? rdF.y : rdF.z);
+                float h = axis == 0 ? halfBox.x : (axis == 1 ? halfBox.y : halfBox.z);
+                if (abs(d) < 1e-6) { if (abs(o) > h) discard; }
+                else {
+                    float tA = (-h - o) / d;
+                    float tB = ( h - o) / d;
+                    tEnter = max(tEnter, min(tA, tB));
+                    tExit  = min(tExit,  max(tA, tB));
+                }
+            }
+            if (tExit < max(tEnter, 0.0)) discard;
+            float eps = max(0.02, rad * 0.02);
+            float t = max(tEnter, 0.0);
+            bool hit = false;
+            for (int i = 0; i < 48; i++) {
+                float dist = sdBead(roF + rdF * t, vL, vHw, vHh);
+                if (dist < eps) { hit = true; break; }
+                if (dist < 0.0) break;
+                t += dist;
+                if (t > tExit) break;
+            }
+            if (!hit) discard;
+            vec3 hitF = roF + rdF * t;
+            vec3 e = vec3(eps, 0.0, 0.0);
+            vec3 nF = normalize(vec3(
+                sdBead(hitF + e.xyy, vL, vHw, vHh) - sdBead(hitF - e.xyy, vL, vHw, vHh),
+                sdBead(hitF + e.yxy, vL, vHw, vHh) - sdBead(hitF - e.yxy, vL, vHw, vHh),
+                sdBead(hitF + e.yyx, vL, vHw, vHh) - sdBead(hitF - e.yyx, vL, vHw, vHh)));
+            vec3 n = normalize(vT * nF.x + vR * nF.y + vU * nF.z);
+            vec3 hitW = vCenter + vT * hitF.x + vR * hitF.y + vU * hitF.z;
+            vec4 clip = vec4(hitW, 1.0) * uMVP;
+            if (clip.w <= 0.0) discard;
+            gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
+            vec3 lightDir = normalize(vec3(0.6, 0.4, 1.0));
+            float diff = max(dot(n, lightDir), 0.0);
+            float fill = max(dot(n, vec3(-0.3, -0.2, -0.7)), 0.0) * 0.15;
+            vec3 lit = uBeadColor * (0.20 + diff * 0.72 + fill);
+            fragColor = vec4(mix(lit, uBeadColor, uGBuffer), 1.0);
+            float eyeZ = (vec4(hitW, 1.0) * uView).z;
+            float span = max(uZFar - uZNear, 1e-3);
+            float z = clamp((-eyeZ - uZNear) / span, 0.0, 0.999);
+            float z_h = floor(z * 256.0);
+            float z_m = floor(z * 256.0 * 256.0 - z_h * 256.0);
+            float z_l = floor(z * 256.0 * 256.0 * 256.0 - z_h * 256.0 * 256.0 - z_m * 256.0);
+            fragZ = vec4(z_h, z_m, z_l, 255.0) / 255.0;
+        }
+        """;
+
+    /// <summary>One rounded-box instance per bead-plan segment. Endpoints are stored with the same origin subtraction as the box bead.</summary>
+    private void UploadSdf()
+    {
+        _sdfInstanceCount = 0;
+        _sdfInstanceCumulative = [];
+        if (_sdfShader is null || _beadPlan.Count == 0 || _totalMoveCount == 0) return;
+
+        int n = 0;
+        foreach (var c in _beadPlan) n += Math.Max(0, c.Pts.Length - 1);
+        if (n == 0) return;
+
+        var data = new float[n * 14];
+        var firstFlat = new int[n];
+        int inst = 0;
+        int di = 0;
+        float hw = MathF.Max(_beadWidth * 0.5f, 0.05f);
+        var col = _beadMaterialColor;
+        foreach (var c in _beadPlan)
+        {
+            var up = c.Up.LengthSquared() > 1e-8f ? NVec3.Normalize(c.Up) : NVec3.UnitZ;
+            for (int j = 0; j < c.Pts.Length - 1; j++)
+            {
+                // Bead-plan points are in part space. The node transform adds _origin
+                // back, so the box bead subtracts it in EmitCorner. Do the same here.
+                var a = c.Pts[j] - _origin;
+                var b = c.Pts[j + 1] - _origin;
+                if ((b - a).LengthSquared() < 1e-8f) continue;
+                float hh = MathF.Max((c.Hh[j] + c.Hh[Math.Min(j + 1, c.Hh.Length - 1)]) * 0.5f, 0.05f);
+                data[di++] = a.X; data[di++] = a.Y; data[di++] = a.Z;
+                data[di++] = b.X; data[di++] = b.Y; data[di++] = b.Z;
+                data[di++] = up.X; data[di++] = up.Y; data[di++] = up.Z;
+                data[di++] = col.X; data[di++] = col.Y; data[di++] = col.Z;
+                data[di++] = hw; data[di++] = hh;
+                firstFlat[inst] = j < c.SegFirstFlat.Length ? c.SegFirstFlat[j] : 0;
+                inst++;
+            }
+        }
+        if (inst == 0) return;
+        if (di != data.Length) data = data[..di];
+
+        _sdfInstanceCumulative = new int[_totalMoveCount + 1];
+        int seen = 0;
+        for (int i = 1; i <= _totalMoveCount; i++)
+        {
+            while (seen < inst && firstFlat[seen] < i) seen++;
+            _sdfInstanceCumulative[i] = seen;
+        }
+        _sdfInstanceCount = inst;
+
+        float[] corners =
+        [
+            -1f, -1f, -1f,  1f, -1f, -1f,  1f, 1f, -1f,  -1f, 1f, -1f,
+            -1f, -1f,  1f,  1f, -1f,  1f,  1f, 1f,  1f,  -1f, 1f,  1f,
+        ];
+        ushort[] indices =
+        [
+            0, 3, 2, 0, 2, 1,
+            4, 5, 6, 4, 6, 7,
+            0, 4, 7, 0, 7, 3,
+            1, 2, 6, 1, 6, 5,
+            0, 1, 5, 0, 5, 4,
+            3, 7, 6, 3, 6, 2,
+        ];
+
+        _sdfVao = GL.GenVertexArray();
+        GL.BindVertexArray(_sdfVao);
+        _sdfBoxVbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _sdfBoxVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, corners.Length * sizeof(float), corners, BufferUsageHint.StaticDraw);
+        GL.EnableVertexAttribArray(0);
+        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 0, 0);
+
+        _sdfIbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ElementArrayBuffer, _sdfIbo);
+        GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Length * sizeof(ushort), indices, BufferUsageHint.StaticDraw);
+
+        _sdfInstanceVbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _sdfInstanceVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, data.Length * sizeof(float), data, BufferUsageHint.StaticDraw);
+        BindSdfInstanceAttribs(0);
+        GL.BindVertexArray(0);
+    }
+
+    /// <summary>
+    /// Points the per-segment attributes at instance <paramref name="firstInstance"/>.
+    /// The VAO must already be bound. This is the GL 4.1 stand-in for a base-instance draw.
+    /// </summary>
+    private void BindSdfInstanceAttribs(int firstInstance)
+    {
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _sdfInstanceVbo);
+        int stride = 14 * sizeof(float);
+        int baseByte = firstInstance * stride;
+        void Attrib(int location, int components, int offsetFloats)
+        {
+            GL.EnableVertexAttribArray(location);
+            GL.VertexAttribPointer(location, components, VertexAttribPointerType.Float, false, stride,
+                baseByte + offsetFloats * sizeof(float));
+            GL.VertexAttribDivisor(location, 1);
+        }
+        Attrib(1, 3, 0);
+        Attrib(2, 3, 3);
+        Attrib(3, 3, 6);
+        Attrib(4, 3, 9);
+        Attrib(5, 2, 12);
+    }
+
     // Returns the number of VBO vertices to draw when the scrubber is at `scrubIndex`.
     // scrubIndex == int.MaxValue (default) means show everything.
     private int ScrubCount(int[] cumulative, int totalCount, int scrubIndex)
@@ -1258,9 +1527,22 @@ void main() {
         return Math.Min(cumulative[scrubIndex], totalCount);
     }
 
+    /// <summary>
+    /// Camera for the IceSL deposition g-buffer. <paramref name="view"/> maps toolpath-local
+    /// points into camera space (draw matrix times the camera view). When <paramref name="gBuffer"/>
+    /// is set, the color target stores the unlit material and the second target stores packed Z.
+    /// </summary>
+    public void SetSdfOcclusionCamera(Matrix4 view, float zNear, float zFar, bool gBuffer)
+    {
+        _sdfView = view;
+        _sdfZNear = zNear;
+        _sdfZFar = MathF.Max(zFar, zNear + 1f);
+        _sdfGBuffer = gBuffer;
+    }
+
     public void Draw(Matrix4 mvp, bool selected = false,
                      bool showExtrusion = true, bool showTravel = true, bool showSeam = true,
-                     bool showBead = false, bool showBeadOverhang = false,
+                     bool showBead = false, bool showSdfBead = false, bool showBeadOverhang = false,
                      bool showOrientationPreview = false, int scrubIndex = int.MaxValue,
                      Vector3 eyeLocal = default, float lineOpacity = 1f,
                      bool showLightning = true, int scrubStart = 0,
@@ -1295,6 +1577,15 @@ void main() {
             beadFirst = Math.Min(ScrubCount(_beadVertexCumulative,     _beadCount,    scrubStart), beadCount);
             seamFirst = Math.Min(ScrubCount(_seamVertexCumulative,     _pointCount,   scrubStart), seamCount);
             allPtFirst = Math.Min(ScrubCount(_allPointVertexCumulative, _allPointCount, scrubStart), allPtCount);
+        }
+
+        // The deposition g-buffer is beads only. Lines and the box bead would write
+        // one color and leave the packed-Z target undefined.
+        if (_sdfGBuffer)
+        {
+            DrawSdfInstances();
+            GL.BindVertexArray(0);
+            return;
         }
 
         // Path edit mode: depth-cued thick lines (near = 2.5x, far = fade). Prefer the
@@ -1470,6 +1761,10 @@ void main() {
                 DrawElementsType.UnsignedInt, (IntPtr)((long)beadFirst * sizeof(uint)));
             GL.Enable(EnableCap.CullFace);
         }
+        else if (showSdfBead && showBead && _sdfShader is not null && _sdfInstanceCount > 0)
+        {
+            DrawSdfInstances();
+        }
         else if (showBead && beadCount > 0)
         {
             _beadShader.Use();
@@ -1484,6 +1779,44 @@ void main() {
         }
 
         GL.BindVertexArray(0);
+
+        // Rounded bead. In the deposition g-buffer this is the only draw.
+        void DrawSdfInstances()
+        {
+            if (!showSdfBead || !showBead || _sdfShader is null || _sdfInstanceCount <= 0)
+                return;
+            int sdfCount = _sdfInstanceCumulative.Length == _totalMoveCount + 1
+                ? ScrubCount(_sdfInstanceCumulative, _sdfInstanceCount, scrubIndex)
+                : _sdfInstanceCount;
+            int sdfFirst = scrubStart > 0
+                ? Math.Min(ScrubCount(_sdfInstanceCumulative, _sdfInstanceCount, scrubStart), sdfCount)
+                : 0;
+            if (sdfCount <= sdfFirst)
+                return;
+
+            _sdfShader.Use();
+            _sdfShader.SetMatrix4("uMVP", ref mvp);
+            _sdfShader.SetMatrix4("uView", ref _sdfView);
+            _sdfShader.SetVector3("uCamera", eyeLocal);
+            _sdfShader.SetFloat("uPad", 0.25f);
+            _sdfShader.SetFloat("uZNear", _sdfZNear);
+            _sdfShader.SetFloat("uZFar", _sdfZFar);
+            _sdfShader.SetFloat("uGBuffer", _sdfGBuffer ? 1f : 0f);
+            // Same live colour as the Preview box bead. The instance buffer still
+            // carries the upload-time material, which is the near-white default.
+            _sdfShader.SetVector3("uBeadColor", _beadMaterialColor);
+            GL.Disable(EnableCap.CullFace);
+            GL.BindVertexArray(_sdfVao);
+            // macOS OpenGL ends at 4.1. glDrawElementsInstancedBaseInstance is 4.2,
+            // so the pointer is null and the call segfaults (seen as pc=0 with
+            // mode=TRIANGLES, count=36). Shift the instance buffer and use the
+            // 3.1 draw, which this context actually has.
+            BindSdfInstanceAttribs(sdfFirst);
+            GL.DrawElementsInstanced(
+                PrimitiveType.Triangles, 36, DrawElementsType.UnsignedShort, IntPtr.Zero,
+                sdfCount - sdfFirst);
+            GL.Enable(EnableCap.CullFace);
+        }
     }
 
     /// <summary>
@@ -1592,7 +1925,7 @@ void main() {
             foreach (var move in layer.Moves)
             {
                 if (fi < singularity.Length && singularity[fi])
-                    events.Add((fi, (move.From + move.To) * 0.5f));
+                    events.Add((fi, (Place(move.From, move.E1Mm) + Place(move.To, move.E1Mm)) * 0.5f));
                 fi++;
             }
 
@@ -1633,11 +1966,19 @@ void main() {
         if (_allPtVao         != 0) { GL.DeleteVertexArray(_allPtVao);         GL.DeleteBuffer(_allPtVbo);         }
         if (_beadVao          != 0) { GL.DeleteVertexArray(_beadVao);          GL.DeleteBuffer(_beadVbo);          }
         if (_beadEbo          != 0) GL.DeleteBuffer(_beadEbo);
+        if (_sdfVao != 0)
+        {
+            GL.DeleteVertexArray(_sdfVao);
+            GL.DeleteBuffer(_sdfBoxVbo);
+            GL.DeleteBuffer(_sdfIbo);
+            GL.DeleteBuffer(_sdfInstanceVbo);
+        }
         if (_beadOverhangVao  != 0) { GL.DeleteVertexArray(_beadOverhangVao);  GL.DeleteBuffer(_beadOverhangVbo);  }
         if (_orientationVao   != 0) { GL.DeleteVertexArray(_orientationVao);   GL.DeleteBuffer(_orientationVbo);   }
         if (_singularityPtVao != 0) { GL.DeleteVertexArray(_singularityPtVao); GL.DeleteBuffer(_singularityPtVbo); }
         _shader.Dispose();
         _beadShader.Dispose();
+        _sdfShader?.Dispose();
         _pointShader.Dispose();
         _depthLineShader?.Dispose();
     }
