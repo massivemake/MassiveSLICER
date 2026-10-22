@@ -20,6 +20,7 @@ public sealed class SceneRenderer : IDisposable
     private CavityRenderer?          _cavity;
     private AxisRenderer?        _axes;
     private ArrowRenderer?       _directionArrow;
+    private ArrowRenderer?       _attractorAimArrow;
 
     // Angled-slice direction helper arrow (world space).
     private bool    _arrowVisible;
@@ -27,6 +28,14 @@ public sealed class SceneRenderer : IDisposable
     private Vector3 _arrowOrigin;
     private Vector3 _arrowDir;
     private float   _arrowLength;
+
+    // Amber arrow on the TCP an attractor is aligning. Drawn only while one is selected.
+    private bool    _aimArrowVisible;
+    private bool    _aimArrowDirty;
+    private Vector3 _aimArrowOrigin;
+    private Vector3 _aimArrowDir;
+    public bool AttractorAimVisible => _aimArrowVisible;
+    public Vector3 AttractorAimTip { get; private set; }
     private AxisRenderer?        _tcpAxes;
     private AxisRenderer?        _flangeAxes;
     private AxisRenderer?        _sensorAxes;
@@ -1343,6 +1352,7 @@ public sealed class SceneRenderer : IDisposable
         _cavity           = new CavityRenderer();
         _axes             = new AxisRenderer();
         _directionArrow   = new ArrowRenderer();
+        _attractorAimArrow = new ArrowRenderer();
         _tcpAxes          = new AxisRenderer();
         _flangeAxes       = new AxisRenderer();
         // Sensor origin gizmo: orange X / lime Y / sky-blue Z, 150mm to distinguish from TCP.
@@ -1895,6 +1905,22 @@ public sealed class SceneRenderer : IDisposable
             GL.Enable(EnableCap.DepthTest);
         }
 
+        if (_aimArrowVisible && _attractorAimArrow is not null)
+        {
+            if (_aimArrowDirty)
+            {
+                _attractorAimArrow.Update(
+                    _aimArrowOrigin, _aimArrowDir, 280f, new Vector3(0.95f, 0.55f, 0.12f));
+                _aimArrowDirty = false;
+            }
+            GL.Clear(ClearBufferMask.DepthBufferBit);
+            GL.Disable(EnableCap.DepthTest);
+            GL.LineWidth(3.5f);
+            _attractorAimArrow.Draw(mvp);
+            GL.LineWidth(1f);
+            GL.Enable(EnableCap.DepthTest);
+        }
+
         // -- Curved boundary loop markers --------------------------------------
         if ((_boundaryLowPoints.Count > 0 || _boundaryHighPoints.Count > 0)
             && _boundaryLowMarkers is not null && _boundaryHighMarkers is not null)
@@ -2152,6 +2178,25 @@ public sealed class SceneRenderer : IDisposable
         _arrowDir     = direction;
         _arrowLength  = length;
         _arrowDirty   = true;
+    }
+
+    /// <summary>
+    /// Amber arrow on the TCP whose direction an attractor is lining up with the stick.
+    /// A zero direction or <paramref name="visible"/> false hides it.
+    /// </summary>
+    public void SetAttractorAimArrow(bool visible, Vector3 origin, Vector3 direction)
+    {
+        var dir = direction.LengthSquared < 1e-8f ? Vector3.Zero : Vector3.Normalize(direction);
+        bool show = visible && dir.LengthSquared > 0.5f;
+        if (_aimArrowVisible == show
+            && Vector3.DistanceSquared(_aimArrowOrigin, origin) < 0.25f
+            && Vector3.DistanceSquared(_aimArrowDir, dir) < 1e-6f)
+            return;
+        _aimArrowVisible = show;
+        _aimArrowOrigin = origin;
+        _aimArrowDir = dir;
+        AttractorAimTip = origin + dir * 280f;
+        _aimArrowDirty = true;
     }
 
     /// <summary>Queues curved-slicing LOW (green) and HIGH (orange) boundary vertex markers.</summary>
@@ -2495,6 +2540,7 @@ public sealed class SceneRenderer : IDisposable
         _cavity?.Dispose();
         _axes?.Dispose();
         _directionArrow?.Dispose();
+        _attractorAimArrow?.Dispose();
         _tcpAxes?.Dispose();
         _flangeAxes?.Dispose();
         _sensorAxes?.Dispose();

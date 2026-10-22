@@ -143,8 +143,9 @@ Key facts:
   X-bracing
 - Wave effects: sine/sawtooth/triangle; **Fixed + Dynamic** phase methods;
   gradient; stagger; pattern effects (relief, twist, fade); live effectors
-- TCP Adjust: spherical attractors with an aimable extruder cylinder. Inside
-  the sphere the toolpath leans toward that angle; on the cylinder it matches
+- TCP Adjust: attractors and deflectors, spherical or cylindrical, aimed at
+  the tool or the robot flange. Inside the volume the path leans toward that
+  bar; on the bar it matches. Handles spawn on the active BASE origin
 - Signed Distance: bead shells on the mesh signed-distance field. Contours
   follow each shell; the nozzle follows the outward gradient
 - KRL export: temps + RPM via `$ANOUT`, per-layer adaptive speed & flow,

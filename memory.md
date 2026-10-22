@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-10-21** (SDF ambient occlusion menu)
+Last updated: **2026-10-22** (TCP deflectors)
 
 ---
 
@@ -521,6 +521,21 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-10-22 — TCP deflectors
+
+- Attractors and deflectors share one handle. Each has a shape (spherical or cylindrical) and a frame (tool or robot flange). Attractors lean onto the bar. Deflectors turn the chosen frame back out of the volume. Robot flange is sampled 400 mm back from the cutter. New handles spawn on the origin of the active BASE, staggered 80 mm in X.
+- Mill panel: ATTRACTOR gained Shape and TCP dropdowns, and a DEFLECTOR section under it. The print TCP ADJUST panel has the same pair. `tcpadj deflect` adds one. Saved on the existing attractor list in the `.mass` file (`Shape`, `Frame`, `Deflect`). Old files stay spherical tool attractors.
+- A deflector does not lock the tool to the stick. Inside the volume it turns the chosen frame back toward the way out. Attractors still lean onto the bar. On a cylinder the stick is only the cylinder axis.
+- Attractor Axis dropdown is X, Y, or Z of the selected TCP. Z is the default and keeps the old lean. On Tool the chosen axis points down the stick. On Robot flange it points along the stick. Saved as `Aim` on the existing pose. Old files stay Z.
+- A cylindrical deflector sizes diameter and height apart. The sphere deflector keeps one influence radius. Attractors stay one radius. Saved as `HeightMm` on the existing pose. Zero means the old cylinder, height equal to the diameter.
+- Attractor align is a unit vector in the selected TCP, saved as `AimX`, `AimY`, `AimZ`. 0 0 1 keeps the old lean. An older `Aim` of X, Y, or Z still loads. While an attractor is selected, an amber arrow on that TCP shows the direction.
+- A cylindrical attractor sizes diameter and height apart, the same `HeightMm` a deflector cylinder already used. A sphere attractor keeps one influence radius. Height zero still means the height equals the diameter.
+- The attractor section is Attractor/Detractor. A Detractor check aims the TCP direction away from the bar. Unchecked, it still aims toward the bar. New handles are named attractor1, attractor2. Older files still load as TCP 1, TCP 2. Not committed. The robot was not started.
+- The amber stick is an arrow. Its head is the direction the TCP arrow lines up with once the lean has taken. On Tool the head points down the bar. On Robot flange it points along the bar. Detractor turns the head around. A deflector stays a plain bar. Not committed. The robot was not started.
+- Overlapping attractors add. Each contributes its weight times the arrow direction. Opposite arrows cancel. Agreeing arrows stack up to one full lean. A deflector still uses the strongest push. Not committed. The robot was not started.
+- Spindle tool Y no longer flips when the cutter leans. The upright frame (cutter down: X = world +Y, Y = world +X) is swung onto the cutter. A 4° lean used to swing Y by 90°. That frame is the path and IK roll. Not committed. The robot was not started.
+- The spindle triad is back to the cutter frame from before the Y lock. Z runs out of the spindle. X and Y come from the old world hint. The path roll still carries the upright frame. Not committed. The robot was not started.
 
 ### 2026-10-21 — SDF ambient occlusion menu
 

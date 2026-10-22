@@ -100,6 +100,30 @@ public class NewtonPrimaryIkTest
         Assert.True(tilt < 2f, $"world-down left the spindle cutter {tilt:0.00}° off vertical ({FmtJoints(solved!)})");
     }
 
+    [Fact]
+    public void Horizontal_cut_keeps_the_upright_roll()
+    {
+        // Cutter into a +X wall is the upright frame swung 90°. Tool Y stays on
+        // that swing (world −Z here). Popping it to world +Z was the Y flip.
+        var cell = ReadCell("LFAM3", "lfam3.json");
+        var (_, zInFlange) = CutterInFlange(cell, 0f);
+        var tcp = KukaOrientation.AbcAimingToolZ(
+            new System.Numerics.Vector3(zInFlange.X, zInFlange.Y, zInFlange.Z));
+        var tcpM = KukaIkSolver.AbcToMatrix(tcp.A, tcp.B, tcp.C);
+        var flangeZInTool = new System.Numerics.Vector3(tcpM.M13, tcpM.M23, tcpM.M33);
+
+        var (a, b, c) = KukaOrientation.AbcFromMillNormal(System.Numerics.Vector3.UnitX);
+        var tool = KukaIkSolver.AbcToMatrix(a, b, c);
+        var toolX = new System.Numerics.Vector3(tool.M11, tool.M12, tool.M13);
+        var toolY = new System.Numerics.Vector3(tool.M21, tool.M22, tool.M23);
+        var toolZ = new System.Numerics.Vector3(tool.M31, tool.M32, tool.M33);
+        Assert.True(toolZ.X < -0.99f, $"cutter {toolZ}");
+        Assert.True(System.Numerics.Vector3.Dot(toolY, -System.Numerics.Vector3.UnitZ) > 0.99f, $"tool Y {toolY}");
+        var flangeZ = flangeZInTool.X * toolX + flangeZInTool.Y * toolY + flangeZInTool.Z * toolZ;
+        Assert.True(System.Numerics.Vector3.Dot(flangeZ, toolY) > 0.99f,
+            $"flange axis {flangeZ} left tool Y. cutter-in-flange {zInFlange} tcp ABC=({tcp.A:0.#},{tcp.B:0.#},{tcp.C:0.#})");
+    }
+
     static float BestDownError(GltfNumericalIkSolver ruler)
     {
         float best = 999f;

@@ -103,23 +103,7 @@ public static class KukaOrientation
         float toolheadOffsetB = 0f,
         float toolheadOffsetC = 0f)
     {
-        var n = Vector3.Normalize(surfaceNormal);
-        var z = -n; // bit into the material
-        var hint = MathF.Abs(z.Z) > 0.9f ? Vector3.UnitX : Vector3.UnitZ;
-        var x = Vector3.Cross(hint, z);
-        if (x.LengthSquared() < 1e-10f)
-            x = Vector3.Cross(Vector3.UnitY, z);
-        x = Vector3.Normalize(x);
-        var y = Vector3.Cross(z, x);
-
-        if (MathF.Abs(tcpYawDeg) > 1e-4f)
-        {
-            float cy = MathF.Cos(tcpYawDeg * D2R), sy = MathF.Sin(tcpYawDeg * D2R);
-            var x2 = x * cy + y * sy;
-            var y2 = y * cy - x * sy;
-            x = x2;
-            y = y2;
-        }
+        var (x, y, z) = MillToolAxes(surfaceNormal, tcpYawDeg);
 
         // Same local ZYX as print (Y/X/Z sliders → B/C/A) in the mill tool frame.
         if (MathF.Abs(toolheadOffsetA) + MathF.Abs(toolheadOffsetB) + MathF.Abs(toolheadOffsetC) > 1e-4f)
@@ -141,6 +125,103 @@ public static class KukaOrientation
             z.X, z.Y, z.Z, 0,
             0, 0, 0, 1);
         return KukaIkSolver.MatrixToAbc(m);
+    }
+
+    /// <summary>
+    /// Mill tool axes before the toolhead offset. Z is the cutter (−surface normal).
+    /// Upright (cutter world −Z) is X = world +Y, Y = world +X. Any other cutter
+    /// direction is that same frame swung onto Z, so a lean cannot reverse Y.
+    /// Yaw then spins X and Y around Z: <c>X' = X cos + Y sin</c>, <c>Y' = Y cos − X sin</c>.
+    /// </summary>
+    public static (Vector3 X, Vector3 Y, Vector3 Z) MillToolAxes(Vector3 surfaceNormal, float tcpYawDeg = 0f)
+    {
+        var n = surfaceNormal.LengthSquared() > 1e-12f ? Vector3.Normalize(surfaceNormal) : Vector3.UnitZ;
+        var z = -n;
+        // Upright frame. Rebuilding X/Y from a world hint flipped Y once the cutter
+        // left the vertical cone (|Z| = 0.9) and again on the far side of the part.
+        var z0 = -Vector3.UnitZ;
+        var x0 = Vector3.UnitY;
+        var y0 = Vector3.UnitX;
+        float cosT = Math.Clamp(Vector3.Dot(z0, z), -1f, 1f);
+        Vector3 x, y;
+        if (cosT > 1f - 1e-6f)
+        {
+            x = x0;
+            y = y0;
+        }
+        else if (cosT < -1f + 1e-6f)
+        {
+            // Cutter straight up: 180° about X, the limit of a lean toward +Y.
+            // Y stays on world +X.
+            x = -x0;
+            y = y0;
+        }
+        else
+        {
+            var axis = Vector3.Normalize(Vector3.Cross(z0, z));
+            float sinT = MathF.Sqrt(1f - cosT * cosT);
+            x = Rodrigues(x0, axis, sinT, cosT);
+            y = Rodrigues(y0, axis, sinT, cosT);
+        }
+
+        x = Vector3.Normalize(x);
+        y = Vector3.Cross(z, x);
+        if (y.LengthSquared() < 1e-10f)
+            y = y0;
+        y = Vector3.Normalize(y);
+        x = Vector3.Cross(y, z);
+
+        if (MathF.Abs(tcpYawDeg) > 1e-4f)
+        {
+            float cy = MathF.Cos(tcpYawDeg * D2R), sy = MathF.Sin(tcpYawDeg * D2R);
+            var x2 = x * cy + y * sy;
+            var y2 = y * cy - x * sy;
+            x = x2;
+            y = y2;
+        }
+
+        return (x, y, z);
+    }
+
+    /// <summary>
+    /// Print tool axes with no toolhead offset. X is the nozzle (−surface normal).
+    /// Yaw spins Y and Z around X.
+    /// </summary>
+    public static (Vector3 X, Vector3 Y, Vector3 Z) PrintToolAxes(Vector3 surfaceNormal, float tcpYawDeg = 0f)
+    {
+        var normal = surfaceNormal.LengthSquared() > 1e-12f ? Vector3.Normalize(surfaceNormal) : Vector3.UnitZ;
+        var x = -normal;
+        var xDef = new Vector3(0f, 0f, -1f);
+        float cosT = Math.Clamp(Vector3.Dot(xDef, x), -1f, 1f);
+        Vector3 y, z;
+        if (MathF.Abs(cosT - 1f) < 1e-6f)
+        {
+            y = new Vector3(0f, 1f, 0f);
+            z = new Vector3(1f, 0f, 0f);
+        }
+        else if (MathF.Abs(cosT + 1f) < 1e-6f)
+        {
+            y = new Vector3(0f, 1f, 0f);
+            z = new Vector3(-1f, 0f, 0f);
+        }
+        else
+        {
+            var axis = Vector3.Normalize(Vector3.Cross(xDef, x));
+            float sinT = MathF.Sqrt(1f - cosT * cosT);
+            y = Rodrigues(new Vector3(0f, 1f, 0f), axis, sinT, cosT);
+            z = Rodrigues(new Vector3(1f, 0f, 0f), axis, sinT, cosT);
+        }
+
+        if (MathF.Abs(tcpYawDeg) > 1e-4f)
+        {
+            float cy = MathF.Cos(tcpYawDeg * D2R), sy = MathF.Sin(tcpYawDeg * D2R);
+            var y2 = y * cy + z * sy;
+            var z2 = z * cy - y * sy;
+            y = y2;
+            z = z2;
+        }
+
+        return (x, y, z);
     }
 
     /// <summary>

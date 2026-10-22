@@ -490,8 +490,8 @@ public sealed partial class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "tcpadj",
-            Description = "TCP Adjust spherical attractors: list, add, remove, radius, lean",
-            Usage = "tcpadj [list|add|remove|radius <mm>|lean <xDeg> <yDeg>]",
+            Description = "TCP Adjust attractors and deflectors: list, add, deflect, remove, radius, diameter, height, lean, shape, frame, aim, detract",
+            Usage = "tcpadj [list|add|deflect|remove|radius <mm>|diameter <mm>|height <mm>|lean <xDeg> <yDeg>|shape <Spherical|Cylindrical>|frame <Tool|Flange>|aim <x> <y> <z>|detract <on|off>]",
             Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.TcpAttractorCommand(args)),
         });
 

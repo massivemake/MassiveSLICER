@@ -7409,7 +7409,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
             else if (item.IsPrintToolpath) flags.Add("PrintToolpath");
             else if (item.IsToolpath) flags.Add("Toolpath");
             if (item.IsEffector) flags.Add("Effector");
-            if (item.IsTcpAttractor) flags.Add("TcpAttractor");
+            if (item.IsTcpDeflector) flags.Add("TcpDeflector");
+            else if (item.IsTcpAttractor) flags.Add("TcpAttractor");
             if (!item.Visible) flags.Add("Hidden");
             string flagStr = flags.Count == 0 ? "" : $" [{string.Join(",", flags)}]";
             sb.AppendLine($"{new string(' ', depth * 2)}- {item.Name}{flagStr}");

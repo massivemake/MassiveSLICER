@@ -269,6 +269,9 @@ public partial class ViewportView : UserControl
     private double _lastSyncA1, _lastSyncA2, _lastSyncA3, _lastSyncA4, _lastSyncA5, _lastSyncA6;
     List<TcpAxisTag>? _pendingTcpAxisTags;
     bool _tcpAxisTagsPostScheduled;
+    bool _aimFrameValid;
+    Vector3 _aimToolOrigin, _aimToolX, _aimToolY, _aimToolZ;
+    Vector3 _aimFlangeOrigin, _aimFlangeX, _aimFlangeY, _aimFlangeZ;
 
     // Dev mode: editable cell environment nodes (bed, rotary bed, stands, docks).
     private readonly Dictionary<SceneNode, (string Kind, string? Id)> _devNodeKinds = new();
@@ -2434,6 +2437,8 @@ public partial class ViewportView : UserControl
         // node-local basis (GetModifierAxisBasis was renamed GetGizmoAxisBasis there).
         _renderer.GizmoAxisBasis = supportAxisBasis ?? GetGizmoAxisBasis(_renderer.SelectedNode);
 
+        if (_vm is ViewportViewModel aimVm)
+            UpdateAttractorAimMarker(aimVm);
         _renderer.Render(w, h);
         UpdateSequenceWaypointTags(w, h);
         UpdateTcpAxisTags(w, h);
@@ -2514,6 +2519,17 @@ public partial class ViewportView : UserControl
             flZ.X, flZ.Y, flZ.Z, 0,
             pos.X, pos.Y, pos.Z, 1f);
 
+        _aimFrameValid = true;
+        _aimToolOrigin = tcp;
+        _aimToolX = new Vector3(toolN.M11, toolN.M12, toolN.M13);
+        _aimToolY = new Vector3(toolN.M21, toolN.M22, toolN.M23);
+        _aimToolZ = new Vector3(toolN.M31, toolN.M32, toolN.M33);
+        _aimFlangeOrigin = pos;
+        _aimFlangeX = kukaX;
+        _aimFlangeY = kukaY;
+        _aimFlangeZ = kukaZ;
+        UpdateAttractorAimMarker(vm);
+
         if (_sensorOriginLocal is { } so)
         {
             var sensorPt = pos
@@ -2548,12 +2564,30 @@ public partial class ViewportView : UserControl
             robroot.X, robroot.Y, robroot.Z);
     }
 
+    /// <summary>Amber arrow on the tool or flange TCP while an attractor is selected.</summary>
+    void UpdateAttractorAimMarker(ViewportViewModel vm)
+    {
+        if (!_aimFrameValid || vm.SelectedTcpAttractor is null)
+        {
+            _renderer.SetAttractorAimArrow(false, default, default);
+            return;
+        }
+
+        var aim = vm.AttractorAimUnit;
+        bool flange = vm.AttractorAimOnFlange;
+        var origin = flange ? _aimFlangeOrigin : _aimToolOrigin;
+        var x = flange ? _aimFlangeX : _aimToolX;
+        var y = flange ? _aimFlangeY : _aimToolY;
+        var z = flange ? _aimFlangeZ : _aimToolZ;
+        _renderer.SetAttractorAimArrow(true, origin, x * aim.X + y * aim.Y + z * aim.Z);
+    }
+
     void UpdateTcpAxisTags(int vpW, int vpH)
     {
         if (_vm is not ViewportViewModel vm || !vm.ShowTcpHelpers || !vm.ShowTcpFrame ||
             (_renderer.TcpFrameMatrix is null && _renderer.FlangeFrameMatrix is null))
         {
-            PostTcpAxisTags(null);
+            PostTcpAxisTags(AimTagOnly(vpW, vpH));
             return;
         }
 
@@ -2586,7 +2620,18 @@ public partial class ViewportView : UserControl
             tags.Add(new TcpAxisTag(s.X - ox, s.Y - oy, w.Text, w.IsTitle, w.ColorHex));
         }
 
+        var aimTag = AimTagOnly(vpW, vpH);
+        if (aimTag is not null) tags.Add(aimTag[0]);
         PostTcpAxisTags(tags);
+    }
+
+    List<TcpAxisTag>? AimTagOnly(int vpW, int vpH)
+    {
+        if (!_renderer.AttractorAimVisible) return null;
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+        var s = _renderer.ProjectToScreen(_renderer.AttractorAimTip, viewProj, vpW, vpH);
+        if (float.IsNaN(s.X)) return null;
+        return [new TcpAxisTag(s.X - 8f, s.Y - 8f, "AIM", false, "#F28C1E")];
     }
 
     void PostTcpAxisTags(IReadOnlyList<TcpAxisTag>? tags)
@@ -3223,6 +3268,18 @@ public partial class ViewportView : UserControl
             AttachUserImportToCell(node, heated);
         }
 
+        foreach (var deflector in vm.TcpDeflectors)
+        {
+            var node = deflector.Node;
+            if (slide)
+            {
+                var world = node.WorldTransform * tDelta;
+                node.Parent?.RemoveChild(node);
+                node.LocalTransform = world;
+            }
+            AttachUserImportToCell(node, heated);
+        }
+
         foreach (var tpItem in vm.EnumerateToolpathItems())
             ParkToolpathOnSceneRoot(tpItem.Node, delta);
 
@@ -3288,6 +3345,12 @@ public partial class ViewportView : UserControl
         foreach (var attractor in vm.TcpAttractors)
         {
             var node = attractor.Node;
+            preserved.Add(new PreservedUserModel(node, node.WorldTransform));
+            node.Parent?.RemoveChild(node);
+        }
+        foreach (var deflector in vm.TcpDeflectors)
+        {
+            var node = deflector.Node;
             preserved.Add(new PreservedUserModel(node, node.WorldTransform));
             node.Parent?.RemoveChild(node);
         }
@@ -6577,7 +6640,7 @@ public partial class ViewportView : UserControl
 
     /// <summary>Snapshots TCP Adjust handles on the UI thread, before the background slice.</summary>
     private static void ApplyTcpAttractorSettings(ViewportViewModel vm, SliceSettings settings)
-        => settings.TcpAttractors = vm.CaptureTcpAttractors();
+        => settings.TcpAttractors = vm.CaptureTcpAdjustments();
 
     /// <summary>
     /// Lean the current mill cutter toward the amber cylinders without milling again.
@@ -6587,7 +6650,7 @@ public partial class ViewportView : UserControl
     bool ReapplyMillAttractors(ViewportViewModel vm)
     {
         if (vm.IsSlicing || _rawToolpathByNode.IsEmpty) return false;
-        var attractors = vm.CaptureTcpAttractors();
+        var attractors = vm.CaptureTcpAdjustments();
         bool hadMill = false;
         int leaned = 0;
         foreach (var (node, raw) in _rawToolpathByNode.ToArray())
@@ -6619,7 +6682,7 @@ public partial class ViewportView : UserControl
             });
         }
         if (leaned > 0)
-            vm.OnDevLog?.Invoke($"[tcpadj] leaned {leaned} mill path(s) toward the amber cylinders");
+            vm.OnDevLog?.Invoke($"[tcpadj] leaned {leaned} mill path(s) toward the TCP bars");
         return hadMill;
     }
 
@@ -6881,7 +6944,7 @@ public partial class ViewportView : UserControl
             var result = built.result;
             var mill   = BuildMillSettings(sub);
 
-            var attractors = vm.CaptureTcpAttractors();
+            var attractors = vm.CaptureTcpAdjustments();
             var (rawMill, toolpath) = await Task.Run(() =>
             {
                 var path = MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.GenerateMultiAxis(
@@ -7050,7 +7113,7 @@ public partial class ViewportView : UserControl
                 ApproachAxis = approach,
                 ReportProgress = p => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = Math.Clamp(p, 0, 100)),
             };
-            var attractors = vm.CaptureTcpAttractors();
+            var attractors = vm.CaptureTcpAdjustments();
             var plain = await Task.Run(() =>
             {
                 cancel.ThrowIfCancellationRequested();

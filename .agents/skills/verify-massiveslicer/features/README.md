@@ -15,7 +15,7 @@ Start with these five. Add a file when a new user-visible behavior ships.
 | Export polyline | `export-polyline.md` | `export-polyline /tmp/slicer-polyline.obj` |
 | Angled walls | `angled-walls.md` | `addset WallCount` (read only; a value reslices) |
 | Wipe 90-Degree | `wipe-90.md` | `addset WipeModeDisplay` (read only; a value reslices) |
-| TCP Adjust | `tcp-adjust.md` | `tcpadj` (list is read-only; `add` places a handle) |
+| TCP Adjust | `tcp-adjust.md` | `tcpadj` (list is read-only; `add` / `deflect` place a handle) |
 | Toolhead keyframe | `tcp-keyframe-orient.md` | `tcpkey add` (needs a preview timeline; re-solves the open path) |
 | Signed Distance | `signed-distance.md` | `sdf` (read-only; does not select the method) |
 | Continuous Planar Field | `continuous-planar.md` | `cpf` (read-only; does not select the method) |
