@@ -8,7 +8,8 @@ namespace MassiveSlicer.Core.Slicing.Effects;
 /// Weight is a smoothstep of distance to the cylinder origin: 1 on the cylinder,
 /// 0 at the sphere radius. The strongest attractor wins. <see cref="Apply"/> leaves
 /// mill moves and layer stitches alone. <see cref="ApplyMill"/> tilts a mill path
-/// the same way, so the cutter matches the amber cylinder. A move outside every
+/// the same way: the bit stays on the downward side of the amber bar, so a 36°
+/// lean is 36° off world-down. A move outside every
 /// sphere keeps the normal it had.
 /// </summary>
 public static class TcpAttractorEffect
@@ -79,9 +80,9 @@ public static class TcpAttractorEffect
 
     /// <summary>
     /// TCP Adjust for a mill toolpath. The spindle cutter (T12 +Z) is the opposite
-    /// of the stored surface normal. On the cylinder that cutter matches the amber
-    /// axis; farther out it keeps the surface aim. Print <see cref="Apply"/> still
-    /// leaves mill moves alone.
+    /// of the stored surface normal. On the cylinder that cutter lies along the
+    /// amber bar and points down it; farther out it keeps the surface aim.
+    /// Print <see cref="Apply"/> still leaves mill moves alone.
     /// </summary>
     public static Toolpath ApplyMill(Toolpath source, IReadOnlyList<TcpAttractor> attractors)
         => Blend(source, attractors, includeMill: true);
@@ -139,12 +140,13 @@ public static class TcpAttractorEffect
                 Vector3 aimed;
                 if (includeMill)
                 {
-                    // Cutter points opposite the stored normal. Pull that cutter
-                    // toward the cylinder, then store the outward normal again.
+                    // Cutter points opposite the stored normal. The amber +axis is the
+                    // up side of the bar (lean 0 is +Z). Pull the cutter toward the
+                    // down side of that same bar, then store the outward normal again.
                     var cutter = baseNormal.LengthSquared() > 1e-8f
                         ? -Vector3.Normalize(baseNormal)
                         : -Vector3.UnitZ;
-                    aimed = -BlendNormal(cutter, bestAxis, bestW);
+                    aimed = -BlendNormal(cutter, -bestAxis, bestW);
                 }
                 else
                     aimed = BlendNormal(baseNormal, bestAxis, bestW);

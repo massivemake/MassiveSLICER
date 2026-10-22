@@ -4996,6 +4996,12 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// drives the realtime re-slice.</summary>
     internal Action? OnModelGeometryChanged { get; set; }
 
+    /// <summary>
+    /// Raised when a TCP attractor is added, moved, aimed, or removed.
+    /// The viewport leans the current mill cutter. It does not rebuild the raster.
+    /// </summary>
+    internal Action? OnMillAttractorsChanged { get; set; }
+
     private bool _realtimeSlicingPaused;
 
     /// <summary>Holds off realtime re-slicing while the user batches up changes;

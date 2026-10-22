@@ -50,6 +50,7 @@ public partial class ViewportView : UserControl
     private SceneNode?             _rotaryBedPivot;
     // Pivot world matrix when an E1 path was raycast. Draw follows inv(this) * pivot now.
     private readonly Dictionary<SceneNode, Matrix4> _toolpathRotaryWorldAtGenerate = new();
+    private readonly Dictionary<SceneNode, (float? E1, NVec3? Center, Matrix4? World)> _millRotaryAtGenerate = new();
     private SceneNode?             _rotaryBedRoot;   // "RotaryBed" env root — relocated when the bed is recentred
     private bool                   _multiToolFlangeParented;
     private readonly HashSet<SceneNode> _lfamInfrastructureNodes = [];
@@ -1072,8 +1073,8 @@ public partial class ViewportView : UserControl
             }
             else if (vm.IsTcpAttractorNode(node))
             {
-                // A move or a rotate of the handle changes where the extruder leans.
-                vm.OnModelGeometryChanged?.Invoke();
+                // A move or a rotate of the handle changes where the cutter leans.
+                vm.OnMillAttractorsChanged?.Invoke();
             }
             SchedulePanelTransformUndo(vm, node, label, oldLocal);
         };
@@ -1975,6 +1976,7 @@ public partial class ViewportView : UserControl
             {
                 _toolpathByNode.TryRemove(removing, out _);
                 _rawToolpathByNode.TryRemove(removing, out _);
+                _millRotaryAtGenerate.Remove(removing);
                 if (ReferenceEquals(removing, _activeScrubNode) && _vm is { } vmRm)
                 {
                     _activeScrubNode = null;
@@ -3066,6 +3068,9 @@ public partial class ViewportView : UserControl
         }
         UpdateFocusOverlay();
         GlCanvas.RequestNextFrameRendering();
+        // A file saved before attractors reached planar facing still has a vertical cutter.
+        // Lean it from the stored raw path once the toolpath and the spheres are both loaded.
+        ReapplyMillAttractors(vm);
         vm.OnDevLog?.Invoke(
             $"[workspace] Restored UI session"
             + (session.IsPaintEditOpen ? " (edit mode)" : "")
@@ -3130,6 +3135,7 @@ public partial class ViewportView : UserControl
         _renderer.ClearAllToolpaths();
         _toolpathByNode.Clear();
         _rawToolpathByNode.Clear();
+        _millRotaryAtGenerate.Clear();
         _toolpathMetaByNode.Clear();
         _mergedByNode.Clear();
         _toolpathOriginByNode.Clear();
@@ -4885,9 +4891,9 @@ public partial class ViewportView : UserControl
                     else if (_renderer.SelectedNode is { } tcpNode && vmGz2.IsTcpAttractorNode(tcpNode))
                     {
                         // The sphere and the cylinder are the effect. Moving or aiming either one
-                        // changes the extruder angle on the next slice.
+                        // leans the cutter on the path that is already there.
                         vmGz2.SyncTcpAttractorReadout(tcpNode);
-                        vmGz2.OnModelGeometryChanged?.Invoke();
+                        vmGz2.OnMillAttractorsChanged?.Invoke();
                     }
                     else if (scaled || tilted)
                     {
@@ -5965,6 +5971,10 @@ public partial class ViewportView : UserControl
         {
             SliceLogger.Step("StageToolpathMaps");
             StageToolpathMaps(entry);
+            if (entry.RotaryE1AtGenerate is not null || entry.RotaryCenter is not null || entry.RotaryWorldAtGenerate is not null)
+                _millRotaryAtGenerate[entry.Node] = (entry.RotaryE1AtGenerate, entry.RotaryCenter, entry.RotaryWorldAtGenerate);
+            else
+                _millRotaryAtGenerate.Remove(entry.Node);
 
             SliceLogger.Step(addToScene ? "renderer.AddToolpath" : "renderer.ReplaceToolpath");
             var rotary = RotaryDrawFor(entry);
@@ -6569,6 +6579,84 @@ public partial class ViewportView : UserControl
     private static void ApplyTcpAttractorSettings(ViewportViewModel vm, SliceSettings settings)
         => settings.TcpAttractors = vm.CaptureTcpAttractors();
 
+    /// <summary>
+    /// Lean the current mill cutter toward the amber cylinders without milling again.
+    /// The stored raw path is the locked axis (World -Z or the projection aim).
+    /// </summary>
+    /// <returns>True when a mill path is already stored, even if its cutter did not move.</returns>
+    bool ReapplyMillAttractors(ViewportViewModel vm)
+    {
+        if (vm.IsSlicing || _rawToolpathByNode.IsEmpty) return false;
+        var attractors = vm.CaptureTcpAttractors();
+        bool hadMill = false;
+        int leaned = 0;
+        foreach (var (node, raw) in _rawToolpathByNode.ToArray())
+        {
+            if (raw is null || !ToolpathHasMillMoves(raw)) continue;
+            hadMill = true;
+            var next = TcpAttractorEffect.ApplyMill(ToolpathClone.Copy(raw), attractors);
+            if (_toolpathByNode.TryGetValue(node, out var shown) && SameNormals(shown, next))
+                continue;
+            leaned++;
+            _toolpathMetaByNode.TryGetValue(node, out var meta);
+            var local = node.LocalTransform;
+            _toolpathOriginByNode.TryGetValue(node, out var origin);
+            _millRotaryAtGenerate.TryGetValue(node, out var rotary);
+            vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+            {
+                Toolpath = next,
+                RawToolpath = raw,
+                Node = node,
+                BeadWidth = meta.BeadWidth,
+                LayerHeight = meta.LayerHeight,
+                MaterialColor = meta.MaterialColor,
+                PreserveRelativePose = true,
+                PreservedLocalTransform = local,
+                PreservedOrigin = origin,
+                RotaryE1AtGenerate = rotary.E1,
+                RotaryCenter = rotary.Center,
+                RotaryWorldAtGenerate = rotary.World,
+            });
+        }
+        if (leaned > 0)
+            vm.OnDevLog?.Invoke($"[tcpadj] leaned {leaned} mill path(s) toward the amber cylinders");
+        return hadMill;
+    }
+
+    /// <summary>
+    /// Attractor edits change the cutter angle only. A mill path that is already
+    /// there leans in place. Print beads, and the first mill, still go through a slice.
+    /// </summary>
+    void NotifyMillAttractorsChanged(ViewportViewModel vm)
+    {
+        if (vm.IsSlicing)
+        {
+            ScheduleRealtimeSlice(vm);
+            return;
+        }
+        bool hadMill = ReapplyMillAttractors(vm);
+        if (hadMill && vm.ActiveSliceToolpathKind == OutlinerToolpathKind.Mill)
+            return;
+        ScheduleRealtimeSlice(vm);
+    }
+
+    static bool SameNormals(Toolpath a, Toolpath b)
+    {
+        if (a.Layers.Count != b.Layers.Count) return false;
+        for (int i = 0; i < a.Layers.Count; i++)
+        {
+            var am = a.Layers[i].Moves;
+            var bm = b.Layers[i].Moves;
+            if (am.Count != bm.Count) return false;
+            for (int j = 0; j < am.Count; j++)
+            {
+                var d = am[j].Normal - bm[j].Normal;
+                if (d.LengthSquared() > 1e-8f) return false;
+            }
+        }
+        return true;
+    }
+
     private static MassiveSlicer.Core.Models.MillSettings BuildMillSettings(SubtractiveSettingsViewModel s) => new()
     {
         ToolDiameterMm    = (float)s.ToolDiameterMm,
@@ -6794,17 +6882,19 @@ public partial class ViewportView : UserControl
             var mill   = BuildMillSettings(sub);
 
             var attractors = vm.CaptureTcpAttractors();
-            var toolpath = await Task.Run(() =>
+            var (rawMill, toolpath) = await Task.Run(() =>
             {
                 var path = MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.GenerateMultiAxis(
                     result.Positions, result.Normals, result.Indices, mill);
-                return TcpAttractorEffect.ApplyMill(path, attractors);
+                var raw = ToolpathClone.Copy(path);
+                return (raw, TcpAttractorEffect.ApplyMill(path, attractors));
             });
             if (toolpath.Layers.Count == 0)
             {
                 System.Console.Error.WriteLine("[mill] multi-axis pass produced no cuts.");
                 return;
             }
+            StampMillMotionSpeeds(rawMill, sub);
             StampMillMotionSpeeds(toolpath, sub);
 
             var toolpathNode = new SceneNode
@@ -6816,7 +6906,7 @@ public partial class ViewportView : UserControl
             vm.PendingToolpath.Enqueue(new PendingToolpathEntry
             {
                 Toolpath      = toolpath,
-                RawToolpath   = toolpath,
+                RawToolpath   = rawMill,
                 Node          = toolpathNode,
                 BeadWidth     = (float)sub.ToolDiameterMm,
                 LayerHeight   = mill.StepdownMm,
@@ -6961,16 +7051,19 @@ public partial class ViewportView : UserControl
                 ReportProgress = p => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = Math.Clamp(p, 0, 100)),
             };
             var attractors = vm.CaptureTcpAttractors();
-            var toolpath = await Task.Run(() =>
+            var plain = await Task.Run(() =>
             {
                 cancel.ThrowIfCancellationRequested();
-                var path = AdaMillPlanner.Generate(millReq);
-                // A locked tool axis (World -Z and the other TOOL AXIS choices) is the
-                // cutter direction. Attractors lean multi-axis finishing only.
-                return planar ? path : TcpAttractorEffect.ApplyMill(path, attractors);
+                return AdaMillPlanner.Generate(millReq);
             }, cancel);
+            // World -Z (and the other locked axes) is the cutter away from the spheres.
+            // Inside a sphere the same path leans toward that amber cylinder.
             if (planar)
-                StampPlanarHomeYaw(vm, toolpath);
+                StampPlanarHomeYaw(vm, plain);
+            // Speeds live on the raw path so a later attractor edit keeps mill travel.
+            StampMillMotionSpeeds(plain, sub);
+            var rawMill = ToolpathClone.Copy(plain);
+            var toolpath = TcpAttractorEffect.ApplyMill(plain, attractors);
 
             cancel.ThrowIfCancellationRequested();
             StampMillMotionSpeeds(toolpath, sub);
@@ -6994,7 +7087,7 @@ public partial class ViewportView : UserControl
                 vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
                 {
                     Toolpath                = toolpath,
-                    RawToolpath             = toolpath,
+                    RawToolpath             = rawMill,
                     Node                    = toolpathNode,
                     BeadWidth               = (float)sub.ToolDiameterMm,
                     LayerHeight             = mill.StepdownMm,
@@ -7020,7 +7113,7 @@ public partial class ViewportView : UserControl
                 vm.PendingToolpath.Enqueue(new PendingToolpathEntry
                 {
                     Toolpath      = toolpath,
-                    RawToolpath   = toolpath,
+                    RawToolpath   = rawMill,
                     Node          = toolpathNode,
                     BeadWidth     = (float)sub.ToolDiameterMm,
                     LayerHeight   = mill.StepdownMm,
@@ -7444,6 +7537,7 @@ public partial class ViewportView : UserControl
                 ScheduleRealtimeSlice(vm);
             };
         vm.OnModelGeometryChanged = () => ScheduleRealtimeSlice(vm);
+        vm.OnMillAttractorsChanged = () => NotifyMillAttractorsChanged(vm);
         vm.OnPaintDeselectRequested = () => DeselectPaintSelection(vm);
         vm.OnPaintDeselectItemRequested = (layerIdx, moveStart, moveCount) =>
             RemovePaintSelectionItem(vm, layerIdx, moveStart, moveCount);
@@ -9136,12 +9230,12 @@ public partial class ViewportView : UserControl
         SettleOnBed(node, alsoLower: wasResting && KeepOnBedEnabled(edit));
     }
 
-    /// <summary>A moved or aimed TCP handle updates the lean readout and reslices.</summary>
+    /// <summary>A moved or aimed TCP handle updates the lean readout and the mill cutter.</summary>
     private static void AfterTcpAttractorTransform(ViewportViewModel vm, SceneNode node)
     {
         if (!vm.IsTcpAttractorNode(node)) return;
         vm.SyncTcpAttractorReadout(node);
-        vm.OnModelGeometryChanged?.Invoke();
+        vm.OnMillAttractorsChanged?.Invoke();
     }
 
     /// <summary>

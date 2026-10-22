@@ -190,7 +190,7 @@ public sealed partial class ViewportViewModel
             SelectedTcpAttractor = _tcpAttractorItems.FirstOrDefault();
         else
             OnPropertyChanged(nameof(HasTcpAttractors));
-        OnModelGeometryChanged?.Invoke();
+        OnMillAttractorsChanged?.Invoke();
         NotifyRenderNeeded();
     }
 
@@ -342,7 +342,7 @@ public sealed partial class ViewportViewModel
             RequestSelectNode?.Invoke(node);
         }
 
-        if (notify) OnModelGeometryChanged?.Invoke();
+        if (notify) OnMillAttractorsChanged?.Invoke();
         NotifyRenderNeeded();
     }
 
@@ -355,7 +355,7 @@ public sealed partial class ViewportViewModel
             OnPropertyChanged(nameof(TcpLeanXDeg));
             OnPropertyChanged(nameof(TcpLeanYDeg));
         }
-        OnModelGeometryChanged?.Invoke();
+        OnMillAttractorsChanged?.Invoke();
         NotifyRenderNeeded();
     }
 

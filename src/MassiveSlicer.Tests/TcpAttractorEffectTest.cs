@@ -81,7 +81,21 @@ public class TcpAttractorEffectTest
 
         var result = TcpAttractorEffect.ApplyMill(tp, [At(new Vector3(0, 0, 10), 200f, axis)]);
         var cutter = -Vector3.Normalize(result.Layers[0].Moves[0].Normal);
-        Assert.True(Vector3.Dot(cutter, axis) > 0.999f);
+        // The bar's +axis is straight up at lean 0. The bit is the downward side of that line.
+        Assert.True(Vector3.Dot(cutter, -axis) > 0.999f);
+    }
+
+    [Fact]
+    public void Mill_36deg_bar_leans_the_bit_36deg_off_world_down()
+    {
+        var axis = TcpAttractorEffect.AxisFromLean(0f, 36f);
+        var tp = MillPath(new Vector3(0, 0, 10), Vector3.UnitZ);
+        var cutter = -Vector3.Normalize(
+            TcpAttractorEffect.ApplyMill(tp, [At(new Vector3(0, 0, 10), 200f, axis)])
+                .Layers[0].Moves[0].Normal);
+        float fromDown = MathF.Acos(Math.Clamp(Vector3.Dot(cutter, -Vector3.UnitZ), -1f, 1f)) * (180f / MathF.PI);
+        Assert.InRange(fromDown, 35f, 37f);
+        Assert.True(Vector3.Dot(cutter, -axis) > 0.999f);
     }
 
     [Fact]
@@ -97,7 +111,7 @@ public class TcpAttractorEffectTest
         var midCut = -Vector3.Normalize(
             TcpAttractorEffect.ApplyMill(mid, [At(new Vector3(0, 0, 10), 200f, Vector3.UnitX)])
                 .Layers[0].Moves[0].Normal);
-        Assert.True(Vector3.Dot(midCut, Vector3.UnitX) > 0.2f && Vector3.Dot(midCut, Vector3.UnitX) < 0.99f);
+        Assert.True(Vector3.Dot(midCut, -Vector3.UnitX) > 0.2f && Vector3.Dot(midCut, -Vector3.UnitX) < 0.99f);
         Assert.True(midCut.Z < -0.2f);
     }
 
