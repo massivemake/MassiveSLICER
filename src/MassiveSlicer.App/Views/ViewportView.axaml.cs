@@ -2860,7 +2860,7 @@ public partial class ViewportView : UserControl
         if (joints is null || joints.Count < 3) return;
         float totalRoll = _toolFrameRoll + _flangeDisplayRoll;
         var tcpLocal = ResolveIkTcpLocal(totalRoll);
-        var (tcpA, tcpB, tcpC) = ResolveMillToolAbc(vm);
+        var (tcpA, tcpB, tcpC) = ResolveMillToolAbc(vm, totalRoll);
 
         _ikSolver = new NewtonIkSolver(
             _fkController.RestPoses,
@@ -2947,25 +2947,46 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Mill IK orientation is the mounted tool's TOOL_DATA ABC. Tool 12 is pitched
-    /// about 44° off the spindle housing, so using it while Spindle (No Bit) is
-    /// mounted holds a virtual axis vertical and leans the mesh. XYZ is not used
-    /// (the triad stays on SpindleBitTCP). Print / no-spindle → 0,0,0 (flange).
+    /// Mill IK orientation aims tool Z along the spindle cutter (SpindleBitTCP),
+    /// not the flange and not T2's TOOL_DATA. T2 is A=15°, B=0, C=0 — a spin about
+    /// flange Z — so world-down left the bit on the milling-home flange, 45° off vertical.
+    /// Tool 12 is a different pitch and leans the housing. Print / no spindle → 0,0,0.
     /// </summary>
-    (float a, float b, float c) ResolveMillToolAbc(ViewportViewModel vm)
+    (float a, float b, float c) ResolveMillToolAbc(ViewportViewModel vm, float totalRoll)
     {
-        if (!TryCutterOffsetInFlangeLocal(out _))
-            return (0f, 0f, 0f);
-        var tools = vm.ActiveCell?.EffectiveTools;
-        int k = vm.Robot?.KrlToolIndex ?? 0;
-        var mounted = k > 0 ? tools?.FirstOrDefault(t => t.KrlIndex == k) : null;
-        if (mounted is not null)
-            return (mounted.TcpA, mounted.TcpB, mounted.TcpC);
-        var t12 = tools?.FirstOrDefault(t => t.KrlIndex == 12)
-                  ?? tools?.FirstOrDefault(t => t.Name.Contains("Tool 12", StringComparison.OrdinalIgnoreCase));
-        if (t12 is null) return (0f, 0f, 0f);
-        return (t12.TcpA, t12.TcpB, t12.TcpC);
+        if (TrySpindleCutterInFlange(vm, totalRoll, out var zInFlange))
+            return KukaOrientation.AbcAimingToolZ(zInFlange);
+        return (0f, 0f, 0f);
     }
+
+    /// <summary>Cutter axis in the IK solver's KUKA flange frame. Same roll map as <c>ApplyTaughtAbcToFlangeRows</c>.</summary>
+    bool TrySpindleCutterInFlange(ViewportViewModel vm, float totalRoll, out System.Numerics.Vector3 zInFlange)
+    {
+        zInFlange = default;
+        if (_fkController?.FlangeNode is not { } flange) return false;
+        if (_currentToolNode is null || !UsesSpindleCutterTriad(vm)) return false;
+        if (!SpindleBitCylinder.TryGetCutterWorld(_currentToolNode, out _, out var axis)) return false;
+        var fw = flange.WorldTransform;
+        var r0 = V3(fw.Row0.Xyz);
+        var r1 = V3(fw.Row1.Xyz);
+        var r2 = V3(fw.Row2.Xyz);
+        if (r0.LengthSquared() < 1e-12f || r1.LengthSquared() < 1e-12f) return false;
+        r0 = System.Numerics.Vector3.Normalize(r0);
+        r1 = System.Numerics.Vector3.Normalize(r1);
+        r2 = System.Numerics.Vector3.Normalize(r2);
+        float cr = MathF.Cos(totalRoll), sr = MathF.Sin(totalRoll);
+        var kukaX = cr * r0 + sr * r2;
+        var kukaY = sr * r0 - cr * r2;
+        var kukaZ = r1;
+        var a = V3(axis);
+        zInFlange = new System.Numerics.Vector3(
+            System.Numerics.Vector3.Dot(a, kukaX),
+            System.Numerics.Vector3.Dot(a, kukaY),
+            System.Numerics.Vector3.Dot(a, kukaZ));
+        return zInFlange.LengthSquared() > 1e-8f;
+    }
+
+    static System.Numerics.Vector3 V3(Vector3 v) => new(v.X, v.Y, v.Z);
 
     // -- Workspace UI session restore (edit mode / tools / layer isolation) ----
 
@@ -7012,7 +7033,7 @@ public partial class ViewportView : UserControl
 
             ApplyToolpathStats(vm, toolpath);
             _pendingMillArmNode = toolpathNode;
-            var (t12a, t12b, t12c) = ResolveMillToolAbc(vm);
+            var (t12a, t12b, t12c) = ResolveMillToolAbc(vm, _toolFrameRoll + _flangeDisplayRoll);
             if (MathF.Abs(t12a) + MathF.Abs(t12b) + MathF.Abs(t12c) > 1e-3f)
                 ConsoleLogMill($"[mill] IK orients mounted tool ABC=({t12a:0.##},{t12b:0.##},{t12c:0.##}) — spindle axis follows that frame");
             int moves = toolpath.Layers.Sum(l => l.Moves.Count);
@@ -15212,9 +15233,12 @@ public partial class ViewportView : UserControl
 
         // Prefer pre-solved joints + planned E1 from validation (instant, matches reachability).
         // Skip when Toolhead Y/X/Z just changed — those joints are the old ABC.
-        // Also skip when the cached wrist is a different configuration than the arm
-        // the user is holding. Replaying it was the snap a second after they let go.
+        // A same-index replay still has to be near the arm the user is holding.
+        // Replaying a far cache there was the snap a second after they let go.
+        // A timeline move is different: waiting on a live solve left the mesh
+        // behind the playhead.
         int moveIdx = Math.Clamp(index > 0 ? index - 1 : 0, 0, int.MaxValue);
+        bool timelineMoved = index != _scrubLiveIndex || !ReferenceEquals(scrubNode, _scrubLiveNode);
         _scrubLiveNode = scrubNode;
         _scrubLiveIndex = index;
         bool orientKeyed = HasOrientKeys(scrubNode);
@@ -15224,7 +15248,7 @@ public partial class ViewportView : UserControl
         {
             moveIdx = Math.Clamp(moveIdx, 0, sols!.Length - 1);
             var angles = sols[moveIdx];
-            if (ScrubJointsNearArm(angles, robot))
+            if (timelineMoved || ScrubJointsNearArm(angles, robot))
             {
                 _scrubLiveGeneration++;
                 float? e1 = null;
@@ -15308,15 +15332,17 @@ public partial class ViewportView : UserControl
 
         Task.Run(() =>
         {
+            // Match the feasibility pass (40). The 300-step default held the
+            // mesh until the solve returned.
             var result = millScrub
-                ? solver.Solve(targetRobroot, seed, targetRot)
-                : solver.Solve(targetRobroot, seed, targetRot, requireOrientation: true);
+                ? solver.Solve(targetRobroot, seed, targetRot, maxIterations: 40)
+                : solver.Solve(targetRobroot, seed, targetRot, maxIterations: 40, requireOrientation: true);
             if (result is null && !millScrub)
             {
                 foreach (var fb in ToolpathFeasibilityEvaluator.PrintIkFallbackSeeds(
                              targetRobroot.X, targetRobroot.Y))
                 {
-                    result = solver.Solve(targetRobroot, fb, targetRot, requireOrientation: true);
+                    result = solver.Solve(targetRobroot, fb, targetRot, maxIterations: 40, requireOrientation: true);
                     if (result is not null) break;
                 }
             }

@@ -64,35 +64,79 @@ public class NewtonPrimaryIkTest
     }
 
     [Fact]
-    public void Milling_home_matches_world_down_at_a_small_yaw()
+    public void Mill_start_flange_is_45deg_from_world_down()
     {
-        var previous = Directory.GetCurrentDirectory();
-        Directory.SetCurrentDirectory("/Users/thomboessel/MassiveSLICER");
-        try
+        var cell = ReadCell("LFAM3", "lfam3.json");
+        var chain = Chain(cell);
+        var t2 = cell.EffectiveTools.First(t => t.KrlIndex == 2);
+        var flange = Make(cell, chain.RobotWorld, Matrix4.Identity, cell.Robot.Joints, 0f, 0f, 0f, 0f, newton: false);
+        var spindleTool = Make(cell, chain.RobotWorld, Matrix4.Identity, cell.Robot.Joints, 0f, t2.TcpA, t2.TcpB, t2.TcpC, newton: false);
+        float flangeErr = BestDownError(flange);
+        float t2Err = BestDownError(spindleTool);
+        Assert.InRange(flangeErr, 40f, 50f);
+        Assert.InRange(t2Err, 40f, 50f);
+    }
+
+    [Theory]
+    [InlineData(0f)]
+    [InlineData(-15f)]
+    public void Spindle_cutter_abc_tracks_the_bit_not_the_flange(float rollDeg)
+    {
+        var cell = ReadCell("LFAM3", "lfam3.json");
+        var chain = Chain(cell);
+        float roll = rollDeg * MathF.PI / 180f;
+        var (axis, zInFlange) = CutterInFlange(cell, roll);
+        var abc = KukaOrientation.AbcAimingToolZ(new System.Numerics.Vector3(zInFlange.X, zInFlange.Y, zInFlange.Z));
+        var ruler = Make(cell, chain.RobotWorld, Matrix4.Identity, cell.Robot.Joints, roll, abc.A, abc.B, abc.C, newton: false);
+        var toolZ = ruler.ToolZScene(MillStart);
+        float toCutter = AngleDeg(toolZ, axis);
+        Assert.True(toCutter < 1f, $"roll {rollDeg}° ABC=({abc.A:0.##},{abc.B:0.##},{abc.C:0.##}) tool Z is {toCutter:0.00}° off the spindle cutter");
+
+        var down = ruler.TargetRotFromMillNormal(Vector3.UnitZ, 0f);
+        var tcp = ruler.ComputeTcpPosScene(MillStart) - chain.RobotWorld;
+        var solved = ruler.Solve(tcp, MillStart, down, maxIterations: 400, requireOrientation: true);
+        Assert.NotNull(solved);
+        float tilt = AngleDeg(ruler.ToolZScene(solved!), new Vector3(0f, 0f, -1f));
+        Assert.True(tilt < 2f, $"world-down left the spindle cutter {tilt:0.00}° off vertical ({FmtJoints(solved!)})");
+    }
+
+    static float BestDownError(GltfNumericalIkSolver ruler)
+    {
+        float best = 999f;
+        for (int y = -180; y <= 180; y++)
         {
-            var cell = ReadCell("LFAM3", "lfam3.json");
-            var joints = cell.Robot.Joints;
-            var robotWorld = Chain(cell).RobotWorld;
-            var tcp = CutterTcpLocal("LFAM3", cell);
-            var t12 = Tool12Abc();
-            var ruler = Make(cell, robotWorld, tcp, joints, toolFrameRoll: 0f, t12.A, t12.B, t12.C, newton: false);
-            var down = new Vector3(0f, 0f, 1f);
-            float at0 = ruler.OrientationError(MillStart, ruler.TargetRotFromMillNormal(down, 0f)) * (180f / MathF.PI);
-            float best = 999f;
-            int bestYaw = 0;
-            for (int y = -180; y <= 180; y++)
-            {
-                float deg = ruler.OrientationError(MillStart, ruler.TargetRotFromMillNormal(down, y)) * (180f / MathF.PI);
-                if (deg < best) { best = deg; bestYaw = y; }
-            }
-            Assert.True(at0 > 2f, $"yaw 0 already matched the milling home ({at0:0.00}°)");
-            Assert.InRange(bestYaw, -8, 0);
-            Assert.True(best < 1f, $"best yaw {bestYaw} still {best:0.00}° off XHOME1");
+            float deg = ruler.OrientationError(MillStart, ruler.TargetRotFromMillNormal(Vector3.UnitZ, y)) * (180f / MathF.PI);
+            if (deg < best) best = deg;
         }
-        finally
-        {
-            Directory.SetCurrentDirectory(previous);
-        }
+        return best;
+    }
+
+    static float AngleDeg(Vector3 a, Vector3 b)
+        => MathF.Acos(Math.Clamp(Vector3.Dot(Vector3.Normalize(a), Vector3.Normalize(b)), -1f, 1f)) * (180f / MathF.PI);
+
+    static (Vector3 Axis, Vector3 InFlange) CutterInFlange(CellConfig cell, float totalRoll)
+    {
+        var glb = GltfLoader.Load(AssetPaths.Resolve(cell.Robot.ModelPath));
+        var p = cell.Robot.ModelWorldPosition;
+        var wrapper = new SceneNode { LocalTransform = Matrix4.CreateTranslation(p.X, p.Y, p.Z) };
+        wrapper.AddChild(glb);
+        var fk = RobotFkController.TryBuild(wrapper, cell.Robot.Joints);
+        Assert.NotNull(fk);
+        fk!.Apply(MillStart[0], MillStart[1], MillStart[2], MillStart[3], MillStart[4], MillStart[5]);
+        var flange = fk.FlangeNode!;
+        var spindle = GltfLoader.Load(AssetPaths.Resolve("assets/cells/LFAM3/Toolheads/spindle.glb"));
+        spindle.LocalTransform = spindle.LocalTransform * flange.WorldTransform;
+        new SceneNode().AddChild(spindle);
+        Assert.True(SpindleBitCylinder.TryGetCutterWorld(spindle, out _, out var axis));
+        var fw = flange.WorldTransform;
+        var r0 = Vector3.Normalize(fw.Row0.Xyz);
+        var r1 = Vector3.Normalize(fw.Row1.Xyz);
+        var r2 = Vector3.Normalize(fw.Row2.Xyz);
+        float cr = MathF.Cos(totalRoll), sr = MathF.Sin(totalRoll);
+        var kukaX = cr * r0 + sr * r2;
+        var kukaY = sr * r0 - cr * r2;
+        var kukaZ = r1;
+        return (axis, new Vector3(Vector3.Dot(axis, kukaX), Vector3.Dot(axis, kukaY), Vector3.Dot(axis, kukaZ)));
     }
 
     [Theory]

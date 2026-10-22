@@ -206,6 +206,16 @@ public class GltfNumericalIkSolver
     public Vector3 ComputeTcpPosScene(float[] krl)
         => (_tcpLocal * ComputeJoint6Transform(krl)).Row3.Xyz;
 
+    /// <summary>Tool axes in scene space after the taught ABC. <c>R1</c> is tool Z. World-down is (0,0,−1).</summary>
+    public (Vector3 R0, Vector3 R1, Vector3 R2) ToolFrameScene(float[] krl)
+    {
+        var (_, r0, r1, r2) = ComputeTcpAndRot(krl);
+        return (r0, r1, r2);
+    }
+
+    /// <summary>Tool Z in scene space after the taught spindle/flange ABC. World-down is (0,0,−1).</summary>
+    public Vector3 ToolZScene(float[] krl) => ToolFrameScene(krl).R1;
+
     /// <summary>Returns TCP position and normalized rotation rows in one FK pass.</summary>
     protected (Vector3 pos, Vector3 r0, Vector3 r1, Vector3 r2) ComputeTcpAndRot(float[] krl)
     {
@@ -702,13 +712,63 @@ public class GltfNumericalIkSolver
     // -- Helpers ---------------------------------------------------------------
 
     /// <summary>
-    /// Orientation error as a rotation vector (axis × sin(angle/2) approximation).
-    /// Formula: ω = ½ Σ_k (cR_k × tR_k) -- drives current frame toward target frame.
+    /// World rotation vector that takes the current tool frame onto the target.
+    /// ½ Σ (c × t) and vee(R) are both sin(θ), so they read ~0 at a 180° flip.
+    /// At the milling home that flip is yaw −105° while tool Z is still 45° off
+    /// world-down, and IK stopped there. The quaternion vector is sin(θ/2) and
+    /// stays nonzero through 180°. Scaled by 2 so a small angle matches the old
+    /// world omega the Newton joint-axis Jacobian expects.
     /// </summary>
     protected static Vector3 RotErr(
         Vector3 tR0, Vector3 tR1, Vector3 tR2,
         Vector3 cR0, Vector3 cR1, Vector3 cR2)
-        => 0.5f * (Vector3.Cross(cR0, tR0) + Vector3.Cross(cR1, tR1) + Vector3.Cross(cR2, tR2));
+    {
+        cR0 = SafeUnit(cR0); cR1 = SafeUnit(cR1); cR2 = SafeUnit(cR2);
+        tR0 = SafeUnit(tR0); tR1 = SafeUnit(tR1); tR2 = SafeUnit(tR2);
+        float m00 = Vector3.Dot(cR0, tR0), m01 = Vector3.Dot(cR0, tR1), m02 = Vector3.Dot(cR0, tR2);
+        float m10 = Vector3.Dot(cR1, tR0), m11 = Vector3.Dot(cR1, tR1), m12 = Vector3.Dot(cR1, tR2);
+        float m20 = Vector3.Dot(cR2, tR0), m21 = Vector3.Dot(cR2, tR1), m22 = Vector3.Dot(cR2, tR2);
+        float trace = m00 + m11 + m22;
+        float qw, qx, qy, qz;
+        if (trace > 0f)
+        {
+            float s = MathF.Sqrt(trace + 1f) * 2f;
+            qw = 0.25f * s;
+            qx = (m21 - m12) / s;
+            qy = (m02 - m20) / s;
+            qz = (m10 - m01) / s;
+        }
+        else if (m00 > m11 && m00 > m22)
+        {
+            float s = MathF.Sqrt(1f + m00 - m11 - m22) * 2f;
+            qw = (m21 - m12) / s;
+            qx = 0.25f * s;
+            qy = (m01 + m10) / s;
+            qz = (m02 + m20) / s;
+        }
+        else if (m11 > m22)
+        {
+            float s = MathF.Sqrt(1f + m11 - m00 - m22) * 2f;
+            qw = (m02 - m20) / s;
+            qx = (m01 + m10) / s;
+            qy = 0.25f * s;
+            qz = (m12 + m21) / s;
+        }
+        else
+        {
+            float s = MathF.Sqrt(1f + m22 - m00 - m11) * 2f;
+            qw = (m10 - m01) / s;
+            qx = (m02 + m20) / s;
+            qy = (m12 + m21) / s;
+            qz = 0.25f * s;
+        }
+        if (qw < 0f) { qx = -qx; qy = -qy; qz = -qz; }
+        // Body omega → world. 2·q_xyz ≈ θ·axis for small θ.
+        return (cR0 * qx + cR1 * qy + cR2 * qz) * 2f;
+    }
+
+    static Vector3 SafeUnit(Vector3 v)
+        => v.LengthSquared < 1e-12f ? Vector3.UnitX : Vector3.Normalize(v);
 
     /// <summary>
     /// In-place Gauss-Jordan elimination with partial pivoting on an n×(n+1)

@@ -143,6 +143,31 @@ public static class KukaOrientation
         return KukaIkSolver.MatrixToAbc(m);
     }
 
+    /// <summary>
+    /// KUKA ABC whose tool Z lies along <paramref name="toolZInFlange"/> (KUKA flange axes).
+    /// The LFAM 3 spindle cutter is flange −X, so this is B=−90°, not T2's A=15° spin
+    /// (that leaves tool Z on the flange, 45° off world-down at the milling home).
+    /// </summary>
+    public static (float A, float B, float C) AbcAimingToolZ(Vector3 toolZInFlange)
+    {
+        var z = toolZInFlange.LengthSquared() > 1e-12f
+            ? Vector3.Normalize(toolZInFlange)
+            : -Vector3.UnitZ;
+        var hint = MathF.Abs(z.Z) > 0.9f ? Vector3.UnitX : Vector3.UnitZ;
+        var x = Vector3.Cross(hint, z);
+        if (x.LengthSquared() < 1e-12f)
+            x = Vector3.Cross(Vector3.UnitY, z);
+        x = Vector3.Normalize(x);
+        var y = Vector3.Cross(z, x);
+        // Same storage as AbcToMatrix: row 2 is tool Z in the flange frame.
+        var m = new Matrix4x4(
+            x.X, x.Y, x.Z, 0,
+            y.X, y.Y, y.Z, 0,
+            z.X, z.Y, z.Z, 0,
+            0, 0, 0, 1);
+        return KukaIkSolver.MatrixToAbc(m);
+    }
+
     static Vector3 Rodrigues(Vector3 v, Vector3 axis, float sinTheta, float cosTheta)
         => v * cosTheta + Vector3.Cross(axis, v) * sinTheta + axis * Vector3.Dot(axis, v) * (1f - cosTheta);
 }
