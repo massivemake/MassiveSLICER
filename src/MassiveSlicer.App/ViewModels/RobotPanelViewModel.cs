@@ -90,12 +90,17 @@ public sealed class RobotPanelViewModel : ViewModelBase
     private double _a6 =   0;
     private double _e1 =   0;
 
-    public double A1 { get => _a1; set => SetField(ref _a1, JointLimitEnvelope.Clamp(value, _minA1, _maxA1)); }
-    public double A2 { get => _a2; set => SetField(ref _a2, JointLimitEnvelope.Clamp(value, _minA2, _maxA2)); }
-    public double A3 { get => _a3; set => SetField(ref _a3, JointLimitEnvelope.Clamp(value, _minA3, _maxA3)); }
-    public double A4 { get => _a4; set => SetField(ref _a4, JointLimitEnvelope.Clamp(value, _minA4, _maxA4)); }
-    public double A5 { get => _a5; set => SetField(ref _a5, JointLimitEnvelope.Clamp(value, _minA5, _maxA5)); }
-    public double A6 { get => _a6; set => SetField(ref _a6, JointLimitEnvelope.Clamp(value, _minA6, _maxA6)); }
+    // Fold ±360° back into the software stops before the envelope clamp.
+    // Validation unwraps for a continuous joint trace; A5's stops are only
+    // ±125°, so the unwrapped twin (248° == −112°) was clamped to the opposite
+    // stop and the cutter left the part. E1 stays a plain clamp: on a rail
+    // it is millimetres.
+    public double A1 { get => _a1; set => SetField(ref _a1, JointLimitEnvelope.FoldIntoSoftLimits(value, _minA1, _maxA1)); }
+    public double A2 { get => _a2; set => SetField(ref _a2, JointLimitEnvelope.FoldIntoSoftLimits(value, _minA2, _maxA2)); }
+    public double A3 { get => _a3; set => SetField(ref _a3, JointLimitEnvelope.FoldIntoSoftLimits(value, _minA3, _maxA3)); }
+    public double A4 { get => _a4; set => SetField(ref _a4, JointLimitEnvelope.FoldIntoSoftLimits(value, _minA4, _maxA4)); }
+    public double A5 { get => _a5; set => SetField(ref _a5, JointLimitEnvelope.FoldIntoSoftLimits(value, _minA5, _maxA5)); }
+    public double A6 { get => _a6; set => SetField(ref _a6, JointLimitEnvelope.FoldIntoSoftLimits(value, _minA6, _maxA6)); }
     /// <summary>External axis 1 — rotary bed (KRL degrees) or rail (mm).</summary>
     public double E1 { get => _e1; set => SetField(ref _e1, JointLimitEnvelope.Clamp(value, _minE1, _maxE1)); }
 

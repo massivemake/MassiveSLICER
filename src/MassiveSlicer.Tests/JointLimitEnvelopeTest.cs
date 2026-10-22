@@ -29,6 +29,21 @@ public sealed class JointLimitEnvelopeTest
     }
 
     [Fact]
+    public void A5_turn_outside_the_stops_folds_back_to_the_same_wrist_pose()
+    {
+        // LFAM 3 A5 software stops are ±125°. Validation stores the continuous
+        // twin (248° is −112° plus one turn). Clamping that twin to +112.5°
+        // is the other wrist stop and lifts the cutter off the part.
+        const float min = -125f, max = 125f;
+        Assert.Equal(-111.68f, JointLimitEnvelope.FoldIntoSoftLimits(248.32f, min, max), 2);
+        Assert.Equal(-14.22f, JointLimitEnvelope.FoldIntoSoftLimits(345.78f, min, max), 2);
+        Assert.Equal(112.5f, JointLimitEnvelope.FoldIntoSoftLimits(112.5f, min, max), 2);
+        Assert.Equal(-112.5f, JointLimitEnvelope.FoldIntoSoftLimits(-112.5f, min, max), 2);
+        // No congruent turn sits inside ±125°. Stay on the envelope stop.
+        Assert.Equal(112.5f, JointLimitEnvelope.FoldIntoSoftLimits(200f, min, max), 2);
+    }
+
+    [Fact]
     public void JointConfig_Clamp_uses_envelope()
     {
         var j = new JointConfig { MinDeg = -70, MaxDeg = 70 };

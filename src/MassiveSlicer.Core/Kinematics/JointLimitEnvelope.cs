@@ -53,6 +53,29 @@ public static class JointLimitEnvelope
         return Math.Clamp(value, lo, hi);
     }
 
+    /// <summary>
+    /// Revolute equivalent of <see cref="Clamp(float,float,float,float)"/>.
+    /// An angle a full turn outside the software stops is the same pose as the
+    /// angle inside them. Pull that turn back in, then apply the envelope.
+    /// A linear axis must not use this — 360 mm is not 0 mm.
+    /// </summary>
+    public static float FoldIntoSoftLimits(float value, float min, float max)
+    {
+        if (float.IsNaN(value) || float.IsNaN(min) || float.IsNaN(max))
+            return value;
+        if (max < min)
+            (min, max) = (max, min);
+        float folded = value;
+        for (int i = 0; i < 4 && folded > max && folded - 360f >= min; i++)
+            folded -= 360f;
+        for (int i = 0; i < 4 && folded < min && folded + 360f <= max; i++)
+            folded += 360f;
+        return Clamp(folded, min, max);
+    }
+
+    public static double FoldIntoSoftLimits(double value, double min, double max)
+        => FoldIntoSoftLimits((float)value, (float)min, (float)max);
+
     public static bool Contains(float value, float min, float max, float margin = MarginFraction)
     {
         var (lo, hi) = Inset(min, max, margin);
