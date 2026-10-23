@@ -28,7 +28,8 @@ namespace MassiveSlicer.App.Console;
 ///   POST /materials  {..}           -> partial update of PBR/material viewport state
 ///   POST /command   {"command":".."} -> { ok, ran, output:[ ".." ] }   (or raw body = the command)
 ///
-/// All ViewModel access is marshalled to the UI thread. The chosen port is written to
+/// Browser-originated requests are limited to /ping, /reveal and /open — see
+/// <see cref="BridgeRequestGuard"/>. All ViewModel access is marshalled to the UI thread. The chosen port is written to
 /// %LOCALAPPDATA%\MassiveSlicer\bridge.port so tooling can discover it.
 /// </summary>
 public sealed class LocalControlBridge : IDisposable
@@ -127,7 +128,15 @@ public sealed class LocalControlBridge : IDisposable
             using var stream = c.GetStream();
             var req = await ReadRequestAsync(stream, ct);
             if (req is null) return;
-            var (method, path, body) = req.Value;
+            var (method, path, body, headers) = req.Value;
+            int qi = path.IndexOf('?');
+            string route = qi >= 0 ? path[..qi] : path;
+            if (BridgeRequestGuard.Check(method, route, headers) is { } refused)
+            {
+                await WriteAsync(stream, 403,
+                    JsonSerializer.Serialize(new { ok = false, error = refused }, Json), ct);
+                return;
+            }
             int code = 200;
             try
             {
@@ -151,7 +160,7 @@ public sealed class LocalControlBridge : IDisposable
         catch { /* per-connection failure: ignore */ }
     }
 
-    private static async Task<(string Method, string Path, string Body)?> ReadRequestAsync(NetworkStream s, CancellationToken ct)
+    private static async Task<(string Method, string Path, string Body, Dictionary<string, string> Headers)?> ReadRequestAsync(NetworkStream s, CancellationToken ct)
     {
         var buf = new byte[8192];
         var acc = new List<byte>();
@@ -170,11 +179,16 @@ public sealed class LocalControlBridge : IDisposable
         if (reqLine.Length < 2) return null;
 
         int contentLength = 0;
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (string h in lines.Skip(1))
         {
             int colon = h.IndexOf(':');
-            if (colon > 0 && h.AsSpan(0, colon).Trim().Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
-                int.TryParse(h.AsSpan(colon + 1).Trim(), out contentLength);
+            if (colon <= 0) continue;
+            string name = h[..colon].Trim();
+            string value = h[(colon + 1)..].Trim();
+            headers[name] = value;
+            if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                int.TryParse(value, out contentLength);
         }
 
         int bodyStart = headerEnd + 4;
@@ -189,7 +203,7 @@ public sealed class LocalControlBridge : IDisposable
         string body = contentLength > 0
             ? Encoding.UTF8.GetString(bodyBytes.ToArray(), 0, Math.Min(bodyBytes.Count, contentLength))
             : "";
-        return (reqLine[0], reqLine[1], body);
+        return (reqLine[0], reqLine[1], body, headers);
     }
 
     private static int IndexOfHeaderEnd(List<byte> d)
@@ -464,7 +478,7 @@ public sealed class LocalControlBridge : IDisposable
     private static async Task WriteAsync(NetworkStream s, int code, string json, CancellationToken ct)
     {
         byte[] bodyBytes = Encoding.UTF8.GetBytes(json);
-        string reason = code == 200 ? "OK" : code == 500 ? "Internal Server Error" : "Error";
+        string reason = code == 200 ? "OK" : code == 403 ? "Forbidden" : code == 500 ? "Internal Server Error" : "Error";
         string header = $"HTTP/1.1 {code} {reason}\r\n" +
                         "Content-Type: application/json\r\n" +
                         $"Content-Length: {bodyBytes.Length}\r\n" +

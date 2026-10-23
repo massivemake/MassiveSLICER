@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-10-08** (`.mass` stores the mesh in the file)
+Last updated: **2026-10-22** (localhost bridge refuses browser-originated control requests)
 
 ---
 
@@ -521,6 +521,16 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-10-22 — Localhost bridge refuses web pages (branch `feature/erp-review-launch`)
+
+- Symptom: `LocalControlBridge` (127.0.0.1:8723) had no auth and sent `Access-Control-Allow-Origin: *`. Any web page the user had open could `POST /command` and run console commands, robot motion included. A DNS-rebinding page could also read `/status`, `/console` and `/screenshot`.
+- Cause: the bridge was built for local tooling and never distinguished a browser from curl.
+- Fix: `BridgeRequestGuard` runs before routing. Host must be localhost, an IP literal or the machine name (blocks rebinding). A request carrying `Origin` or a cross-site `Sec-Fetch-Site` may only use `/ping`, `/reveal`, `/open` (the last two already limited to MassiveFILES). Refusals return 403.
+- Unchanged: curl, Python, PowerShell, the MCP shim, Hermes over LAN, the second-instance handoff and MassiveBOARD's graph `/reveal`.
+- Live-checked on macOS: tool `/command` works; Origin `/command`, cross-site `/screenshot` and a rebinding Host are refused; browser `/ping` works.
+- First step toward the ERP "Open in MassiveSLICER" review launch (`massiveslicer-review://`); the launch itself is not built yet.
+- Files: `App/Console/BridgeRequestGuard.cs`, `App/Console/LocalControlBridge.cs`, `Tests/BridgeRequestGuardTest.cs`.
 
 ### 2026-10-08 — `.mass` stores the mesh in the file
 
