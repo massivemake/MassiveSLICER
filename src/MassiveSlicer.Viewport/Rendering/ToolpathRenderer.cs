@@ -329,6 +329,23 @@ void main() {
     private float _sdfZNear = 1f;
     private float _sdfZFar = 1000f;
     private bool _sdfGBuffer;
+    private int _carveTex;
+    private int _carveFallbackTex;
+    private int _noseHeadTex, _noseIndexTex, _noseDataTex;
+    private int _noseHeadFallback, _noseIndexFallback, _noseDataFallback;
+    private bool _carveActive;
+    private bool _carveTexReady;
+    private int _carveGen;
+    private float _carveLength = float.NaN;
+    private float _carveToolA, _carveToolB, _carveToolC;
+    private bool _carveFlip;
+    private bool _carveBall;
+    private bool _carveBuilding;
+    private MillSideCarveGrid? _carvePending;
+    private MillSideCarveGrid? _carveLive;
+    private readonly object _carveGate = new();
+    /// <summary>Fired on a background thread when a new carve grid is ready to upload.</summary>
+    public Action? SdfCarveReady;
     private int[] _seamVertexCumulative    = [];
     private int[] _allPointVertexCumulative = [];
     // When set, E1 station points are drawn back on the part so a table spin can carry them.
@@ -1345,6 +1362,20 @@ void main() {
         uniform float uZFar;
         uniform float uGBuffer;
         uniform vec3 uBeadColor;
+        uniform usampler3D uCarve;
+        uniform vec3 uCarveOrigin;
+        uniform float uCarveCell;
+        uniform vec3 uCarveDim;
+        uniform float uCarveOn;
+        uniform float uCarveBall;
+        uniform usampler3D uToolHead;
+        uniform usampler2D uToolIndex;
+        uniform sampler2D uToolData;
+        uniform vec3 uToolOrigin;
+        uniform float uToolCell;
+        uniform vec3 uToolDim;
+        uniform int uToolIndexW;
+        uniform int uToolDataW;
         layout(location = 0) out vec4 fragColor;
         layout(location = 1) out vec4 fragZ;
         float sdBead(vec3 p, float L, float hw, float hh) {
@@ -1352,6 +1383,54 @@ void main() {
             vec3 b = vec3(L * 0.5, max(hw - rad, 0.0), max(hh - rad, 0.0));
             vec3 q = abs(p) - b;
             return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - rad;
+        }
+        vec3 frameToWorld(vec3 f) {
+            return vCenter + vT * f.x + vR * f.y + vU * f.z;
+        }
+        bool carved(vec3 p) {
+            if (uCarveOn < 0.5) return false;
+            vec3 g = (p - uCarveOrigin) / uCarveCell;
+            if (any(lessThan(g, vec3(0.0))) || any(greaterThanEqual(g, uCarveDim))) return false;
+            return texelFetch(uCarve, ivec3(g), 0).r > 0u;
+        }
+        // Swept ball. Negative is inside the nose. The gradient points out of the tool.
+        // Kept in step with MillSideCarve.CapsuleDistance.
+        float toolSd(vec3 p, out vec3 nrm) {
+            nrm = vec3(0.0, 0.0, 1.0);
+            vec3 g = (p - uToolOrigin) / uToolCell;
+            if (any(lessThan(g, vec3(0.0))) || any(greaterThanEqual(g, uToolDim))) return 1e4;
+            uvec4 head = texelFetch(uToolHead, ivec3(g), 0);
+            if (head.g == 4294967295u) return -max(uToolCell * 0.5, 0.5);
+            int n = int(min(head.g, 128u));
+            if (n <= 0) return 1e4;
+            int start = int(head.r);
+            float best = 1e4;
+            vec3 bestN = nrm;
+            for (int k = 0; k < 128; k++) {
+                if (k >= n) break;
+                int e = start + k;
+                int ix = e - (e / uToolIndexW) * uToolIndexW;
+                uint ti = texelFetch(uToolIndex, ivec2(ix, e / uToolIndexW), 0).r;
+                int base = int(ti) * 2;
+                int x0 = base - (base / uToolDataW) * uToolDataW;
+                int y0 = base / uToolDataW;
+                vec4 a = texelFetch(uToolData, ivec2(x0, y0), 0);
+                int base1 = base + 1;
+                int x1 = base1 - (base1 / uToolDataW) * uToolDataW;
+                int y1 = base1 / uToolDataW;
+                vec4 b = texelFetch(uToolData, ivec2(x1, y1), 0);
+                vec3 pa = p - a.xyz;
+                vec3 ba = b.xyz - a.xyz;
+                float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+                vec3 delta = pa - ba * h;
+                float dist = length(delta) - a.w;
+                if (dist < best) {
+                    best = dist;
+                    bestN = dot(delta, delta) > 1e-8 ? normalize(delta) : nrm;
+                }
+            }
+            nrm = bestN;
+            return best;
         }
         void main() {
             vec3 rd = normalize(vSurf - uCamera);
@@ -1386,13 +1465,72 @@ void main() {
             }
             if (!hit) discard;
             vec3 hitF = roF + rdF * t;
+            vec3 hitW = frameToWorld(hitF);
+            bool gouge = false;
+            bool noseGouge = false;
+            vec3 gougeN = vec3(0.0, 0.0, 1.0);
+            bool useBall = uCarveBall > 0.5;
+            if (useBall) {
+                vec3 tn;
+                float td = toolSd(hitW, tn);
+                if (td < 0.0) {
+                    bool found = false;
+                    for (int k = 0; k < 20; k++) {
+                        t += max(-td * 0.8, 0.06);
+                        if (t > tExit) break;
+                        vec3 f = roF + rdF * t;
+                        if (sdBead(f, vL, vHw, vHh) > 0.25) break;
+                        vec3 w = frameToWorld(f);
+                        td = toolSd(w, tn);
+                        if (td >= -0.03) {
+                            hitF = f;
+                            hitW = w;
+                            found = true;
+                            gouge = true;
+                            noseGouge = true;
+                            gougeN = -tn;
+                            break;
+                        }
+                    }
+                    if (!found) discard;
+                }
+            }
+            if (!noseGouge && carved(hitW)) {
+                bool found = false;
+                float step = max(uCarveCell * 0.8, 0.4);
+                for (int k = 0; k < 72; k++) {
+                    t += step;
+                    if (t > tExit) break;
+                    vec3 f = roF + rdF * t;
+                    float dist = sdBead(f, vL, vHw, vHh);
+                    if (dist > step * 1.5) break;
+                    vec3 w = frameToWorld(f);
+                    if (!carved(w)) {
+                        hitF = f;
+                        hitW = w;
+                        found = true;
+                        gouge = true;
+                        break;
+                    }
+                }
+                if (!found) discard;
+            }
             vec3 e = vec3(eps, 0.0, 0.0);
             vec3 nF = normalize(vec3(
                 sdBead(hitF + e.xyy, vL, vHw, vHh) - sdBead(hitF - e.xyy, vL, vHw, vHh),
                 sdBead(hitF + e.yxy, vL, vHw, vHh) - sdBead(hitF - e.yxy, vL, vHw, vHh),
                 sdBead(hitF + e.yyx, vL, vHw, vHh) - sdBead(hitF - e.yyx, vL, vHw, vHh)));
             vec3 n = normalize(vT * nF.x + vR * nF.y + vU * nF.z);
-            vec3 hitW = vCenter + vT * hitF.x + vR * hitF.y + vU * hitF.z;
+            if (noseGouge) {
+                if (dot(gougeN, gougeN) > 1e-6) n = normalize(gougeN);
+            } else if (gouge) {
+                float h = max(uCarveCell, 0.5);
+                vec3 g = vec3(
+                    float(carved(hitW + vec3(h, 0.0, 0.0))) - float(carved(hitW - vec3(h, 0.0, 0.0))),
+                    float(carved(hitW + vec3(0.0, h, 0.0))) - float(carved(hitW - vec3(0.0, h, 0.0))),
+                    float(carved(hitW + vec3(0.0, 0.0, h))) - float(carved(hitW - vec3(0.0, 0.0, h))));
+                if (dot(g, g) > 1e-6) n = normalize(g);
+            }
             vec4 clip = vec4(hitW, 1.0) * uMVP;
             if (clip.w <= 0.0) discard;
             gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
@@ -1580,8 +1718,10 @@ void main() {
         }
 
         // The deposition g-buffer is beads only. Lines and the box bead would write
-        // one color and leave the packed-Z target undefined.
-        if (_sdfGBuffer)
+        // one color and leave the packed-Z target undefined. The flag has to follow
+        // this draw: leaving it true after the SDF view made every later view return
+        // here and draw nothing.
+        if (_sdfGBuffer && showSdfBead)
         {
             DrawSdfInstances();
             GL.BindVertexArray(0);
@@ -1805,6 +1945,7 @@ void main() {
             // Same live colour as the Preview box bead. The instance buffer still
             // carries the upload-time material, which is the near-white default.
             _sdfShader.SetVector3("uBeadColor", _beadMaterialColor);
+            BindSdfCarve();
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_sdfVao);
             // macOS OpenGL ends at 4.1. glDrawElementsInstancedBaseInstance is 4.2,
@@ -1816,7 +1957,270 @@ void main() {
                 PrimitiveType.Triangles, 36, DrawElementsType.UnsignedShort, IntPtr.Zero,
                 sdfCount - sdfFirst);
             GL.Enable(EnableCap.CullFace);
+            GL.ActiveTexture(TextureUnit.Texture0);
         }
+    }
+
+    /// <summary>
+    /// Mill SDF only. When enabled, a background pass voxels the bit stick-out and the
+    /// bead shader removes the thickness that stick cuts. The cutting face is left in place.
+    /// Same parameters skip the rebuild. Not saved with the scene.
+    /// </summary>
+    public void ConfigureSdfSideCarve(bool enabled, float lengthMm, float toolheadA, float toolheadB, float toolheadC, bool flip, bool ball)
+    {
+        if (!enabled)
+        {
+            _carveActive = false;
+            return;
+        }
+        lengthMm = MathF.Max(lengthMm, 0.5f);
+        int gen;
+        lock (_carveGate)
+        {
+            bool paramsMatch = !float.IsNaN(_carveLength)
+                && MathF.Abs(_carveLength - lengthMm) < 0.05f
+                && MathF.Abs(_carveToolA - toolheadA) < 0.05f
+                && MathF.Abs(_carveToolB - toolheadB) < 0.05f
+                && MathF.Abs(_carveToolC - toolheadC) < 0.05f
+                && _carveFlip == flip
+                && _carveBall == ball;
+            if (paramsMatch && (_carveTexReady || _carveBuilding))
+            {
+                _carveActive = true;
+                return;
+            }
+            _carveActive = true;
+            _carveLength = lengthMm;
+            _carveToolA = toolheadA;
+            _carveToolB = toolheadB;
+            _carveToolC = toolheadC;
+            _carveFlip = flip;
+            _carveBall = ball;
+            _carveTexReady = false;
+            _carveBuilding = true;
+            gen = Interlocked.Increment(ref _carveGen);
+        }
+        var tp = _toolpath;
+        var origin = _origin;
+        var center = _rotaryCenter;
+        float sign = _rotarySign;
+        float radius = MathF.Max(_beadWidth * 0.5f, 0.25f);
+        float nominal = _beadLayerHeight;
+        var ready = SdfCarveReady;
+        Task.Run(() =>
+        {
+            try
+            {
+                var grid = MillSideCarve.BuildForPath(tp, origin, center, sign, radius, lengthMm,
+                    nominal, toolheadA, toolheadB, toolheadC, flip, ball);
+                lock (_carveGate)
+                {
+                    if (gen != Volatile.Read(ref _carveGen)) return;
+                    _carvePending = grid;
+                    _carveBuilding = false;
+                }
+                System.Console.WriteLine(
+                    $"[sdf] bit side carve: {grid.CylinderCount} cylinders, grid {grid.Nx}x{grid.Ny}x{grid.Nz} cell {grid.Cell:0.##} mm, {grid.OccupiedCount} cells, {grid.BuildMilliseconds} ms{(ball ? $" ball noses {grid.NoseCount} head {grid.HeadNx}x{grid.HeadNy}x{grid.HeadNz} cell {grid.HeadCell:0.##} max {grid.AnalyticMaxList} trim {grid.AnalyticFullCells}" : "")}");
+                ready?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                lock (_carveGate)
+                {
+                    if (gen == Volatile.Read(ref _carveGen))
+                        _carveBuilding = false;
+                }
+                System.Console.Error.WriteLine("[sdf] bit side carve failed: " + ex.Message);
+            }
+        });
+    }
+
+    void BindSdfCarve()
+    {
+        if (_sdfShader is null) return;
+        lock (_carveGate)
+        {
+            if (_carvePending is { } pending)
+            {
+                _carveLive = pending;
+                _carvePending = null;
+                UploadCarveTexture(pending);
+                UploadNoseTextures(pending);
+                _carveTexReady = true;
+            }
+        }
+        bool gridOn = _carveActive && _carveTexReady && _carveLive is { OccupiedCount: > 0 } && _carveTex != 0;
+        bool noseOn = _carveActive && _carveTexReady && _carveLive is { HasAnalytic: true } && _noseHeadTex != 0;
+        int tex = gridOn ? _carveTex : EnsureCarveFallback();
+        GL.ActiveTexture(TextureUnit.Texture2);
+        GL.BindTexture(TextureTarget.Texture3D, tex);
+        _sdfShader.SetInt("uCarve", 2);
+        _sdfShader.SetFloat("uCarveOn", gridOn ? 1f : 0f);
+        _sdfShader.SetFloat("uCarveBall", noseOn ? 1f : 0f);
+        if ((gridOn || noseOn) && _carveLive is { } live)
+        {
+            _sdfShader.SetVector3("uCarveOrigin", ToGl(live.Origin));
+            _sdfShader.SetFloat("uCarveCell", live.Cell);
+            _sdfShader.SetVector3("uCarveDim", new Vector3(live.Nx, live.Ny, live.Nz));
+            BindNoseTextures(noseOn ? live : null);
+        }
+        else
+        {
+            _sdfShader.SetVector3("uCarveOrigin", Vector3.Zero);
+            _sdfShader.SetFloat("uCarveCell", 1f);
+            _sdfShader.SetVector3("uCarveDim", Vector3.One);
+            BindNoseTextures(null);
+        }
+    }
+
+    const int NoseTexW = 4096;
+
+    void BindNoseTextures(MillSideCarveGrid? live)
+    {
+        if (_sdfShader is null) return;
+        EnsureNoseFallbacks();
+        bool on = live is { HasAnalytic: true };
+        GL.ActiveTexture(TextureUnit.Texture4);
+        GL.BindTexture(TextureTarget.Texture3D, on ? _noseHeadTex : _noseHeadFallback);
+        GL.ActiveTexture(TextureUnit.Texture5);
+        GL.BindTexture(TextureTarget.Texture2D, on ? _noseIndexTex : _noseIndexFallback);
+        GL.ActiveTexture(TextureUnit.Texture6);
+        GL.BindTexture(TextureTarget.Texture2D, on ? _noseDataTex : _noseDataFallback);
+        _sdfShader.SetInt("uToolHead", 4);
+        _sdfShader.SetInt("uToolIndex", 5);
+        _sdfShader.SetInt("uToolData", 6);
+        if (on && live is { } g)
+        {
+            _sdfShader.SetVector3("uToolOrigin", ToGl(g.HeadOrigin));
+            _sdfShader.SetFloat("uToolCell", g.HeadCell);
+            _sdfShader.SetVector3("uToolDim", new Vector3(g.HeadNx, g.HeadNy, g.HeadNz));
+        }
+        else
+        {
+            _sdfShader.SetVector3("uToolOrigin", Vector3.Zero);
+            _sdfShader.SetFloat("uToolCell", 1f);
+            _sdfShader.SetVector3("uToolDim", Vector3.One);
+        }
+        _sdfShader.SetInt("uToolIndexW", NoseTexW);
+        _sdfShader.SetInt("uToolDataW", NoseTexW);
+        GL.ActiveTexture(TextureUnit.Texture0);
+    }
+
+    void UploadNoseTextures(MillSideCarveGrid grid)
+    {
+        if (!grid.HasAnalytic || grid.HeadRg is null || grid.ToolIndex is null || grid.ToolData is null)
+        {
+            return;
+        }
+        if (_noseHeadTex == 0) _noseHeadTex = GL.GenTexture();
+        GL.ActiveTexture(TextureUnit.Texture4);
+        GL.BindTexture(TextureTarget.Texture3D, _noseHeadTex);
+        GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+        GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.Rg32ui,
+            grid.HeadNx, grid.HeadNy, grid.HeadNz, 0,
+            PixelFormat.RgInteger, PixelType.UnsignedInt, grid.HeadRg);
+        NoseNearest3D();
+
+        int indexH = Math.Max(1, (grid.ToolIndex.Length + NoseTexW - 1) / NoseTexW);
+        var indexPad = new uint[NoseTexW * indexH];
+        Array.Copy(grid.ToolIndex, indexPad, Math.Min(grid.ToolIndex.Length, indexPad.Length));
+        if (_noseIndexTex == 0) _noseIndexTex = GL.GenTexture();
+        GL.ActiveTexture(TextureUnit.Texture5);
+        GL.BindTexture(TextureTarget.Texture2D, _noseIndexTex);
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.R32ui,
+            NoseTexW, indexH, 0, PixelFormat.RedInteger, PixelType.UnsignedInt, indexPad);
+        NoseNearest2D();
+
+        int dataTexels = Math.Max(1, grid.NoseCount * 2);
+        int dataH = Math.Max(1, (dataTexels + NoseTexW - 1) / NoseTexW);
+        var dataPad = new float[NoseTexW * dataH * 4];
+        Array.Copy(grid.ToolData, dataPad, Math.Min(grid.ToolData.Length, dataPad.Length));
+        if (_noseDataTex == 0) _noseDataTex = GL.GenTexture();
+        GL.ActiveTexture(TextureUnit.Texture6);
+        GL.BindTexture(TextureTarget.Texture2D, _noseDataTex);
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba32f,
+            NoseTexW, dataH, 0, PixelFormat.Rgba, PixelType.Float, dataPad);
+        NoseNearest2D();
+        GL.ActiveTexture(TextureUnit.Texture0);
+    }
+
+    static void NoseNearest3D()
+    {
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
+    }
+
+    static void NoseNearest2D()
+    {
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+    }
+
+    void EnsureNoseFallbacks()
+    {
+        if (_noseHeadFallback != 0) return;
+        _noseHeadFallback = GL.GenTexture();
+        GL.ActiveTexture(TextureUnit.Texture4);
+        GL.BindTexture(TextureTarget.Texture3D, _noseHeadFallback);
+        uint[] zeroHead = [0, 0];
+        GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.Rg32ui,
+            1, 1, 1, 0, PixelFormat.RgInteger, PixelType.UnsignedInt, zeroHead);
+        NoseNearest3D();
+
+        _noseIndexFallback = GL.GenTexture();
+        GL.ActiveTexture(TextureUnit.Texture5);
+        GL.BindTexture(TextureTarget.Texture2D, _noseIndexFallback);
+        uint[] zeroIndex = [0];
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.R32ui,
+            1, 1, 0, PixelFormat.RedInteger, PixelType.UnsignedInt, zeroIndex);
+        NoseNearest2D();
+
+        _noseDataFallback = GL.GenTexture();
+        GL.ActiveTexture(TextureUnit.Texture6);
+        GL.BindTexture(TextureTarget.Texture2D, _noseDataFallback);
+        float[] zeroData = [0, 0, 0, 0];
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba32f,
+            1, 1, 0, PixelFormat.Rgba, PixelType.Float, zeroData);
+        NoseNearest2D();
+    }
+
+    static Vector3 ToGl(NVec3 v) => new(v.X, v.Y, v.Z);
+
+    void UploadCarveTexture(MillSideCarveGrid grid)
+    {
+        if (_carveTex == 0) _carveTex = GL.GenTexture();
+        GL.ActiveTexture(TextureUnit.Texture2);
+        GL.BindTexture(TextureTarget.Texture3D, _carveTex);
+        GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+        GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.R8ui,
+            grid.Nx, grid.Ny, grid.Nz, 0, PixelFormat.RedInteger, PixelType.UnsignedByte, grid.Cells);
+        GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
+    }
+
+    int EnsureCarveFallback()
+    {
+        if (_carveFallbackTex != 0) return _carveFallbackTex;
+        _carveFallbackTex = GL.GenTexture();
+        GL.ActiveTexture(TextureUnit.Texture2);
+        GL.BindTexture(TextureTarget.Texture3D, _carveFallbackTex);
+        byte[] zero = [0];
+        GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+        GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.R8ui,
+            1, 1, 1, 0, PixelFormat.RedInteger, PixelType.UnsignedByte, zero);
+        GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+        return _carveFallbackTex;
     }
 
     /// <summary>
@@ -1973,6 +2377,14 @@ void main() {
             GL.DeleteBuffer(_sdfIbo);
             GL.DeleteBuffer(_sdfInstanceVbo);
         }
+        if (_carveTex != 0) GL.DeleteTexture(_carveTex);
+        if (_carveFallbackTex != 0) GL.DeleteTexture(_carveFallbackTex);
+        if (_noseHeadTex != 0) GL.DeleteTexture(_noseHeadTex);
+        if (_noseIndexTex != 0) GL.DeleteTexture(_noseIndexTex);
+        if (_noseDataTex != 0) GL.DeleteTexture(_noseDataTex);
+        if (_noseHeadFallback != 0) GL.DeleteTexture(_noseHeadFallback);
+        if (_noseIndexFallback != 0) GL.DeleteTexture(_noseIndexFallback);
+        if (_noseDataFallback != 0) GL.DeleteTexture(_noseDataFallback);
         if (_beadOverhangVao  != 0) { GL.DeleteVertexArray(_beadOverhangVao);  GL.DeleteBuffer(_beadOverhangVbo);  }
         if (_orientationVao   != 0) { GL.DeleteVertexArray(_orientationVao);   GL.DeleteBuffer(_orientationVbo);   }
         if (_singularityPtVao != 0) { GL.DeleteVertexArray(_singularityPtVao); GL.DeleteBuffer(_singularityPtVbo); }

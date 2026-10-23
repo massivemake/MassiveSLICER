@@ -451,6 +451,7 @@ public sealed class SceneRenderer : IDisposable
     private readonly HashSet<SceneNode> _selectedToolpaths = [];
     private readonly List<SceneNode> _selectedToolpathOrder = [];
     private readonly List<SceneNode> _selectedScanOrder = [];
+    private readonly List<SceneNode> _groupSelection = [];
 
     /// <summary>Toolpath nodes in the current multi-selection (shift+click), in pick order.</summary>
     public IReadOnlyList<SceneNode> SelectedToolpaths => _selectedToolpathOrder;
@@ -715,6 +716,17 @@ public sealed class SceneRenderer : IDisposable
     public float SdfAoFloor { get; set; } = 0.1f;
     /// <summary>Focus depth band in mm. Not an IceSL constant.</summary>
     public float SdfAoDepthMm { get; set; } = 1000f;
+    /// <summary>Mill SDF: subtract the bit stick-out from beads it cuts on the side. Not saved.</summary>
+    public bool SdfCarveBitSides { get; set; }
+    public float SdfCarveLengthMm { get; set; } = 50f;
+    public float SdfCarveToolheadA { get; set; }
+    public float SdfCarveToolheadB { get; set; }
+    public float SdfCarveToolheadC { get; set; }
+    public bool SdfCarveFlip { get; set; }
+    /// <summary>Ball-end bit: the carve tip is a sphere, not a flat face. Not saved.</summary>
+    public bool SdfCarveBall { get; set; }
+    /// <summary>Invoked on a background thread when a carve grid is ready to draw.</summary>
+    public Action? SdfCarveReady { get; set; }
     public bool ShowBeadOverhang        { get; set; } = false;
     public bool ShowOrientationPreview  { get; set; } = false;
 
@@ -1595,11 +1607,16 @@ public sealed class SceneRenderer : IDisposable
             if (ToolpathSimProgress >= 0f)
                 scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
 
+            entry.Renderer.SdfCarveReady = SdfCarveReady;
+            entry.Renderer.ConfigureSdfSideCarve(
+                SdfCarveBitSides, SdfCarveLengthMm, SdfCarveToolheadA, SdfCarveToolheadB, SdfCarveToolheadC, SdfCarveFlip, SdfCarveBall);
             if (ShowSdfBead)
             {
                 var drawView = draw * view;
                 entry.Renderer.SetSdfOcclusionCamera(drawView, aoNear, aoFar, sdfAo);
             }
+            else
+                entry.Renderer.SetSdfOcclusionCamera(Matrix4.Identity, aoNear, aoFar, false);
 
             entry.Renderer.Draw(toolpathMvp, selected: isSelected || ToolpathFullAppearance,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
@@ -2024,6 +2041,7 @@ public sealed class SceneRenderer : IDisposable
             return; // vetoed by policy — keep the current selection
 
         SelectedNode = node;
+        _groupSelection.Clear();
         _selectedToolpaths.Clear();
         _selectedToolpathOrder.Clear();
         _selectedScanOrder.Clear();
@@ -2043,6 +2061,7 @@ public sealed class SceneRenderer : IDisposable
         // must not wipe a shift+click toolpath sequence in progress.
         if (scans.Count > 0 || primary is not null)
         {
+            _groupSelection.Clear();
             _selectedToolpaths.Clear();
             _selectedToolpathOrder.Clear();
         }
@@ -2062,8 +2081,35 @@ public sealed class SceneRenderer : IDisposable
             SelectedNode = primary ?? _selectedScanOrder[^1];
     }
 
+    /// <summary>Outliner shift-selection. The last clicked node stays <see cref="SelectedNode"/>.</summary>
+    public void SetGroupSelection(IReadOnlyList<SceneNode> nodes, SceneNode? primary)
+    {
+        _groupSelection.Clear();
+        foreach (var node in nodes)
+        {
+            if (node is null || _groupSelection.Contains(node)) continue;
+            _groupSelection.Add(node);
+        }
+        _selectedToolpaths.Clear();
+        _selectedToolpathOrder.Clear();
+        _selectedScanOrder.Clear();
+        if (primary is not null)
+            SelectedNode = primary;
+        else if (_groupSelection.Count > 0)
+            SelectedNode = _groupSelection[^1];
+    }
+
+    public void ClearGroupSelection() => _groupSelection.Clear();
+
     IEnumerable<SceneNode> GetSelectionMaskRoots()
     {
+        if (_groupSelection.Count >= 2)
+        {
+            foreach (var node in _groupSelection)
+                yield return node;
+            yield break;
+        }
+
         if (_selectedScanOrder.Count > 0)
         {
             foreach (var scan in _selectedScanOrder)

@@ -488,6 +488,22 @@ public partial class ViewportView : UserControl
                 vm.SetOutlinerSelection(node);
                 RequestSceneSelection(vm, node);
             };
+            vm.OnTransformGroupChanged = (nodes, primary) =>
+            {
+                if (nodes.Count >= 2 && primary is not null)
+                    _renderer.SetGroupSelection(nodes, primary);
+                else
+                    _renderer.ClearGroupSelection();
+                GlCanvas.RequestNextFrameRendering();
+            };
+            vm.DescribeGroupPivot = DescribeGroupPivotText;
+            vm.ApplyGroupWorldMove = delta =>
+                ApplyConsoleGroup(vm, GizmoMode.Translate, "Move", () => GroupTransform.Translation(delta));
+            vm.ApplyGroupYaw = degrees =>
+                ApplyConsoleGroup(vm, GizmoMode.Rotate, "Rotate", () =>
+                    GroupTransform.AboutPivot(
+                        _groupDragPivot,
+                        Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(degrees))));
             vm.OnApplyModifiersRequested = ownerItem => _ = ApplyModifierStackAsync(vm, ownerItem);
             vm.OnOutlinerMultiScanViewportSync = _ => SyncScanSelectionToRenderer(vm);
             vm.OnScanSelectionChanged = () => SyncScanSelectionToRenderer(vm);
@@ -1766,6 +1782,16 @@ public partial class ViewportView : UserControl
             _renderer.SdfAoRadius       = (int)vm.SdfAoRadius;
             _renderer.SdfAoFloor        = vm.SdfAoFloorPercent / 100f;
             _renderer.SdfAoDepthMm      = vm.SdfAoDepthMm;
+            var carveBit = vm.SubtractiveSettings?.SelectedBit;
+            _renderer.SdfCarveBitSides = vm.SdfCarveBitSides;
+            _renderer.SdfCarveLengthMm = carveBit is null ? 50f : (float)carveBit.EffectiveCylinderLengthMm;
+            _renderer.SdfCarveToolheadA = (float)(vm.SubtractiveSettings?.ToolheadA ?? 0);
+            _renderer.SdfCarveToolheadB = (float)(vm.SubtractiveSettings?.ToolheadB ?? 0);
+            _renderer.SdfCarveToolheadC = (float)(vm.SubtractiveSettings?.ToolheadC ?? 0);
+            _renderer.SdfCarveFlip = carveBit?.CylinderFlip ?? false;
+            _renderer.SdfCarveBall = vm.SubtractiveSettings?.BallEnd ?? false;
+            _renderer.SdfCarveReady ??= () =>
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => GlCanvas?.RequestNextFrameRendering());
             _renderer.ShowBeadOverhang       = vm.ShowBeadOverhang;
             _renderer.ShowOrientationPreview = vm.ShowOrientationPreview;
             // Scrub hides not-yet-printed moves whenever a scrub session is live
@@ -2426,6 +2452,17 @@ public partial class ViewportView : UserControl
             // the tool having gone dead. Cleared on release, which snaps the handle back onto the part.
             _renderer.GizmoPivotWorld = heldBackByBed;
         }
+        else if (_groupDragMembers is { Count: > 0 }
+                 && (_kbTransformActive ? _kbTransformOp : _renderer.GizmoMode) is GizmoMode.Rotate or GizmoMode.Scale)
+        {
+            // Keep the ring on the centre captured at the start of the gesture.
+            // Recomputing it from the moving bounds makes the handle slide off the sweep.
+            _renderer.GizmoPivotWorld = _groupDragPivot;
+        }
+        else if (TryGetTransformGroup(_vm, out _, out var groupPivot))
+        {
+            _renderer.GizmoPivotWorld = groupPivot;
+        }
         else
         {
             _renderer.GizmoPivotWorld = IsToolNodeSelected() && _renderer.TcpFrameMatrix is { } tcpGizmo
@@ -2433,9 +2470,11 @@ public partial class ViewportView : UserControl
                 : null;
         }
 
-        // A selected support pocket's own rotation wins; otherwise fall through to main's
-        // node-local basis (GetModifierAxisBasis was renamed GetGizmoAxisBasis there).
-        _renderer.GizmoAxisBasis = supportAxisBasis ?? GetGizmoAxisBasis(_renderer.SelectedNode);
+        // A selected support pocket's own rotation wins. A multi-selection uses world axes so
+        // the handle is the group's, not whichever row was clicked last. One object keeps its
+        // own orientation.
+        _renderer.GizmoAxisBasis = supportAxisBasis
+            ?? (TryGetTransformGroup(_vm, out _, out _) ? null : GetGizmoAxisBasis(_renderer.SelectedNode));
 
         if (_vm is ViewportViewModel aimVm)
             UpdateAttractorAimMarker(aimVm);
@@ -4924,15 +4963,34 @@ public partial class ViewportView : UserControl
                         _                => BedEdit.Move,
                     };
                     bool projection = vmGz.IsProjectionGuideNode(gzNode) || vmGz.IsProjectionEdgeNode(gzNode);
-                    if (!projection)
-                        ApplyBedRules(gzNode, _bedWasRestingAtDragStart, bedEdit);
+                    if (_groupDragMembers is { Count: > 0 })
+                    {
+                        LiftGroupOffBed(bedEdit);
+                        RecordGroupTransformUndo(vmGz, TransformUndoLabel(op));
+                        scaled = op == GizmoMode.Scale;
+                        foreach (var member in _groupDragMembers)
+                        {
+                            if (vmGz.IsTcpAttractorNode(member.Node))
+                            {
+                                vmGz.SyncTcpAttractorReadout(member.Node);
+                                vmGz.OnMillAttractorsChanged?.Invoke();
+                            }
+                            if (op != GizmoMode.Translate)
+                                vmGz.ConstrainModifierPlanesUnder(member.Node);
+                        }
+                    }
                     else
-                        vmGz.BakeProjectionGizmo(gzNode);
-                    if (op != GizmoMode.Translate) vmGz.ConstrainModifierPlanesUnder(gzNode);
+                    {
+                        if (!projection)
+                            ApplyBedRules(gzNode, _bedWasRestingAtDragStart, bedEdit);
+                        else
+                            vmGz.BakeProjectionGizmo(gzNode);
+                        if (op != GizmoMode.Translate) vmGz.ConstrainModifierPlanesUnder(gzNode);
 
-                    RecordTransformUndo(vmGz, gzNode, _gizmoDragInitialLocal, gzNode.LocalTransform, TransformUndoLabel(op));
-                    tilted = DragClassifier.ChangedUpAxis(_gizmoDragInitialWorld, gzNode.WorldTransform);
-                    scaled = op == GizmoMode.Scale && ChangedScale(_gizmoDragInitialLocal, gzNode.LocalTransform);
+                        RecordTransformUndo(vmGz, gzNode, _gizmoDragInitialLocal, gzNode.LocalTransform, TransformUndoLabel(op));
+                        tilted = DragClassifier.ChangedUpAxis(_gizmoDragInitialWorld, gzNode.WorldTransform);
+                        scaled = op == GizmoMode.Scale && ChangedScale(_gizmoDragInitialLocal, gzNode.LocalTransform);
+                    }
                     if (scaled) vmGz.RefreshScaleFields();
                 }
                 _toolIsDragging          = false;
@@ -4940,6 +4998,7 @@ public partial class ViewportView : UserControl
                 _renderer.ActiveDragAxis = GizmoAxis.None;
                 ClearBedClamp();
                 EndTransformLink();
+                _groupDragMembers = null;
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
                 if (!cutDragging && DataContext is ViewportViewModel vmGz2)
@@ -5376,13 +5435,13 @@ public partial class ViewportView : UserControl
                 }
                 break;
 
-            // Preview: ↑ / ↓ step the layer scrub up / down one layer.
+            // Preview and SDF: ↑ / ↓ step the layer scrub up / down one layer.
             case Key.Up:
             case Key.Down:
                 if (e.KeyModifiers == KeyModifiers.None
                     && !IsTextInputFocused()
                     && DataContext is ViewportViewModel layerVm
-                    && layerVm.ViewMode == "Preview")
+                    && layerVm.ViewMode is "Preview" or "SDF")
                 {
                     // Up = next higher layer, Down = previous lower layer.
                     int delta = e.Key == Key.Up ? +1 : -1;
@@ -9935,6 +9994,29 @@ public partial class ViewportView : UserControl
         // Prime the view-plane state so unconstrained translate tracks exactly from the start.
         if (op == GizmoMode.Translate)
             SetupKbViewPlane(node);
+
+        // A shift-selected group uses one pivot. Setup above armed the single-node
+        // link; drop that so the toolpaths are not moved a second time.
+        if (HasTransformGroup() && DataContext is ViewportViewModel groupKb)
+            ArmGroupKeyboard(groupKb, op);
+    }
+
+    private void ArmGroupKeyboard(ViewportViewModel vm, GizmoMode op)
+    {
+        EndTransformLink();
+        BeginGroupDrag(vm, op);
+        _kbRotatePivotWorld = _groupDragPivot;
+        _gizmoDragPlanePoint = _groupDragPivot;
+        if (op != GizmoMode.Translate || _kbTransformAxis != GizmoAxis.None) return;
+
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        var startRay = _renderer.Camera.GetPickRay(
+            (float)_kbTransformStartPos.X, (float)_kbTransformStartPos.Y, vpW, vpH);
+        float denom = Vector3.Dot(startRay.Direction, _gizmoDragPlaneNormal);
+        _gizmoDragStartHit = MathF.Abs(denom) > 1e-5f
+            ? startRay.At(Vector3.Dot(_groupDragPivot - startRay.Origin, _gizmoDragPlaneNormal) / denom)
+            : _groupDragPivot;
     }
 
     /// <summary>
@@ -10002,7 +10084,13 @@ public partial class ViewportView : UserControl
         if (!_kbTransformActive || _renderer.SelectedNode is not { } node) return;
 
         // Reset node so WorldTransform reflects the initial position before re-setup.
-        node.LocalTransform      = _kbTransformInitialLocal;
+        if (_groupDragMembers is { Count: > 0 } groupReset)
+        {
+            foreach (var member in groupReset)
+                member.Node.LocalTransform = member.InitialLocal;
+        }
+        else
+            node.LocalTransform = _kbTransformInitialLocal;
         _kbTransformAxis         = axis;
         _renderer.ActiveDragAxis = axis;
 
@@ -10035,11 +10123,25 @@ public partial class ViewportView : UserControl
                 GizmoMode.Scale  => BedEdit.Scale,
                 _                => BedEdit.Move,
             };
-            ApplyBedRules(node, _kbWasRestingAtStart, bedEdit);
-            AfterTcpAttractorTransform(vmCb, node);
-
-            RecordTransformUndo(vmCb, node, _kbTransformInitialLocal, node.LocalTransform, TransformUndoLabel(_kbTransformOp));
+            if (_groupDragMembers is { Count: > 0 })
+            {
+                LiftGroupOffBed(bedEdit);
+                RecordGroupTransformUndo(vmCb, TransformUndoLabel(_kbTransformOp));
+                FinishGroupAttractorSync(vmCb);
+                if (_kbTransformOp != GizmoMode.Translate)
+                    ConstrainGroupModifiers(vmCb);
+                if (_kbTransformOp == GizmoMode.Scale)
+                    vmCb.RefreshScaleFields();
+            }
+            else
+            {
+                ApplyBedRules(node, _kbWasRestingAtStart, bedEdit);
+                AfterTcpAttractorTransform(vmCb, node);
+                RecordTransformUndo(vmCb, node, _kbTransformInitialLocal, node.LocalTransform, TransformUndoLabel(_kbTransformOp));
+            }
         }
+
+        _groupDragMembers = null;
 
         _kbTransformActive       = false;
         _kbTransformAxis         = GizmoAxis.None;
@@ -13892,7 +13994,13 @@ public partial class ViewportView : UserControl
 
     private void CancelKbTransform()
     {
-        if (_renderer.SelectedNode is { } node)
+        if (_groupDragMembers is { Count: > 0 } members)
+        {
+            foreach (var member in members)
+                member.Node.LocalTransform = member.InitialLocal;
+            _groupDragMembers = null;
+        }
+        else if (_renderer.SelectedNode is { } node)
         {
             node.LocalTransform = _kbTransformInitialLocal;
             // Put the followers back where they started too. The link has been dragging them
@@ -13938,13 +14046,17 @@ public partial class ViewportView : UserControl
                 KbScale(node, mousePos, vpW, vpH);
                 break;
         }
-        ApplyTransformLink(node);
+        if (_groupDragMembers is not { Count: > 0 })
+            ApplyTransformLink(node);
 
         // Same live readout as a gizmo drag — a G/R/S move is the same interaction by another route.
         if (DataContext is ViewportViewModel vmKbLive)
         {
             SyncSelectionTransformDisplayThrottled(vmKbLive);
-            vmKbLive.ConstrainModifierPlanesUnder(node);
+            if (_groupDragMembers is { Count: > 0 })
+                ConstrainGroupModifiers(vmKbLive);
+            else
+                vmKbLive.ConstrainModifierPlanesUnder(node);
         }
 
         if (_toolIsDragging)
@@ -13963,6 +14075,11 @@ public partial class ViewportView : UserControl
         var hitWorld = ray.At(t);
 
         var worldDelta  = hitWorld - _gizmoDragStartHit;
+        if (_groupDragMembers is { Count: > 0 })
+        {
+            ApplyGroupOp(GroupTransform.Translation(ClampGroupTranslation(worldDelta)));
+            return;
+        }
         var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
         Matrix4.Invert(parentWorld, out var invParent);
         var localDelta = TransformDir(worldDelta, invParent);
@@ -14028,13 +14145,19 @@ public partial class ViewportView : UserControl
         }
 
         // Rotate about the world pivot under the mouse (not the local origin), so in top view
-        // the selection orbits the cursor / plate point under the cursor.
+        // the selection orbits the cursor / plate point under the cursor. A group uses the
+        // shared centre captured when the gesture began.
         var pivot = _kbRotatePivotWorld;
         var toOrigin   = Matrix4.CreateTranslation(-pivot);
         var rotWorld   = Matrix4.CreateFromAxisAngle(axisDir, angle);
         var fromOrigin = Matrix4.CreateTranslation(pivot);
         // Row-vector: p' = p * T(-pivot) * R * T(pivot)
         var worldRot = toOrigin * rotWorld * fromOrigin;
+        if (_groupDragMembers is { Count: > 0 })
+        {
+            ApplyGroupOp(worldRot);
+            return;
+        }
 
         var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
         Matrix4.Invert(parentWorld, out var invParent);
@@ -14084,12 +14207,17 @@ public partial class ViewportView : UserControl
             default:          sx = sy = sz = ratio; break;
         }
 
-        var pivot = _kbRotatePivotWorld;
+        var pivot = _groupDragMembers is { Count: > 0 } ? _groupDragPivot : _kbRotatePivotWorld;
         var toOrigin   = Matrix4.CreateTranslation(-pivot);
         var scaleMat   = Matrix4.CreateScale(sx, sy, sz);
         var fromOrigin = Matrix4.CreateTranslation(pivot);
         // Row-vector: p' = p * T(-pivot) * S * T(pivot)
         var worldScale = toOrigin * scaleMat * fromOrigin;
+        if (_groupDragMembers is { Count: > 0 })
+        {
+            ApplyGroupOp(worldScale);
+            return;
+        }
 
         var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
         Matrix4.Invert(parentWorld, out var invParent);
@@ -14615,7 +14743,10 @@ public partial class ViewportView : UserControl
         var selected = _renderer.SelectedNode;
         if (!ReferenceEquals(selected, _lastOutlinerSyncedNode) && vm.SelectedScanCount < 2)
         {
-            vm.SetOutlinerSelection(selected);
+            // A shift-selected group keeps every row lit. Syncing the outliner to the
+            // one renderer node here was collapsing it back to the last click.
+            if (vm.GetTransformGroupNodes().Count < 2)
+                vm.SetOutlinerSelection(selected);
             _lastOutlinerSyncedNode = selected;
         }
 
@@ -17780,6 +17911,7 @@ public partial class ViewportView : UserControl
 
     private void StartGizmoDrag(GizmoAxis axis, float mx, float my, float vpW, float vpH)
     {
+        _groupDragMembers        = null;
         _gizmoDragAxis           = axis;
         _renderer.ActiveDragAxis = axis;
         _gizmoDragSnap           = false;   // never inherit the last drag's modifier state
@@ -17801,7 +17933,9 @@ public partial class ViewportView : UserControl
             // that is its own orientation (handles stuck to the object); for a Vertical cut, the
             // plane's own RotationDegrees so dragging "sideways" runs along the plane's line rather
             // than needing a diagonal X+Y; world axes for anything else.
-            var basis = GetGizmoAxisBasis(_renderer.SelectedNode) ?? Matrix4.Identity;
+            var basis = HasTransformGroup()
+                ? Matrix4.Identity
+                : GetGizmoAxisBasis(_renderer.SelectedNode) ?? Matrix4.Identity;
             _gizmoDragBasis   = basis;
             Vector3 BasisRow(int i) => i switch
             {
@@ -17857,9 +17991,11 @@ public partial class ViewportView : UserControl
         if (_renderer.SelectedNode is not { } node) return;
         if (IsToolNodeSelected() && _renderer.GizmoMode == GizmoMode.Scale) return;
         // A modifier plane isn't a solid part — scaling it means nothing (no field for it).
-        if (DataContext is ViewportViewModel vmScale && vmScale.IsModifierNode(node)
+        if (!HasTransformGroup()
+            && DataContext is ViewportViewModel vmScale && vmScale.IsModifierNode(node)
             && _renderer.GizmoMode == GizmoMode.Scale) return;
-        if (DataContext is ViewportViewModel vmTcpScale && vmTcpScale.IsTcpAttractorNode(node)
+        if (!HasTransformGroup()
+            && DataContext is ViewportViewModel vmTcpScale && vmTcpScale.IsTcpAttractorNode(node)
             && _renderer.GizmoMode == GizmoMode.Scale) return;
         _gizmoDragInitialLocal     = node.LocalTransform;
         _gizmoDragInitialWorld     = node.WorldTransform;
@@ -17877,6 +18013,11 @@ public partial class ViewportView : UserControl
         // part's new size on release instead, which is the only way the widths stay honest.
         if (dragOp != GizmoMode.Scale) BeginTransformLink(node);
         else                           _transformLinkFollowers = null;
+        if (HasTransformGroup() && DataContext is ViewportViewModel groupVm)
+        {
+            EndTransformLink();
+            BeginGroupDrag(groupVm, dragOp);
+        }
         BeginToolIkDrag(node);
         switch (dragOp)
         {
@@ -18021,6 +18162,18 @@ public partial class ViewportView : UserControl
         var modifierCut = DataContext is ViewportViewModel vmCut ? vmCut.FindModifierForNode(node) : null;
 
         var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+        if (_groupDragMembers is { Count: > 0 })
+        {
+            if (BuildGroupOp(dragOp, hitWorld) is { } groupOp)
+                ApplyGroupOp(groupOp);
+            if (DataContext is ViewportViewModel vmGroupLive)
+            {
+                SyncSelectionTransformDisplayThrottled(vmGroupLive);
+                if (dragOp != GizmoMode.Translate)
+                    ConstrainGroupModifiers(vmGroupLive);
+            }
+            return;
+        }
         switch (dragOp)
         {
             case GizmoMode.Translate:
@@ -18166,6 +18319,367 @@ public partial class ViewportView : UserControl
     }
 
     private void EndTransformLink() => _transformLinkFollowers = null;
+
+    // ── Multi-select group drag ──────────────────────────────────────────────
+    // Shift-click in the outliner picks several objects. One world operator,
+    // about the union of their bounds, moves them as a single rigid group.
+    // A selected child of a selected parent is left out: the parent already
+    // carries it. Linked toolpaths come along on a move or a rotate, once.
+    private sealed class GroupDragMember
+    {
+        public required SceneNode Node { get; init; }
+        public required Matrix4 InitialWorld { get; init; }
+        public required Matrix4 InvParent { get; init; }
+        public required Matrix4 InitialLocal { get; init; }
+        public bool IsFollower { get; init; }
+    }
+
+    private List<GroupDragMember>? _groupDragMembers;
+    private Vector3 _groupDragPivot;
+
+    private bool HasTransformGroup()
+        => DataContext is ViewportViewModel vm && vm.GetTransformGroupNodes().Count >= 2;
+
+    /// <summary>
+    /// Roots are the selected nodes that are not under another selected node.
+    /// The pivot is the centre of every selected mesh, including nested ones.
+    /// </summary>
+    private bool TryGetTransformGroup(ViewportViewModel? vm, out List<SceneNode> roots, out Vector3 pivot)
+    {
+        roots = [];
+        pivot = default;
+        if (vm is null) return false;
+        var selected = vm.GetTransformGroupNodes();
+        if (selected.Count < 2) return false;
+
+        var selectedSet = new HashSet<SceneNode>(selected);
+        foreach (var node in selected)
+        {
+            if (node is null || roots.Contains(node)) continue;
+            var nested = false;
+            for (var p = node.Parent; p is not null; p = p.Parent)
+            {
+                if (selectedSet.Contains(p)) { nested = true; break; }
+            }
+            if (!nested) roots.Add(node);
+        }
+        if (roots.Count == 0) return false;
+
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        var any = false;
+        foreach (var node in selected)
+        {
+            if (node is null) continue;
+            if (!SceneBounds.TryComputeSubtreeWorldAabb(node, out var a, out var b)) continue;
+            min = Vector3.ComponentMin(min, a);
+            max = Vector3.ComponentMax(max, b);
+            any = true;
+        }
+        if (!any)
+        {
+            var acc = Vector3.Zero;
+            int n = 0;
+            foreach (var node in selected)
+            {
+                if (node is null) continue;
+                acc += node.WorldTransform.Row3.Xyz;
+                n++;
+            }
+            pivot = n > 0 ? acc / n : roots[0].WorldTransform.Row3.Xyz;
+        }
+        else
+        {
+            pivot = (min + max) * 0.5f;
+        }
+        return true;
+    }
+
+    private void BeginGroupDrag(ViewportViewModel vm, GizmoMode dragOp)
+    {
+        _groupDragMembers = null;
+        if (!TryGetTransformGroup(vm, out var roots, out var pivot)) return;
+
+        _groupDragPivot = pivot;
+        _gizmoDragPlanePoint = pivot;
+
+        var members = new List<GroupDragMember>();
+        var memberNodes = new HashSet<SceneNode>();
+
+        void Add(SceneNode node, bool follower)
+        {
+            if (!memberNodes.Add(node)) return;
+            var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+            Matrix4.Invert(parentWorld, out var invParent);
+            members.Add(new GroupDragMember
+            {
+                Node = node,
+                InitialWorld = node.WorldTransform,
+                InvParent = invParent,
+                InitialLocal = node.LocalTransform,
+                IsFollower = follower,
+            });
+        }
+
+        foreach (var root in roots)
+            Add(root, follower: false);
+
+        // Scale leaves toolpaths where they are. Their bead width is baked, and
+        // the part is re-sliced on release. A move or a rotate carries them.
+        if (dragOp != GizmoMode.Scale)
+        {
+            foreach (var root in roots)
+            {
+                foreach (var linked in ResolveLinkedNodes(vm, root))
+                {
+                    if (memberNodes.Contains(linked)) continue;
+                    if (roots.Any(r => IsUnder(linked, r))) continue;
+                    Add(linked, follower: true);
+                }
+            }
+        }
+
+        _groupDragMembers = members;
+
+        float minZ = float.MaxValue;
+        var anyClamp = false;
+        foreach (var root in roots)
+        {
+            if (!BedClampApplies(root)) continue;
+            anyClamp = true;
+            float z = dragOp == GizmoMode.Scale ? LayFlatMinZ(root) : LowestWorldZWithLinked(root);
+            minZ = MathF.Min(minZ, z);
+        }
+        _bedClampStartMinZ = anyClamp ? minZ : float.MaxValue;
+        if (anyClamp && minZ < float.MaxValue)
+            _bedWasRestingAtDragStart = MathF.Abs(minZ - _renderer.BedZ) <= BedRestingTolerance;
+    }
+
+    private void ApplyGroupOp(Matrix4 worldOp)
+    {
+        if (_groupDragMembers is not { Count: > 0 } members) return;
+        foreach (var member in members)
+            member.Node.LocalTransform = GroupTransform.LocalFromWorld(
+                member.InitialWorld, worldOp, member.InvParent);
+    }
+
+    private void ConstrainGroupModifiers(ViewportViewModel vm)
+    {
+        if (_groupDragMembers is not { Count: > 0 } members) return;
+        foreach (var member in members)
+        {
+            if (!member.IsFollower)
+                vm.ConstrainModifierPlanesUnder(member.Node);
+        }
+    }
+
+    private Vector3 ClampGroupTranslation(Vector3 worldDelta)
+    {
+        var unclamped = worldDelta;
+        var held = false;
+        if (_bedClampStartMinZ < float.MaxValue)
+        {
+            float restingDelta = _renderer.BedZ - _bedClampStartMinZ;
+            if (worldDelta.Z < restingDelta)
+            {
+                worldDelta.Z = restingDelta;
+                held = true;
+            }
+        }
+        _bedClampGizmoWorld = held ? _gizmoDragPlanePoint + unclamped : null;
+        return worldDelta;
+    }
+
+    private Matrix4? BuildGroupOp(GizmoMode dragOp, Vector3 hitWorld)
+    {
+        switch (dragOp)
+        {
+            case GizmoMode.Translate:
+            {
+                var travel = hitWorld - _gizmoDragStartHit;
+                var worldDelta = _gizmoDragAxis.IsPlane()
+                    ? travel
+                    : _gizmoDragAxisDir * Vector3.Dot(travel, _gizmoDragAxisDir);
+                return GroupTransform.Translation(ClampGroupTranslation(worldDelta));
+            }
+            case GizmoMode.Scale:
+            {
+                float ratio;
+                if (_gizmoDragAxis == GizmoAxis.All)
+                {
+                    float vpW = (float)GlCanvas.Bounds.Width;
+                    float dx = _gizmoDragCurrScreenX - _gizmoDragStartScreenX;
+                    ratio = MathF.Exp(dx / (vpW * 0.3f) * MathF.Log(3f));
+                }
+                else
+                {
+                    var relStart = _gizmoDragStartHit - _gizmoDragPlanePoint;
+                    var relCurrent = hitWorld - _gizmoDragPlanePoint;
+                    float startLen = Vector3.Dot(relStart, _gizmoDragAxisDir);
+                    float currLen = Vector3.Dot(relCurrent, _gizmoDragAxisDir);
+                    if (MathF.Abs(startLen) < 1e-5f) return null;
+                    ratio = currLen / startLen;
+                }
+                if (ratio <= 0f) return null;
+                var scale = _gizmoDragAxis switch
+                {
+                    GizmoAxis.X => Matrix4.CreateScale(ratio, 1f, 1f),
+                    GizmoAxis.Y => Matrix4.CreateScale(1f, ratio, 1f),
+                    GizmoAxis.Z => Matrix4.CreateScale(1f, 1f, ratio),
+                    _ => Matrix4.CreateScale(ratio),
+                };
+                return GroupTransform.AboutPivot(_groupDragPivot, scale);
+            }
+            case GizmoMode.Rotate:
+            {
+                var rel = hitWorld - _gizmoDragPlanePoint;
+                float delta = WrapPi(RingAngle(rel) - _gizmoDragStartAngle);
+                if (_gizmoDragSnap)
+                {
+                    const float StepDeg = 5f;
+                    float deg = MathHelper.RadiansToDegrees(delta);
+                    delta = MathHelper.DegreesToRadians(MathF.Round(deg / StepDeg) * StepDeg);
+                }
+                var rot = _gizmoDragAxis switch
+                {
+                    GizmoAxis.X => Matrix4.CreateRotationX(delta),
+                    GizmoAxis.Y => Matrix4.CreateRotationY(delta),
+                    _ => Matrix4.CreateRotationZ(delta),
+                };
+                return GroupTransform.AboutPivot(_groupDragPivot, rot);
+            }
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Lifts a group that finished through the bed, and lowers one that was
+    /// resting when Keep on bed is on. Runs before the undo entry.
+    /// </summary>
+    private void LiftGroupOffBed(BedEdit edit)
+    {
+        if (_groupDragMembers is not { Count: > 0 } members) return;
+        float minZ = float.MaxValue;
+        foreach (var member in members)
+        {
+            if (member.IsFollower || BedClampApplies(member.Node))
+                minZ = MathF.Min(minZ, LayFlatMinZ(member.Node));
+        }
+        if (minZ >= float.MaxValue) return;
+
+        float delta = _renderer.BedZ - minZ;
+        bool sunk = delta > BedContactTolerance;
+        bool floating = delta < -BedContactTolerance;
+        bool lower = floating && _bedWasRestingAtDragStart && KeepOnBedEnabled(edit);
+        if (!sunk && !lower) return;
+
+        var op = GroupTransform.Translation(new Vector3(0f, 0f, delta));
+        foreach (var member in members)
+        {
+            var parentWorld = member.Node.Parent?.WorldTransform ?? Matrix4.Identity;
+            Matrix4.Invert(parentWorld, out var invParent);
+            member.Node.LocalTransform = GroupTransform.LocalFromWorld(
+                member.Node.WorldTransform, op, invParent);
+        }
+    }
+
+    private void RecordGroupTransformUndo(ViewportViewModel vm, string description)
+    {
+        if (_groupDragMembers is not { Count: > 0 } members) return;
+        var entries = new List<(SceneNode Node, Matrix4 Before, Matrix4 After)>();
+        foreach (var member in members)
+        {
+            var after = member.Node.LocalTransform;
+            if (!Matrix4Util.NearlyEquals(member.InitialLocal, after))
+                entries.Add((member.Node, member.InitialLocal, after));
+        }
+        if (entries.Count == 0) return;
+
+        vm.UndoRedo?.Push(new LinkedTransformAction(entries, description, () =>
+        {
+            OnTransformApplied(vm);
+            var touchedAttractor = false;
+            foreach (var entry in entries)
+            {
+                if (!vm.IsTcpAttractorNode(entry.Node)) continue;
+                vm.SyncTcpAttractorReadout(entry.Node);
+                touchedAttractor = true;
+            }
+            if (touchedAttractor)
+                vm.OnMillAttractorsChanged?.Invoke();
+        }));
+        foreach (var member in members)
+        {
+            if (!member.IsFollower)
+                RememberCommittedTransform(vm, member.Node);
+        }
+    }
+
+    private void FinishGroupAttractorSync(ViewportViewModel vm)
+    {
+        if (_groupDragMembers is not { Count: > 0 } members) return;
+        foreach (var member in members)
+        {
+            if (vm.IsTcpAttractorNode(member.Node))
+            {
+                vm.SyncTcpAttractorReadout(member.Node);
+                vm.OnMillAttractorsChanged?.Invoke();
+            }
+        }
+    }
+
+    private string DescribeGroupPivotText()
+    {
+        if (DataContext is not ViewportViewModel vm) return "";
+        if (!TryGetTransformGroup(vm, out var roots, out var pivot)) return "";
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        return string.Format(inv,
+            " pivot=({0:0.#},{1:0.#},{2:0.#}) roots={3}",
+            pivot.X, pivot.Y, pivot.Z, roots.Count);
+    }
+
+    private string ApplyConsoleGroup(ViewportViewModel vm, GizmoMode mode, string label, Func<Matrix4> worldOp)
+    {
+        if (!TryGetTransformGroup(vm, out _, out _))
+            return "[group] need two or more objects";
+        BeginGroupDrag(vm, mode);
+        if (_groupDragMembers is not { Count: > 0 } members)
+            return "[group] nothing to move";
+        var op = worldOp();
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var before = members
+            .Where(m => !m.IsFollower)
+            .Select(m => (m.Node.Name, m.Node.WorldTransform.Row3.Xyz))
+            .ToList();
+        ApplyGroupOp(op);
+        var bed = mode switch
+        {
+            GizmoMode.Rotate => BedEdit.Rotate,
+            GizmoMode.Scale => BedEdit.Scale,
+            _ => BedEdit.Move,
+        };
+        LiftGroupOffBed(bed);
+        RecordGroupTransformUndo(vm, label);
+        FinishGroupAttractorSync(vm);
+        var lines = new List<string> { $"[group] {label}" + DescribeGroupPivotText() };
+        foreach (var (name, from) in before)
+        {
+            var node = members.First(m => m.Node.Name == name && !m.IsFollower).Node;
+            var to = node.WorldTransform.Row3.Xyz;
+            var d = to - from;
+            lines.Add(string.Format(inv,
+                "[group] \"{0}\" ({1:0.#},{2:0.#},{3:0.#}) -> ({4:0.#},{5:0.#},{6:0.#}) d=({7:0.#},{8:0.#},{9:0.#})",
+                name, from.X, from.Y, from.Z, to.X, to.Y, to.Z, d.X, d.Y, d.Z));
+        }
+        _groupDragMembers = null;
+        EndTransformLink();
+        ClearBedClamp();
+        SyncSelectionTransformDisplay(vm);
+        GlCanvas.RequestNextFrameRendering();
+        return string.Join('\n', lines);
+    }
 
     /// <summary>One-shot link for typed coordinate edits (no drag session).</summary>
     private void MirrorTypedTransformDelta(ViewportViewModel vm, SceneNode node, Matrix4 oldLocal)

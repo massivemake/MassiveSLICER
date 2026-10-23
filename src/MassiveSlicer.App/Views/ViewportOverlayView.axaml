@@ -125,6 +125,13 @@
                                             Classes="ToolbarButton" Padding="10,3" FontSize="11"
                                             Command="{Binding ResetSdfAoCommand}"
                                             ToolTip.Tip="Restore IceSL strength, radius, and floor, and the 1000 mm depth window."/>
+                                    <Border Height="1" Background="{DynamicResource Border1}" Opacity="0.55" Margin="0,2,0,0"/>
+                                    <CheckBox Content="Carve bit sides" FontSize="11"
+                                              IsChecked="{Binding SdfCarveBitSides, Mode=TwoWay}"
+                                              ToolTip.Tip="After the mill path is drawn, run the bit through it. Where the bit cuts an earlier bead, that thickness is removed. A ball-end bit sweeps a smooth sphere, including the overlap between passes. A flat end keeps the cutting face."/>
+                                    <TextBlock Text="Ball-end bits sweep a smooth sphere on the end of the spindle cylinder. The first build can take a few seconds. Not saved."
+                                               FontSize="10" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondary}"/>
                                 </StackPanel>
                             </Flyout>
                         </Button.Flyout>
@@ -1713,7 +1720,7 @@
             </StackPanel>
         </Border>
 
-        <!-- Horizontal timeline — Preview view only, while a scrub session is live
+        <!-- Horizontal timeline — Preview and SDF, while a scrub session is live
              (stays up when the TCP is selected for keyframe adjustments) -->
         <Border x:Name="PlaybackTimelineBar"
                 IsVisible="{Binding ShowPlaybackTimeline}"

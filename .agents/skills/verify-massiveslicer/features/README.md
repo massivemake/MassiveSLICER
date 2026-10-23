@@ -16,8 +16,10 @@ Start with these five. Add a file when a new user-visible behavior ships.
 | Angled walls | `angled-walls.md` | `addset WallCount` (read only; a value reslices) |
 | Wipe 90-Degree | `wipe-90.md` | `addset WipeModeDisplay` (read only; a value reslices) |
 | TCP Adjust | `tcp-adjust.md` | `tcpadj` (list is read-only; `add` / `deflect` place a handle) |
+| Outliner group | `outliner-group.md` | `group` (show is read-only; `move` / `yaw` change the scene — undo) |
 | Toolhead keyframe | `tcp-keyframe-orient.md` | `tcpkey add` (needs a preview timeline; re-solves the open path) |
 | Signed Distance | `signed-distance.md` | `sdf` (read-only; does not select the method) |
+| SDF bit side carve | `sdf-bit-side-carve.md` | `viewset SdfCarveBitSides` (read-only; `true` rebuilds the SDF view) |
 | Continuous Planar Field | `continuous-planar.md` | `cpf` (read-only; does not select the method) |
 
 Proof standards: real user path, action + resulting state, side effects on disk/console. Unit tests are extra, not a substitute.

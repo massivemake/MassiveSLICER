@@ -103,9 +103,27 @@ public static class KukaOrientation
         float toolheadOffsetB = 0f,
         float toolheadOffsetC = 0f)
     {
-        var (x, y, z) = MillToolAxes(surfaceNormal, tcpYawDeg);
+        var (x, y, z) = MillFrame(surfaceNormal, tcpYawDeg, toolheadOffsetA, toolheadOffsetB, toolheadOffsetC);
+        var m = new Matrix4x4(
+            x.X, x.Y, x.Z, 0,
+            y.X, y.Y, y.Z, 0,
+            z.X, z.Y, z.Z, 0,
+            0, 0, 0, 1);
+        return KukaIkSolver.MatrixToAbc(m);
+    }
 
-        // Same local ZYX as print (Y/X/Z sliders → B/C/A) in the mill tool frame.
+    /// <summary>
+    /// Mill tool axes after the toolhead offset. Z is the cutter, pointing into the work.
+    /// The stick-out cylinder runs the other way, from the tip back toward the spindle.
+    /// </summary>
+    public static (Vector3 X, Vector3 Y, Vector3 Z) MillFrame(
+        Vector3 surfaceNormal,
+        float tcpYawDeg = 0f,
+        float toolheadOffsetA = 0f,
+        float toolheadOffsetB = 0f,
+        float toolheadOffsetC = 0f)
+    {
+        var (x, y, z) = MillToolAxes(surfaceNormal, tcpYawDeg);
         if (MathF.Abs(toolheadOffsetA) + MathF.Abs(toolheadOffsetB) + MathF.Abs(toolheadOffsetC) > 1e-4f)
         {
             float ca = MathF.Cos(toolheadOffsetA * D2R), sa = MathF.Sin(toolheadOffsetA * D2R);
@@ -118,13 +136,7 @@ public static class KukaOrientation
             y = yF;
             z = zF;
         }
-
-        var m = new Matrix4x4(
-            x.X, x.Y, x.Z, 0,
-            y.X, y.Y, y.Z, 0,
-            z.X, z.Y, z.Z, 0,
-            0, 0, 0, 1);
-        return KukaIkSolver.MatrixToAbc(m);
+        return (x, y, z);
     }
 
     /// <summary>

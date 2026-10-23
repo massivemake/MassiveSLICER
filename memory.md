@@ -522,6 +522,16 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 ## Session changelog (reverse chronological)
 
+### 2026-10-22 — SDF bit side carve
+
+- SDF caret (ADVANCED VIEWING) has **Carve bit sides**. It is a session checkbox, not saved. After a mill path exists, the stick-out cylinder is subtracted from SDF beads it cuts on the side. The cutting face and a same-layer stepover stay. `viewset SdfCarveBitSides`. Not committed. The robot was not started.
+- Live on the loaded mill (1,748,530 moves): carve on vs off changed 3999/5472 sampled pixels. On is a scalloped surface; off is the fine bead ribs. Log: `322303 cylinders, grid 272x269x135 cell 1.75 mm, 5317550 cells`. Leaving SDF for Toolpath still drew the purple path. Preview still drew the beads. `ShowPlaybackTimeline` is true in SDF. Screenshots paste the GL frame over the viewport, so the timeline and the SDF caret do not appear in those PNGs.
+- `group-select-live.mass` no longer has the original 630,361-move path. The file on disk is the later planar mill (350,125,070 bytes, 11:48 PM). The `.bak` is the 11:38 PM copy (351,858,905 bytes) of that same mill. A save that omits a sibling mill path is what dropped the original. Do not restore the bak over the current file. Do not unhide the attractors while Realtime is on.
+
+### 2026-10-22 — Outliner group transform
+
+- Shift-click or Ctrl-click in the outliner selects models, scans, attractors, and modifiers together. The move, rotate, and scale handles then use one shared centre, so the selection acts as a group. Toolpath Shift still picks a print sequence. Not saved. Not committed. The robot was not started.
+
 ### 2026-10-22 — TCP deflectors
 
 - Attractors and deflectors share one handle. Each has a shape (spherical or cylindrical) and a frame (tool or robot flange). Attractors lean onto the bar. Deflectors turn the chosen frame back out of the volume. Robot flange is sampled 400 mm back from the cutter. New handles spawn on the origin of the active BASE, staggered 80 mm in X.

@@ -2162,6 +2162,19 @@ public sealed partial class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "group",
+            Aliases = ["groupsel"],
+            Description = "Shift-style multi-select. Move, rotate, and scale the selection as one group",
+            Usage = "group [show|clear|shift <name>|ctrl <name>|move <dx> <dy> <dz>|yaw <deg>]",
+            Execute = (ctx, args) =>
+            {
+                foreach (var line in ctx.Main.Viewport.GroupCommand(args).Split('\n'))
+                    ctx.Log(line.TrimEnd('\r'));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "select",
             Aliases = ["sel"],
             Description = "Select a content object by name (drives the outliner selection path)",

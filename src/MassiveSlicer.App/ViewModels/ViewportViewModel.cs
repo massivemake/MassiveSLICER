@@ -3446,6 +3446,23 @@ public sealed partial class ViewportViewModel : ViewModelBase
     private readonly HashSet<OutlinerItemViewModel> _selectedScanItems = new();
     private OutlinerItemViewModel? _scanSelectionAnchor;
     private OutlinerItemViewModel? _selectedOutlinerItem;
+    private readonly List<OutlinerItemViewModel> _transformGroup = new();
+    private OutlinerItemViewModel? _transformGroupAnchor;
+
+    /// <summary>Shift/ctrl outliner selection of two or more objects, in outliner order.</summary>
+    internal IReadOnlyList<OutlinerItemViewModel> TransformGroup => _transformGroup;
+
+    /// <summary>Viewport redraws the selection outline and parks the gizmo on the group.</summary>
+    internal Action<IReadOnlyList<SceneNode>, SceneNode?>? OnTransformGroupChanged { get; set; }
+
+    /// <summary>Pivot line from the viewport, empty when fewer than two objects are selected.</summary>
+    internal Func<string>? DescribeGroupPivot { get; set; }
+
+    /// <summary>Applies one world translation to the current group. Backs <c>group move</c>.</summary>
+    internal Func<Vector3, string>? ApplyGroupWorldMove { get; set; }
+
+    /// <summary>Rotates the current group about its centre, around world Z. Backs <c>group yaw</c>.</summary>
+    internal Func<float, string>? ApplyGroupYaw { get; set; }
 
     /// <summary>The outliner row matching whatever's currently selected (in the outliner or the
     /// viewport) — null if nothing is. Drives the Modifiers panel's settings inspector.</summary>
@@ -4679,6 +4696,22 @@ public sealed partial class ViewportViewModel : ViewModelBase
         }
     }
 
+    private bool _sdfCarveBitSides;
+
+    /// <summary>
+    /// Mill SDF viewer. After the path is drawn, subtract the bit cylinder's side
+    /// from bead thickness it cuts. Session only — not written to the scene.
+    /// </summary>
+    public bool SdfCarveBitSides
+    {
+        get => _sdfCarveBitSides;
+        set
+        {
+            if (SetField(ref _sdfCarveBitSides, value))
+                NotifyRenderNeeded();
+        }
+    }
+
     public RelayCommand ResetSdfAoCommand => _resetSdfAoCommand ??= new RelayCommand(() =>
     {
         SdfAoStrength = 1000f;
@@ -4700,8 +4733,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// <summary>The simplified bar is the Toolpath view's timeline.</summary>
     public bool ShowSimTimeline => IsToolpathViewActive;
 
-    /// <summary>The full playback/keyframe timeline lives on the Preview view only.</summary>
-    public bool ShowPlaybackTimeline => _isScrubSessionActive && _viewMode == "Preview";
+    /// <summary>The full playback/keyframe timeline lives on Preview and the SDF bead view.</summary>
+    public bool ShowPlaybackTimeline => _isScrubSessionActive && _viewMode is "Preview" or "SDF";
 
     /// <summary>Timeline position, 0–100 %. 100 = full toolpath drawn.</summary>
     public double SimTimelinePercent
@@ -4916,7 +4949,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             // Edit mode + 2D slice use dual-slider / multi-pass windows — never the
             // sim-progress override (it was blanking multipass when nothing is selected).
             if (IsPaintEditOpen || _isSlicePlaneViewerActive) return -1f;
-            if (_viewMode == "Preview" && _isScrubSessionActive && !_isToolpathSelected && _toolpathScrubMax > 0)
+            if (_viewMode is "Preview" or "SDF" && _isScrubSessionActive && !_isToolpathSelected && _toolpathScrubMax > 0)
                 return (float)_toolpathScrubIndex / _toolpathScrubMax;
             return -1f;
         }
@@ -4984,6 +5017,14 @@ public sealed partial class ViewportViewModel : ViewModelBase
         // since this runs after _viewMode has already changed.
         foreach (var item in EnumerateUserModelItems().ToList())
         {
+            // A mill/KRL path parked directly under the rotary group is yielded as a
+            // "model". Treating it as a body hid it in SDF/Preview, so the rounded
+            // bead (and the bit-side carve) never drew.
+            if (item.IsToolpath)
+            {
+                if (item.Visible != showPath) item.Visible = showPath;
+                continue;
+            }
             if (item.Visible != showBody) item.Visible = showBody;
             foreach (var child in item.Children)
                 if (child.IsToolpath && child.Visible != showPath)
@@ -6905,9 +6946,226 @@ public sealed partial class ViewportViewModel : ViewModelBase
         RefreshCanMergeScans();
     }
 
+    /// <summary>
+    /// Models, scans, attractors, and modifiers can be shift-selected and transformed together.
+    /// Toolpaths keep shift for the print sequence. Robot, toolhead, and cell fixtures stay out.
+    /// </summary>
+    internal bool IsGroupTransformItem(OutlinerItemViewModel item)
+    {
+        if (item.IsLocked || item.IsToolpath) return false;
+        if (ReferenceEquals(item, _robotGroupItem) || ReferenceEquals(item, _rotaryGroupItem)
+            || ReferenceEquals(item, _toolheadGroupItem))
+            return false;
+        if (_cellEnvOutlinerItems.Contains(item)) return false;
+        if (IsToolheadGroupItem(item) || OutlinerModelOps.IsToolheadItem(item)) return false;
+        if (IsUnderOutliner(item, _robotGroupItem) || IsUnderOutliner(item, _toolheadGroupItem))
+            return false;
+        return IsUserModelItem(item)
+            || OutlinerModelOps.IsScanItem(item)
+            || item.IsTcpAttractor
+            || item.IsEffector
+            || item.IsModifier
+            || item.IsModifiersGroup;
+    }
+
+    /// <summary>
+    /// Shift selects the outliner range from the anchor. Ctrl adds or removes one row.
+    /// One remaining row falls back to ordinary single selection.
+    /// </summary>
+    internal void EditTransformGroup(OutlinerItemViewModel item, bool shiftHeld, bool ctrlHeld)
+    {
+        if (!IsGroupTransformItem(item)) return;
+
+        if (ctrlHeld)
+        {
+            if (_transformGroup.Count == 0
+                && _selectedOutlinerItem is { } current
+                && IsGroupTransformItem(current)
+                && !ReferenceEquals(current, item))
+                _transformGroup.Add(current);
+            if (!_transformGroup.Remove(item))
+                _transformGroup.Add(item);
+            _transformGroupAnchor = item;
+        }
+        else if (shiftHeld)
+        {
+            var anchor = _transformGroupAnchor ?? _selectedOutlinerItem;
+            if (anchor is null || !IsGroupTransformItem(anchor))
+            {
+                _transformGroup.Clear();
+                _transformGroup.Add(item);
+                _transformGroupAnchor = item;
+            }
+            else
+            {
+                var rows = FlatGroupableRows();
+                int a = rows.IndexOf(anchor);
+                int b = rows.IndexOf(item);
+                _transformGroup.Clear();
+                if (a < 0 || b < 0)
+                {
+                    _transformGroup.Add(anchor);
+                    if (!ReferenceEquals(anchor, item))
+                        _transformGroup.Add(item);
+                }
+                else
+                {
+                    int lo = Math.Min(a, b), hi = Math.Max(a, b);
+                    for (int i = lo; i <= hi; i++)
+                        _transformGroup.Add(rows[i]);
+                }
+                _transformGroupAnchor = anchor;
+            }
+        }
+
+        if (_transformGroup.Count <= 1)
+        {
+            var only = _transformGroup.FirstOrDefault() ?? item;
+            _transformGroup.Clear();
+            _transformGroupAnchor = only;
+            OnOutlinerSelectRequested?.Invoke(only.Node);
+            return;
+        }
+
+        ClearScanOutlinerSelection();
+        foreach (var row in EnumerateAllContentItems())
+            row.IsOutlinerSelected = false;
+        foreach (var row in _transformGroup)
+            row.IsOutlinerSelected = true;
+        _selectedOutlinerItem = item;
+        OnPropertyChanged(nameof(SelectedOutlinerItem));
+        OnPropertyChanged(nameof(SelectedModifierOwner));
+        OnTransformGroupChanged?.Invoke(_transformGroup.Select(r => r.Node).ToList(), item.Node);
+    }
+
+    internal void ClearTransformGroup()
+    {
+        if (_transformGroup.Count == 0) return;
+        foreach (var row in _transformGroup)
+            row.IsOutlinerSelected = false;
+        _transformGroup.Clear();
+        OnTransformGroupChanged?.Invoke(Array.Empty<SceneNode>(), null);
+    }
+
+    /// <summary>Nodes the gizmo should move together. Scan multi-select counts too.</summary>
+    internal IReadOnlyList<SceneNode> GetTransformGroupNodes()
+    {
+        if (_transformGroup.Count >= 2)
+            return _transformGroup.Select(r => r.Node).ToList();
+        if (_selectedScanItems.Count >= 2)
+            return _selectedScanItems.Select(r => r.Node).ToList();
+        return Array.Empty<SceneNode>();
+    }
+
+    /// <summary>
+    /// Backs <c>group</c>. Shift and ctrl follow the outliner. Move and yaw apply one
+    /// shared world change so a bridge session can prove the group without a mouse.
+    /// </summary>
+    public string GroupCommand(string? args)
+    {
+        var parts = (args ?? string.Empty).Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0 || parts[0].Equals("show", StringComparison.OrdinalIgnoreCase))
+            return DescribeTransformGroup();
+
+        if (parts[0].Equals("clear", StringComparison.OrdinalIgnoreCase))
+        {
+            ClearTransformGroup();
+            if (_selectedOutlinerItem is { } current)
+                OnOutlinerSelectRequested?.Invoke(current.Node);
+            return "[group] cleared";
+        }
+
+        if (parts[0].Equals("shift", StringComparison.OrdinalIgnoreCase)
+            || parts[0].Equals("ctrl", StringComparison.OrdinalIgnoreCase))
+        {
+            var name = string.Join(' ', parts.Skip(1));
+            var item = FindGroupableByName(name);
+            if (item is null)
+                return $"[group] no groupable row matching '{name}'.";
+            EditTransformGroup(item, shiftHeld: parts[0].Equals("shift", StringComparison.OrdinalIgnoreCase),
+                ctrlHeld: parts[0].Equals("ctrl", StringComparison.OrdinalIgnoreCase));
+            return DescribeTransformGroup();
+        }
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        if (parts[0].Equals("move", StringComparison.OrdinalIgnoreCase)
+            && parts.Length >= 4
+            && float.TryParse(parts[1], System.Globalization.NumberStyles.Float, inv, out var dx)
+            && float.TryParse(parts[2], System.Globalization.NumberStyles.Float, inv, out var dy)
+            && float.TryParse(parts[3], System.Globalization.NumberStyles.Float, inv, out var dz))
+        {
+            if (GetTransformGroupNodes().Count < 2)
+                return "[group] select two or more rows first.";
+            return ApplyGroupWorldMove?.Invoke(new Vector3(dx, dy, dz)) ?? "[group] viewport not ready";
+        }
+
+        if (parts[0].Equals("yaw", StringComparison.OrdinalIgnoreCase)
+            && parts.Length >= 2
+            && float.TryParse(parts[1], System.Globalization.NumberStyles.Float, inv, out var deg))
+        {
+            if (GetTransformGroupNodes().Count < 2)
+                return "[group] select two or more rows first.";
+            return ApplyGroupYaw?.Invoke(deg) ?? "[group] viewport not ready";
+        }
+
+        return "[group] usage: group [show|clear|shift <name>|ctrl <name>|move <dx> <dy> <dz>|yaw <deg>]";
+    }
+
+    string DescribeTransformGroup()
+    {
+        var nodes = GetTransformGroupNodes();
+        if (nodes.Count < 2)
+            return "[group] one object. Shift-click a row, or `group ctrl <name>`.";
+        var rows = _transformGroup.Count >= 2 ? _transformGroup : _selectedScanItems.ToList();
+        var names = string.Join(", ", rows.Select(r => r.Name));
+        return $"[group] {rows.Count}: {names}{DescribeGroupPivot?.Invoke()}";
+    }
+
+    OutlinerItemViewModel? FindGroupableByName(string name)
+    {
+        name = (name ?? string.Empty).Trim();
+        if (name.Length == 0) return null;
+        OutlinerItemViewModel? contains = null;
+        foreach (var item in EnumerateAllContentItems())
+        {
+            if (!IsGroupTransformItem(item)) continue;
+            if (item.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) return item;
+            if (contains is null && item.Name.Contains(name, StringComparison.OrdinalIgnoreCase))
+                contains = item;
+        }
+        return contains;
+    }
+
+    List<OutlinerItemViewModel> FlatGroupableRows()
+    {
+        var rows = new List<OutlinerItemViewModel>();
+        void Walk(IEnumerable<OutlinerItemViewModel> items)
+        {
+            foreach (var row in items)
+            {
+                if (IsGroupTransformItem(row))
+                    rows.Add(row);
+                if (row.IsExpanded)
+                    Walk(row.Children);
+            }
+        }
+        Walk(OutlinerItems);
+        return rows;
+    }
+
+    bool IsUnderOutliner(OutlinerItemViewModel item, OutlinerItemViewModel? root)
+    {
+        if (root is null) return false;
+        for (var p = FindParentOutlinerItem(item); p is not null; p = FindParentOutlinerItem(p))
+            if (ReferenceEquals(p, root)) return true;
+        return false;
+    }
+
     /// <summary>Highlights the matching outliner row (scan → blue row; import → accent row).</summary>
     internal void SetOutlinerSelection(SceneNode? node)
     {
+        ClearTransformGroup();
+
         // Viewport-driven sync must not wipe ctrl/shift multi-select in the outliner.
         if (_selectedScanItems.Count >= 2)
         {
@@ -6951,6 +7209,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         }
 
         SetActiveToolheadOutliner(null);
+        _transformGroupAnchor = item;
         item.IsOutlinerSelected = true;
 
         // Selecting an effector, a modifier plane, or a whole Modifiers group arms the move

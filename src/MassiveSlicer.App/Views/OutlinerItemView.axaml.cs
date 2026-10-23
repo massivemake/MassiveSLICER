@@ -52,6 +52,12 @@ public partial class OutlinerItemView : UserControl
             else
             {
                 if (item.IsLocked) { e.Handled = true; return; }
+                if ((shiftHeld || ctrlHeld) && mvm.Viewport.IsGroupTransformItem(item))
+                {
+                    mvm.Viewport.EditTransformGroup(item, shiftHeld, ctrlHeld);
+                    e.Handled = true;
+                    return;
+                }
                 if (shiftHeld && mvm.Viewport.TryToggleToolpathSequenceSelection(item))
                 {
                     e.Handled = true;
