@@ -1,5 +1,9 @@
 # Replit AI Prompt: "Open in MassiveSLICER" review launch — desktop status + test client
 
+> **Parked (2026-10-22).** For opening NAS `.mass` files from LAB use
+> `docs/ERP-OpenInSlicer-Replit-Prompt.md` instead. This contract is only for private,
+> immutable review snapshots stored in LAB.
+
 **Paste everything below the line into the Replit AI / agent.**
 This answers your `massiveslicer-review` launch contract (proposed v1) from the desktop side.
 

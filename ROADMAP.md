@@ -172,6 +172,7 @@ Key facts:
 - Bracing as stackable modifiers: X (built) + lattice + vertical + beam-sleeve ends
 - Assembly joint modifiers at cut points: flange/lip/bracket, height-compensated
 - Print provenance metadata in exported KRL + Massive Lab job linkage
+- "Open in MassiveSLICER" from Massive Lab (NAS .mass link) + save-conflict warning
 - Preset / settings recommendation engine (project description + geometry)
 - Transfer verification on Export / Send to Robot
 - Placement-accurate reachability validation workflow
@@ -315,6 +316,17 @@ Register the export with Massive Lab at export time so the job record exists
 before the print starts; logs and notes then attach to it.
 **Size:** medium (format + export hook are small; the ERP-side job record is
 the coordination work).
+
+### 9b. "Open in MassiveSLICER" from Massive Lab
+**Why:** opening a project's .mass from Lab today is download → open → save →
+upload. Everyone is on the NAS (shop or VPN), so Lab only needs to point at the file.
+**What:** Lab renders `massiveslicer://open?path=<share-relative path>`; the
+slicer maps it to `Z:\` / `/Volumes/MassiveFILES` and Save writes straight back.
+Desktop side built on `feature/erp-review-launch` (macOS + share-relative paths,
+verified on a Mac 2026-10-22); Lab prompt `docs/ERP-OpenInSlicer-Replit-Prompt.md`.
+**Remaining:** Windows shop-PC check; "file changed on the NAS since you opened it"
+warning on Save (two people on one .mass today = last save wins).
+**Size:** small.
 
 ### 10. Preset & settings recommendation engine
 **Why:** with prints linked to outcomes (item 9), the data can start working:

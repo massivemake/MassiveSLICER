@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Platform.Storage;
 using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -42,6 +43,10 @@ public partial class App : Application
             LengthFieldUx.Install();
             MacDockIcon.TrySet("macos-app-icon.png");
             StartupWorkspacePath = ResolveStartupWorkspacePath(desktop.Args);
+            // macOS delivers massiveslicer:// links and Finder double-clicks as events after
+            // launch, never as argv — on cold start and when the app is already open.
+            if (this.TryGetFeature<IActivatableLifetime>() is { } activatable)
+                activatable.Activated += OnActivated;
             desktop.MainWindow = new MainWindow();
             desktop.ShutdownRequested += (_, _) => MassiveSlicer.Core.Scanning.ZividScanService.Disconnect();
         }
@@ -49,9 +54,45 @@ public partial class App : Application
         base.OnFrameworkInitializationCompleted();
     }
 
+    void OnActivated(object? sender, ActivatedEventArgs e)
+    {
+        string? raw = e switch
+        {
+            ProtocolActivatedEventArgs p => p.Uri.OriginalString,
+            FileActivatedEventArgs f => f.Files.Select(x => x.TryGetLocalPath()).FirstOrDefault(x => x is not null),
+            _ => null,
+        };
+        if (raw is null) return;
+
+        var path = ResolveStartupWorkspacePath([raw]);
+        if (path is null)
+        {
+            // macOS also reports the app's own .dll as an opened file at launch — not worth a line.
+            if (e is ProtocolActivatedEventArgs)
+                global::System.Console.Error.WriteLine($"[open] Ignored link (not a .mass on MassiveFILES): {raw}");
+            return;
+        }
+
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var desktop = ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
+            if (desktop?.MainWindow?.DataContext is MassiveSlicer.ViewModels.MainWindowViewModel vm)
+            {
+                vm.OpenWorkspace(path);
+                desktop.MainWindow.Activate();
+            }
+            else
+            {
+                // Window not built yet — MainWindow opens StartupWorkspacePath when it is.
+                StartupWorkspacePath = path;
+            }
+        });
+    }
+
     internal static string? ResolveStartupWorkspacePath(string[]? args)
     {
-        var resolved = MassiveSlicer.Core.IO.ProtocolUri.ResolveWorkspacePath(args);
+        var resolved = MassiveSlicer.Core.IO.ProtocolUri.ResolveLocalWorkspacePath(
+            args, MassiveSlicer.Core.IO.UnasPaths.LocalShareRoots(), File.Exists);
         if (string.IsNullOrEmpty(resolved)) return null;
         try
         {

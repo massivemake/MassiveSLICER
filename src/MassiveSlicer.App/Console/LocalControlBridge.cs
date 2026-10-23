@@ -418,8 +418,11 @@ public sealed class LocalControlBridge : IDisposable
         if (!requested.EndsWith(".mass", StringComparison.OrdinalIgnoreCase))
             return JsonSerializer.Serialize(new { ok = false, error = "not a .mass file" });
 
-        string local = ToLocalOsPath(requested);
-        if (!AllowedRevealPath(local) && !AllowedRevealPath(requested))
+        // Share-relative (Projects/…) or either OS's mount form → this machine's mount.
+        string? local = MassiveSlicer.Core.IO.UnasPaths.ToLocalPath(requested,
+            MassiveSlicer.Core.IO.UnasPaths.LocalShareRoots(_main.AppPreferences.UnasProjectsRoot),
+            File.Exists);
+        if (local is null)
             return JsonSerializer.Serialize(new { ok = false, error = "path not on MassiveFILES" });
 
         try

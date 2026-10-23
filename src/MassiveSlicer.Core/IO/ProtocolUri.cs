@@ -2,7 +2,9 @@ namespace MassiveSlicer.Core.IO;
 
 /// <summary>
 /// <c>massiveslicer://open?path=</c> helper so a browser can prompt
-/// "Open in MassiveSLICER" and hand us a .mass file.
+/// "Open in MassiveSLICER" and hand us a .mass file. MassiveLAB sends the share-relative
+/// path (<c>Projects/…/part.mass</c>); Windows <c>Z:\…</c> and macOS
+/// <c>/Volumes/MassiveFILES/…</c> forms also work, on either OS.
 /// </summary>
 public static class ProtocolUri
 {
@@ -47,6 +49,28 @@ public static class ProtocolUri
         }
 
         return IsMassFile(s) ? s : null;
+    }
+
+    /// <summary>
+    /// Like <see cref="ResolveWorkspacePath(IEnumerable{string}?)"/>, but a
+    /// <c>massiveslicer://</c> link is mapped onto this machine's MassiveFILES mount
+    /// (<see cref="UnasPaths.ToLocalPath"/>) and refused if it is not on the share.
+    /// A plain file argument (double-clicked .mass) is returned unchanged.
+    /// </summary>
+    public static string? ResolveLocalWorkspacePath(
+        IEnumerable<string>? args, IEnumerable<string> shareRoots, Func<string, bool> fileExists)
+    {
+        if (args is null) return null;
+        var roots = shareRoots.ToList();
+        foreach (var raw in args)
+        {
+            var path = ResolveWorkspacePath(raw);
+            if (string.IsNullOrEmpty(path)) continue;
+            if (!IsProtocol(raw?.Trim().Trim('"'))) return path;
+            var local = UnasPaths.ToLocalPath(path, roots, fileExists);
+            if (local is not null) return local;
+        }
+        return null;
     }
 
     static string? PathFromQuery(string query)

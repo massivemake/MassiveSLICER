@@ -97,7 +97,8 @@ class Program
     /// </summary>
     static bool TryHandoffToRunningInstance(string[] args)
     {
-        string? path = MassiveSlicer.Core.IO.ProtocolUri.ResolveWorkspacePath(args);
+        string? path = MassiveSlicer.Core.IO.ProtocolUri.ResolveLocalWorkspacePath(
+            args, MassiveSlicer.Core.IO.UnasPaths.LocalShareRoots(), File.Exists);
         if (string.IsNullOrEmpty(path)) return false;
         string json = System.Text.Json.JsonSerializer.Serialize(new { path });
         for (int port = 8723; port <= 8728; port++)

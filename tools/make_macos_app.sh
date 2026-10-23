@@ -27,6 +27,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>NSHighResolutionCapable</key><true/>
+    <!-- "Open in MassiveSLICER" links from MassiveLAB / MassiveBOARD. -->
+    <key>CFBundleURLTypes</key>
+    <array><dict>
+        <key>CFBundleURLName</key><string>com.massivemake.massiveslicer</string>
+        <key>CFBundleURLSchemes</key><array><string>massiveslicer</string></array>
+    </dict></array>
 </dict></plist>
 PLIST
 cat > "$APP/Contents/MacOS/MassiveSlicer" <<LAUNCHER
@@ -40,8 +46,14 @@ cd "\$REPO" || exit 1
 LOG="\$REPO/MassiveSlicer.app-launch.log"
 { echo "==== \$(date) ===="; git -C "\$REPO" rev-parse --abbrev-ref HEAD; git -C "\$REPO" rev-parse --short HEAD; } >>"\$LOG" 2>&1
 exec >>"\$LOG" 2>&1
-exec "\$REPO/run.sh" "\$@"
+# Build like run.sh's \`dotnet run\` did, then exec the app in THIS process. \`dotnet run\`
+# starts the app as a child, and macOS delivers massiveslicer:// links to the process it
+# launched — the child never saw them. UseAppHost=false: see run.sh (noexec share).
+dotnet build "\$REPO/src/MassiveSlicer.App/MassiveSlicer.App.csproj" --nologo -v q --property:UseAppHost=false
+exec dotnet "\$REPO/src/MassiveSlicer.App/bin/Debug/net8.0/MassiveSlicer.App.dll" "\$@"
 LAUNCHER
 chmod +x "$APP/Contents/MacOS/MassiveSlicer"
 touch "$APP"
+# Tell Launch Services this bundle owns massiveslicer:// (otherwise it waits for a rescan).
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" || true
 echo "Done $APP"

@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-10-22** (localhost bridge refuses browser-originated control requests)
+Last updated: **2026-10-22** (Open in MassiveSLICER links work on macOS + share-relative paths)
 
 ---
 
@@ -521,6 +521,18 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-10-22 — "Open in MassiveSLICER" links: macOS + one link for both OSes (branch `feature/erp-review-launch`)
+
+- Goal: a Lab button opens a NAS .mass in the installed app; Save writes back to the NAS.
+- Symptom: on macOS `open massiveslicer://…` → "No application knows how to open URL". Links only ever worked on Windows, and only with a `Z:\` path.
+- Cause: (1) the `make_macos_app.sh` launcher bundle never declared the scheme; (2) it ran `dotnet run`, which starts the app as a child — macOS delivers the link to the launched process, so the app never got it; (3) the app never listened for macOS open-URL events (they don't arrive as argv).
+- Fix: launcher declares `CFBundleURLTypes`, runs `lsregister`, builds, then `exec dotnet MassiveSlicer.App.dll` in the launched process. `App.OnActivated` handles `ProtocolActivatedEventArgs` / `FileActivatedEventArgs` (cold start and already-open). `UnasPaths.ToLocalPath` maps `Projects/…` (or either OS's absolute form) onto this machine's mount — pref `UnasProjectsRoot`, `Z:\`, UNC, `/Volumes/MassiveFILES(-N)`. Links off the share or with `..` are refused; double-clicked local files unchanged. Bridge `/open` uses the same mapping.
+- Verified on this Mac (stand-in NAS via `UnasProjectsRoot`, prefs restored after): cold-start link opened the file; second link while open loaded in the same process; `save` rewrote the same file. Windows not re-tested on a shop PC yet.
+- **Re-run `tools/make_macos_app.sh`** on each Mac to pick up the new launcher.
+- Tests: `OpenInMassiveSlicerLinkTest` (14). Full suite: 46 failures, identical set to clean `origin/main` — `docs/KNOWN-TEST-FAILURES.md` (lists 15) is stale; `WorkspaceSaveLogTest.UnasProjectsRoot_maps_a_drive_letter_folder` is a pre-existing unlisted failure.
+- Lab side: `docs/ERP-OpenInSlicer-Replit-Prompt.md` (just a link; no API). The `massiveslicer-review` handoff contract is parked.
+- Files: `Core/IO/UnasPaths.cs`, `Core/IO/ProtocolUri.cs`, `App/App.axaml.cs`, `App/Program.cs`, `App/Console/LocalControlBridge.cs`, `tools/make_macos_app.sh`.
 
 ### 2026-10-22 — Localhost bridge refuses web pages (branch `feature/erp-review-launch`)
 
