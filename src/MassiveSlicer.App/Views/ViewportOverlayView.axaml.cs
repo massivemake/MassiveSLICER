@@ -35,6 +35,8 @@ public partial class ViewportOverlayView : UserControl
             (DataContext as ViewportViewModel)?.OnKeyframeLaneClicked?.Invoke(i);
         KeyframeLane.InfluenceDragged = (i, left, x, commit) =>
             (DataContext as ViewportViewModel)?.OnKeyframeInfluenceDragged?.Invoke(i, left, x, commit);
+        KeyframeLane.KeyMoved = (i, x, commit) =>
+            (DataContext as ViewportViewModel)?.OnKeyframeMoved?.Invoke(i, x, commit);
 
         // Keep the bottom corner docks (ERP / Live I/O) 16px above whichever
         // timeline bar is showing; heights vary (keyframe lane, workflow bar).

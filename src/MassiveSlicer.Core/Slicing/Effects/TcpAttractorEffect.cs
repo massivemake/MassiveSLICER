@@ -181,6 +181,14 @@ public static class TcpAttractorEffect
                     var onPath = ClosestOnSegment(move.From, move.To, a.Position);
                     var sample = SamplePoint(onPath, baseNormal, a);
                     float w = Influence(sample, a);
+                    if (!a.Deflect)
+                    {
+                        // Size is the volume. Influence scales the fade and stays
+                        // stronger at the center. A deflector does not use it.
+                        float scale = a.Influence;
+                        if (float.IsNaN(scale) || scale < 0f) scale = 1f;
+                        w *= scale;
+                    }
                     if (w <= 1e-4f) continue;
                     if (a.Deflect)
                     {

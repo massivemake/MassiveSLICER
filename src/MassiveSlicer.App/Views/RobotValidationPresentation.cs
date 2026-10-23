@@ -43,6 +43,18 @@ public static class RobotValidationPresentation
         => !string.IsNullOrWhiteSpace(message)
            && message.Contains("⚠ Robot validation:", StringComparison.Ordinal);
 
+    /// <summary>Clean and error verdicts both start with this. The compact line uses it to stay put.</summary>
+    public static bool IsRobotValidationStatus(string? message)
+        => !string.IsNullOrWhiteSpace(message)
+           && message.Contains("Robot validation:", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Short status-bar line: singularity, unreachable, and collision counts.
+    /// The Z range, the first hit, and the fault warning stay in the full sentence.
+    /// </summary>
+    public static string CompactStatus(in Counts c)
+        => $"{c.Singular:N0} singularity · {c.Unreachable:N0} unreachable · {c.Collisions:N0} collisions";
+
     public static string ReachabilityLabel(in Counts c)
     {
         string label = c.Unreachable == 0

@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Text.Json.Serialization;
 
 namespace MassiveSlicer.Core.Models;
 
@@ -17,10 +18,13 @@ public enum TcpAdjustAxis { X, Y, Z }
 /// Zero means +Z, which keeps the old lean. On a mill tool that direction
 /// points down the bar. On the robot flange it points along the bar.
 /// A deflector does not use it: inside the volume it turns the chosen frame
-/// back toward the way out. Influence falls to zero at <see cref="RadiusMm"/>.
+/// back toward the way out. The distance fade falls to zero at <see cref="RadiusMm"/>.
+/// <see cref="Influence"/> scales that fade. 1 keeps the old lean. The tool still
+/// cannot turn past the arrow, so a larger value reaches that lean farther out
+/// and outweighs a lighter attractor. A deflector ignores it.
 /// <see cref="HeightMm"/> is the full length of a cylinder along its axis.
 /// Zero keeps the old cylinder, whose half-height equals <see cref="RadiusMm"/>.
-/// A sphere ignores it and keeps one influence radius.
+/// A sphere ignores height and keeps one radius.
 /// <see cref="Detract"/> aims that TCP direction away from the bar.
 /// Unchecked, it aims toward the bar. A deflector ignores it.
 /// </summary>
@@ -33,7 +37,8 @@ public readonly record struct TcpAttractor(
     bool Deflect = false,
     Vector3 AimDir = default,
     float HeightMm = 0f,
-    bool Detract = false)
+    bool Detract = false,
+    float Influence = 1f)
 {
     /// <summary>Unit direction in the TCP frame. A zero vector is +Z.</summary>
     public Vector3 AimUnit =>
@@ -87,6 +92,12 @@ public sealed class TcpAttractorPose
     public string? Name { get; set; }
     /// <summary>True aims the TCP direction away from the bar. False aims toward it.</summary>
     public bool Detract { get; set; }
+    /// <summary>
+    /// Strength multiplied onto the distance fade. 1 is the historical lean.
+    /// Missing on an older file, which still loads as 1. Zero is a real value, so it is always written.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public float Influence { get; set; } = 1f;
 
     public TcpAttractor ToAttractor()
     {
@@ -99,7 +110,11 @@ public sealed class TcpAttractorPose
         var aim = typed.LengthSquared() > 1e-8f
             ? Vector3.Normalize(typed)
             : TcpAttractor.UnitFromAimName(Aim);
-        return new TcpAttractor(new Vector3(X, Y, Z), RadiusMm, axis, shape, frame, Deflect, aim, HeightMm, Detract);
+        float influence = Influence;
+        if (float.IsNaN(influence)) influence = 1f;
+        influence = Math.Clamp(influence, 0f, 2f);
+        return new TcpAttractor(
+            new Vector3(X, Y, Z), RadiusMm, axis, shape, frame, Deflect, aim, HeightMm, Detract, influence);
     }
 
     public static TcpAttractorPose From(TcpAttractor a) => new()
@@ -120,5 +135,6 @@ public sealed class TcpAttractorPose
         Deflect = a.Deflect,
         HeightMm = a.HeightMm,
         Detract = a.Detract,
+        Influence = a.Influence,
     };
 }

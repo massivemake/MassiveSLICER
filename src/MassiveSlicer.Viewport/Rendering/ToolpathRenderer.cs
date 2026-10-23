@@ -44,6 +44,12 @@ public sealed class ToolpathRenderer : IDisposable
     private int  _allPtVao, _allPtVbo;
     private int  _allPointCount;
     private int  _beadVao, _beadVbo, _beadEbo, _beadCount;   // _beadCount = index count
+    // Coarser copy of the bead, drawn only while the camera or gizmo is moving.
+    // The settled frame keeps _beadVao / the full SDF instances.
+    private int  _beadLodVao, _beadLodVbo, _beadLodEbo, _beadLodCount;
+    private int  _sdfLodInstanceVbo, _sdfLodCount;
+    /// <summary>Camera or gizmo is moving. Draw the coarse bead and skip the carve march.</summary>
+    public bool InteractionPreview { get; set; }
     private int  _beadOverhangVao, _beadOverhangVbo, _beadOverhangCount;
     private int  _orientationVao, _orientationVbo, _orientationCount;
     private int  _singularityPtVao, _singularityPtVbo, _singularityPointCount;
@@ -1114,19 +1120,34 @@ void main() {
             return;
         }
 
-        float hw = beadWidth * 0.5f;
+        UploadPlanMesh(_beadPlan, out _beadVao, out _beadVbo, out _beadEbo, out _beadCount);
 
+        BuildBeadVertexCumulative();
+        UploadSdf();
+        UploadMotionLod();
+    }
+
+    /// <summary>
+    /// Indexed mesh: 4 shared corner verts per cross-section. <paramref name="indexCount"/>
+    /// is the element count, not the segment count.
+    /// </summary>
+    private void UploadPlanMesh(List<BeadContour> plan, out int vao, out int vbo, out int ebo, out int indexCount)
+    {
+        vao = vbo = ebo = 0;
+        indexCount = 0;
+        if (plan.Count == 0) return;
+
+        float hw = _beadWidth * 0.5f;
         int sections = 0, segs = 0;
-        foreach (var c in _beadPlan) { sections += c.Pts.Length; segs += c.Pts.Length - 1; }
+        foreach (var c in plan) { sections += c.Pts.Length; segs += c.Pts.Length - 1; }
+        if (segs <= 0) return;
 
-        // Indexed mesh: 4 shared corner verts per cross-section (~16× leaner than the old
-        // 36-verts-per-segment triangle soup), so full wave toolpaths fit in GPU memory.
         var verts = new float[sections * 4 * 6];
-        var idx   = new uint[segs * 24 + _beadPlan.Count * 12];
+        var idx   = new uint[segs * 24 + plan.Count * 12];
         int vi = 0, ii = 0;
         uint baseV = 0;
 
-        foreach (var c in _beadPlan)
+        foreach (var c in plan)
         {
             int   m  = c.Pts.Length;   // cross-sections in this contour (segments + 1)
             var   up = c.Up;
@@ -1165,16 +1186,162 @@ void main() {
             baseV += (uint)(m * 4);
         }
 
-        (_beadVao, _beadVbo) = BuildVao(verts);
-        _beadEbo = GL.GenBuffer();
-        GL.BindVertexArray(_beadVao);
-        GL.BindBuffer(BufferTarget.ElementArrayBuffer, _beadEbo);
+        (vao, vbo) = BuildVao(verts);
+        ebo = GL.GenBuffer();
+        GL.BindVertexArray(vao);
+        GL.BindBuffer(BufferTarget.ElementArrayBuffer, ebo);
         GL.BufferData(BufferTarget.ElementArrayBuffer, ii * sizeof(uint), idx, BufferUsageHint.StaticDraw);
         GL.BindVertexArray(0);
-        _beadCount = ii;
+        indexCount = ii;
+    }
 
-        BuildBeadVertexCumulative();
-        UploadSdf();
+    /// <summary>
+    /// Second bead used only while orbiting, panning, zooming, or dragging the gizmo.
+    /// Straight runs longer than <see cref="MotionBeadStepMm"/> collapse. The full plan
+    /// stays on screen once the pointer stops, so the settled Preview and SDF views match.
+    /// </summary>
+    private void UploadMotionLod()
+    {
+        int fine = 0;
+        foreach (var c in _beadPlan) fine += Math.Max(0, c.Pts.Length - 1);
+        if (fine < 20000) return;
+
+        float step = MotionBeadStepMm;
+        List<BeadContour> coarse = [];
+        int coarseSegs = 0;
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            coarse = [];
+            coarseSegs = 0;
+            foreach (var c in _beadPlan)
+            {
+                var keep = DecimateMotion(c.Pts, step);
+                int m = keep.Count - 1;
+                if (m <= 0) continue;
+                var pts = new NVec3[m + 1];
+                var hh = new float[m + 1];
+                var first = new int[m];
+                var last = new int[m];
+                for (int j = 0; j <= m; j++)
+                {
+                    int src = keep[j];
+                    pts[j] = c.Pts[src];
+                    hh[j] = c.Hh[Math.Min(src, c.Hh.Length - 1)];
+                }
+                for (int j = 0; j < m; j++)
+                {
+                    int a = keep[j];
+                    int b = keep[j + 1];
+                    first[j] = a < c.SegFirstFlat.Length ? c.SegFirstFlat[a] : 0;
+                    int lastSrc = Math.Min(Math.Max(0, b - 1), c.SegLastFlat.Length - 1);
+                    last[j] = c.SegLastFlat.Length == 0 ? first[j] : c.SegLastFlat[lastSrc];
+                }
+                coarse.Add(new BeadContour
+                {
+                    Pts = pts,
+                    CsR = BuildSectionRights(pts, c.Up),
+                    SegFirstFlat = first,
+                    SegLastFlat = last,
+                    Hh = hh,
+                    Up = c.Up,
+                });
+                coarseSegs += m;
+            }
+            if (coarseSegs <= MotionBeadMaxSegments) break;
+            step *= 2f;
+        }
+        if (coarseSegs < 2 || coarseSegs >= fine) return;
+
+        UploadPlanMesh(coarse, out _beadLodVao, out _beadLodVbo, out _beadLodEbo, out _beadLodCount);
+        UploadMotionSdf(coarse);
+    }
+
+    private const float MotionBeadStepMm = 8f;
+    private const int MotionBeadMaxSegments = 12_000;
+
+    /// <summary>Keep endpoints and any point at least <paramref name="stepMm"/> from the last keep.</summary>
+    private static List<int> DecimateMotion(NVec3[] pts, float stepMm)
+    {
+        var keep = new List<int> { 0 };
+        int n = pts.Length;
+        if (n < 2) return keep;
+        int last = 0;
+        float step2 = stepMm * stepMm;
+        for (int i = 1; i < n - 1; i++)
+        {
+            if ((pts[i] - pts[last]).LengthSquared() < step2) continue;
+            keep.Add(i);
+            last = i;
+        }
+        keep.Add(n - 1);
+        return keep;
+    }
+
+    private static NVec3[] BuildSectionRights(NVec3[] pts, NVec3 up)
+    {
+        int m = pts.Length - 1;
+        var csR = new NVec3[Math.Max(m + 1, 0)];
+        if (m <= 0) return csR;
+        var rights = new NVec3[m];
+        var upPerp = NVec3.Normalize(NVec3.Cross(up,
+            MathF.Abs(up.X) < 0.9f ? NVec3.UnitX : NVec3.UnitY));
+        for (int j = 0; j < m; j++)
+        {
+            var d = pts[j + 1] - pts[j];
+            var fwd = d.LengthSquared() > 1e-12f
+                ? NVec3.Normalize(d)
+                : (j > 0 ? NVec3.Normalize(pts[j] - pts[j - 1]) : NVec3.UnitX);
+            var r = NVec3.Cross(fwd, up);
+            rights[j] = r.LengthSquared() < 0.025f
+                ? (j > 0 ? rights[j - 1] : upPerp)
+                : NVec3.Normalize(r);
+        }
+        csR[0] = rights[0];
+        for (int j = 1; j < m; j++)
+        {
+            var sum = rights[j - 1] + rights[j];
+            csR[j] = sum.LengthSquared() > 1e-6f ? NVec3.Normalize(sum) : rights[j];
+        }
+        csR[m] = rights[m - 1];
+        return csR;
+    }
+
+    private void UploadMotionSdf(List<BeadContour> plan)
+    {
+        if (_sdfShader is null || _sdfVao == 0) return;
+        int n = 0;
+        foreach (var c in plan) n += Math.Max(0, c.Pts.Length - 1);
+        if (n == 0) return;
+
+        var data = new float[n * 14];
+        int di = 0, inst = 0;
+        float hw = MathF.Max(_beadWidth * 0.5f, 0.05f);
+        var col = _beadMaterialColor;
+        foreach (var c in plan)
+        {
+            var up = c.Up.LengthSquared() > 1e-8f ? NVec3.Normalize(c.Up) : NVec3.UnitZ;
+            for (int j = 0; j < c.Pts.Length - 1; j++)
+            {
+                var a = c.Pts[j] - _origin;
+                var b = c.Pts[j + 1] - _origin;
+                if ((b - a).LengthSquared() < 1e-8f) continue;
+                float hh = MathF.Max((c.Hh[j] + c.Hh[Math.Min(j + 1, c.Hh.Length - 1)]) * 0.5f, 0.05f);
+                data[di++] = a.X; data[di++] = a.Y; data[di++] = a.Z;
+                data[di++] = b.X; data[di++] = b.Y; data[di++] = b.Z;
+                data[di++] = up.X; data[di++] = up.Y; data[di++] = up.Z;
+                data[di++] = col.X; data[di++] = col.Y; data[di++] = col.Z;
+                data[di++] = hw; data[di++] = hh;
+                inst++;
+            }
+        }
+        if (inst == 0) return;
+        if (di != data.Length) data = data[..di];
+
+        _sdfLodInstanceVbo = GL.GenBuffer();
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _sdfLodInstanceVbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, data.Length * sizeof(float), data, BufferUsageHint.StaticDraw);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+        _sdfLodCount = inst;
     }
 
     /// <summary>
@@ -1628,7 +1795,7 @@ void main() {
         _sdfInstanceVbo = GL.GenBuffer();
         GL.BindBuffer(BufferTarget.ArrayBuffer, _sdfInstanceVbo);
         GL.BufferData(BufferTarget.ArrayBuffer, data.Length * sizeof(float), data, BufferUsageHint.StaticDraw);
-        BindSdfInstanceAttribs(0);
+        BindSdfInstanceAttribs(0, _sdfInstanceVbo);
         GL.BindVertexArray(0);
     }
 
@@ -1636,9 +1803,9 @@ void main() {
     /// Points the per-segment attributes at instance <paramref name="firstInstance"/>.
     /// The VAO must already be bound. This is the GL 4.1 stand-in for a base-instance draw.
     /// </summary>
-    private void BindSdfInstanceAttribs(int firstInstance)
+    private void BindSdfInstanceAttribs(int firstInstance, int instanceVbo)
     {
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _sdfInstanceVbo);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, instanceVbo);
         int stride = 14 * sizeof(float);
         int baseByte = firstInstance * stride;
         void Attrib(int location, int components, int offsetFloats)
@@ -1907,14 +2074,25 @@ void main() {
         }
         else if (showBead && beadCount > 0)
         {
+            bool motionBead = InteractionPreview && _beadLodCount > 0
+                && beadFirst == 0 && beadCount == _beadCount;
             _beadShader.Use();
             _beadShader.SetMatrix4("uMVP", ref mvp);
             _beadShader.SetVector3("uColor", _beadMaterialColor);
             _beadShader.SetVector3("uEye",   eyeLocal);
             GL.Disable(EnableCap.CullFace);
-            GL.BindVertexArray(_beadVao);
-            GL.DrawElements(PrimitiveType.Triangles, beadCount - beadFirst,
-                DrawElementsType.UnsignedInt, (IntPtr)((long)beadFirst * sizeof(uint)));
+            if (motionBead)
+            {
+                GL.BindVertexArray(_beadLodVao);
+                GL.DrawElements(PrimitiveType.Triangles, _beadLodCount,
+                    DrawElementsType.UnsignedInt, IntPtr.Zero);
+            }
+            else
+            {
+                GL.BindVertexArray(_beadVao);
+                GL.DrawElements(PrimitiveType.Triangles, beadCount - beadFirst,
+                    DrawElementsType.UnsignedInt, (IntPtr)((long)beadFirst * sizeof(uint)));
+            }
             GL.Enable(EnableCap.CullFace);
         }
 
@@ -1931,7 +2109,9 @@ void main() {
             int sdfFirst = scrubStart > 0
                 ? Math.Min(ScrubCount(_sdfInstanceCumulative, _sdfInstanceCount, scrubStart), sdfCount)
                 : 0;
-            if (sdfCount <= sdfFirst)
+            bool motionSdf = InteractionPreview && _sdfLodCount > 0
+                && sdfFirst == 0 && sdfCount == _sdfInstanceCount;
+            if (!motionSdf && sdfCount <= sdfFirst)
                 return;
 
             _sdfShader.Use();
@@ -1952,10 +2132,20 @@ void main() {
             // so the pointer is null and the call segfaults (seen as pc=0 with
             // mode=TRIANGLES, count=36). Shift the instance buffer and use the
             // 3.1 draw, which this context actually has.
-            BindSdfInstanceAttribs(sdfFirst);
-            GL.DrawElementsInstanced(
-                PrimitiveType.Triangles, 36, DrawElementsType.UnsignedShort, IntPtr.Zero,
-                sdfCount - sdfFirst);
+            if (motionSdf)
+            {
+                BindSdfInstanceAttribs(0, _sdfLodInstanceVbo);
+                GL.DrawElementsInstanced(
+                    PrimitiveType.Triangles, 36, DrawElementsType.UnsignedShort, IntPtr.Zero,
+                    _sdfLodCount);
+            }
+            else
+            {
+                BindSdfInstanceAttribs(sdfFirst, _sdfInstanceVbo);
+                GL.DrawElementsInstanced(
+                    PrimitiveType.Triangles, 36, DrawElementsType.UnsignedShort, IntPtr.Zero,
+                    sdfCount - sdfFirst);
+            }
             GL.Enable(EnableCap.CullFace);
             GL.ActiveTexture(TextureUnit.Texture0);
         }
@@ -1984,7 +2174,12 @@ void main() {
                 && MathF.Abs(_carveToolC - toolheadC) < 0.05f
                 && _carveFlip == flip
                 && _carveBall == ball;
-            if (paramsMatch && (_carveTexReady || _carveBuilding))
+            // A finished grid counts even before the GL upload. Configure runs every
+            // frame, and Preview never uploads, so "building or uploaded" alone
+            // restarted the 1.7M-move stamp (~10 s) as soon as the task ended.
+            bool haveGrid = _carveTexReady || _carveBuilding
+                || _carvePending is not null || _carveLive is not null;
+            if (paramsMatch && haveGrid)
             {
                 _carveActive = true;
                 return;
@@ -2051,6 +2246,13 @@ void main() {
         }
         bool gridOn = _carveActive && _carveTexReady && _carveLive is { OccupiedCount: > 0 } && _carveTex != 0;
         bool noseOn = _carveActive && _carveTexReady && _carveLive is { HasAnalytic: true } && _noseHeadTex != 0;
+        // The scoop stays on the settled frame. While the pointer is moving, the
+        // bead draws without the per-pixel capsule march so Preview and SDF track.
+        if (InteractionPreview)
+        {
+            gridOn = false;
+            noseOn = false;
+        }
         int tex = gridOn ? _carveTex : EnsureCarveFallback();
         GL.ActiveTexture(TextureUnit.Texture2);
         GL.BindTexture(TextureTarget.Texture3D, tex);
@@ -2370,6 +2572,9 @@ void main() {
         if (_allPtVao         != 0) { GL.DeleteVertexArray(_allPtVao);         GL.DeleteBuffer(_allPtVbo);         }
         if (_beadVao          != 0) { GL.DeleteVertexArray(_beadVao);          GL.DeleteBuffer(_beadVbo);          }
         if (_beadEbo          != 0) GL.DeleteBuffer(_beadEbo);
+        if (_beadLodVao       != 0) { GL.DeleteVertexArray(_beadLodVao);       GL.DeleteBuffer(_beadLodVbo);       }
+        if (_beadLodEbo       != 0) GL.DeleteBuffer(_beadLodEbo);
+        if (_sdfLodInstanceVbo != 0) GL.DeleteBuffer(_sdfLodInstanceVbo);
         if (_sdfVao != 0)
         {
             GL.DeleteVertexArray(_sdfVao);

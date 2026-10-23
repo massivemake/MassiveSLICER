@@ -17,6 +17,10 @@
         <Style Selector="TextBlock.LabelMuted.BuildLabel.Stale">
             <Setter Property="Foreground" Value="{DynamicResource ColorWarning}"/>
         </Style>
+        <!-- Same red as the robot-validation alert. -->
+        <Style Selector="TextBlock.LabelMuted.ValidationAlert">
+            <Setter Property="Foreground" Value="#FFFF7070"/>
+        </Style>
     </UserControl.Styles>
 
     <Border Background="{DynamicResource Bg2}"
@@ -84,10 +88,10 @@
                     </Grid>
 
                     <!-- Robot validation alert — inline, with jump action -->
-                    <Grid Margin="8,3,8,3" IsVisible="{Binding Viewport.ShowSliceStatus}" ColumnDefinitions="Auto,*,Auto">
+                    <Grid Margin="8,3,8,3" IsVisible="{Binding Viewport.ShowValidationBanner}" ColumnDefinitions="Auto,*,Auto">
                         <TextBlock Grid.Column="0" Text="⚠" Foreground="#FFFF7070" FontSize="13"
                                    VerticalAlignment="Center" Margin="0,0,6,0"/>
-                        <TextBlock Grid.Column="1" Text="{Binding Viewport.SliceStatusMessage}"
+                        <TextBlock Grid.Column="1" Text="{Binding Viewport.ValidationBannerText}"
                                    Foreground="#FFFF7070" FontSize="11" TextWrapping="Wrap"
                                    VerticalAlignment="Center"/>
                         <Button Grid.Column="2" Content="Go to issue" Padding="10,2" Margin="8,0,0,0"
@@ -96,10 +100,35 @@
                     </Grid>
 
                     <Grid Height="24" Margin="8,0">
-                        <TextBlock Text="{Binding StatusBar.FileStatus}"
+                        <StackPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Center"
+                                    Spacing="8">
+                            <Panel Width="14" Height="14"
                                    VerticalAlignment="Center"
-                                   HorizontalAlignment="Left"
-                                   Classes="LabelMuted"/>
+                                   Background="Transparent"
+                                   IsVisible="{Binding Viewport.IsPathRecalculating}"
+                                   ToolTip.Tip="Recalculating the path"
+                                   ToolTip.Placement="Top">
+                                <Arc x:Name="PathSpinArc"
+                                     Width="12" Height="12"
+                                     HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"
+                                     StartAngle="0"
+                                     SweepAngle="270"
+                                     Stroke="{DynamicResource Accent}"
+                                     StrokeThickness="1.8"
+                                     StrokeLineCap="Round"
+                                     RenderTransformOrigin="50%,50%">
+                                    <Arc.RenderTransform>
+                                        <RotateTransform Angle="0"/>
+                                    </Arc.RenderTransform>
+                                </Arc>
+                            </Panel>
+                            <TextBlock Text="{Binding StatusBar.FileStatus}"
+                                       VerticalAlignment="Center"
+                                       Classes="LabelMuted"/>
+                        </StackPanel>
                         <!-- Padded Border is the hover/click target — see StatusBarView.axaml. -->
                         <Border HorizontalAlignment="Center"
                                 VerticalAlignment="Stretch"
@@ -119,7 +148,12 @@
                         <TextBlock Text="{Binding StatusBar.OperationFeedback}"
                                    VerticalAlignment="Center"
                                    HorizontalAlignment="Right"
-                                   Classes="LabelMuted"/>
+                                   Classes="LabelMuted"
+                                   Classes.ValidationAlert="{Binding Viewport.ValidationLineIsAlert}"
+                                   Cursor="Hand"
+                                   ToolTip.Tip="{Binding Viewport.ValidationTip}"
+                                   ToolTip.Placement="Top"
+                                   Tapped="OnValidationLineTapped"/>
                     </Grid>
                 </StackPanel>
             </Border>

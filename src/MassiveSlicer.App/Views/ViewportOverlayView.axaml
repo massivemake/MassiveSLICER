@@ -1758,8 +1758,14 @@
                         <Button Classes="ToolbarButton" Padding="6,4"
                                 IsVisible="{Binding ShowTcpHelpers}"
                                 Command="{Binding AddTcpKeyframeCommand}"
-                                ToolTip.Tip="Add a keyframe at this moment. Drag the TCP to save a position offset, then set Toolhead global orientation — Y/X/Z is stored on this key and eases into the next keyframe or back to the unkeyed orientation.">
+                                ToolTip.Tip="Add a keyframe at this moment. Drag the TCP to save a position offset, then set Toolhead global orientation — Y/X/Z is stored on this key and eases into the next keyframe or back to the unkeyed orientation. Shift-drag the key to move it. Drag a tail to size its ease.">
                             <ia:Icon Value="mdi-key-plus" FontSize="15"/>
+                        </Button>
+                        <Button Classes="ToolbarButton" Padding="6,4"
+                                IsVisible="{Binding ShowDeleteTcpKeyframe}"
+                                Command="{Binding DeleteTcpKeyframeCommand}"
+                                ToolTip.Tip="Delete the selected keyframe. The Delete key does the same.">
+                            <ia:Icon Value="mdi-key-minus" FontSize="15"/>
                         </Button>
                         <Button Classes="ToolbarButton" Padding="6,4"
                                 IsVisible="{Binding ShowClearTcpKeyframes}"
@@ -1803,11 +1809,12 @@
                                              MarkerBrush="#E8901A"
                                              Height="6" VerticalAlignment="Center"
                                              IsHitTestVisible="False"/>
-                        <!-- TCP keyframe markers — lime ticks -->
+                        <!-- TCP keyframe markers — lime ticks. Hidden while the lane is collapsed. -->
                         <ctrl:ScrubMarkerBar Markers="{Binding ScrubKeyframeMarkers}"
                                              MarkerBrush="#7ed87e"
                                              Height="10" VerticalAlignment="Center"
-                                             IsHitTestVisible="False"/>
+                                             IsHitTestVisible="False"
+                                             IsVisible="{Binding ShowTcpKeyframeLane}"/>
                     </Grid>
 
                     <!-- Move counter + analysing indicator + video export -->
@@ -1845,9 +1852,31 @@
 
                 </Grid>
 
-                <!-- Validation-tick legend — appears when the timeline carries markers -->
+                <!-- Caption under the scrubber. KEYFRAMES lives here so closing it
+                     drops the diamond row instead of leaving a title on its own line. -->
                 <StackPanel Orientation="Horizontal" Spacing="12" Margin="4,2,0,0"
-                            IsVisible="{Binding ShowScrubLegend}">
+                            IsVisible="{Binding ShowTimelineCaption}">
+                    <Button Classes="ToolbarButton"
+                            Padding="2,0"
+                            VerticalAlignment="Center"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            IsVisible="{Binding HasTcpKeyframes}"
+                            Command="{Binding ToggleTcpKeyframeLaneCommand}"
+                            ToolTip.Tip="Show or hide the keyframe lane. The keys stay on the path.">
+                        <StackPanel Orientation="Horizontal" Spacing="2">
+                            <Panel Width="12" Height="12" VerticalAlignment="Center">
+                                <ia:Icon Value="mdi-chevron-down" FontSize="12"
+                                         IsVisible="{Binding TcpKeyframeLaneOpen}"/>
+                                <ia:Icon Value="mdi-chevron-right" FontSize="12"
+                                         IsVisible="{Binding !TcpKeyframeLaneOpen}"/>
+                            </Panel>
+                            <TextBlock Text="KEYFRAMES"
+                                       Classes="LabelMuted"
+                                       FontSize="9"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
                     <StackPanel Orientation="Horizontal" Spacing="4"
                                 IsVisible="{Binding HasUnreachableMarkers}">
                         <Border Width="3" Height="10" Background="#CC3030" VerticalAlignment="Center"/>
@@ -1864,24 +1893,18 @@
                         <TextBlock Text="Collision" FontSize="10" Classes="LabelMuted" VerticalAlignment="Center"/>
                     </StackPanel>
                     <TextBlock Text="Alt-click or double-click a tick to inspect"
-                               FontSize="10" Opacity="0.55" VerticalAlignment="Center"/>
+                               FontSize="10" Opacity="0.55" VerticalAlignment="Center"
+                               IsVisible="{Binding ShowScrubLegend}"/>
                 </StackPanel>
 
-                <!-- Keyframe lane — slides open once the first TCP keyframe exists.
+                <!-- Diamond lane. Hidden with the chevron, so the timeline gets shorter.
                      Diamonds are clickable (jump + select); the small side ticks drag
                      to resize each key's ease-in / ease-out influence window. -->
                 <Grid Height="24" Margin="0,2,0,0"
-                      IsVisible="{Binding HasTcpKeyframes}"
+                      IsVisible="{Binding ShowTcpKeyframeLane}"
                       ColumnDefinitions="Auto,*,Auto">
                     <Border Grid.Column="0" Margin="0,0,8,0"
-                            Width="{Binding #ScrubPlayControls.Bounds.Width}">
-                        <TextBlock Text="KEYFRAMES"
-                                   Classes="LabelMuted"
-                                   FontSize="9"
-                                   VerticalAlignment="Center"
-                                   HorizontalAlignment="Left"
-                                   Margin="2,0,0,0"/>
-                    </Border>
+                            Width="{Binding #ScrubPlayControls.Bounds.Width}"/>
                     <Grid Grid.Column="1">
                         <Border Background="{DynamicResource Border1}"
                                 CornerRadius="5"
@@ -1894,6 +1917,26 @@
                     <Border Grid.Column="2" Margin="8,0,0,0"
                             Width="{Binding #ScrubRightControls.Bounds.Width}"/>
                 </Grid>
+
+                <!-- Selected key's own position offset. The toolhead Y/X/Z sliders are this key's angle. -->
+                <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,2,0,0"
+                            IsVisible="{Binding ShowTcpKeyframeDetails}">
+                    <TextBlock Text="THIS KEY" Classes="LabelMuted" FontSize="9" VerticalAlignment="Center"/>
+                    <TextBlock Text="X" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center"/>
+                    <TextBox Width="64" Classes="ScrubInput"
+                             Text="{Binding TcpKeyframeOffsetX, Mode=TwoWay, UpdateSourceTrigger=LostFocus, StringFormat={}{0:0.00}}"
+                             ToolTip.Tip="This key's position offset in millimetres. Other keys keep theirs."/>
+                    <TextBlock Text="Y" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center"/>
+                    <TextBox Width="64" Classes="ScrubInput"
+                             Text="{Binding TcpKeyframeOffsetY, Mode=TwoWay, UpdateSourceTrigger=LostFocus, StringFormat={}{0:0.00}}"
+                             ToolTip.Tip="This key's position offset in millimetres. Other keys keep theirs."/>
+                    <TextBlock Text="Z" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center"/>
+                    <TextBox Width="64" Classes="ScrubInput"
+                             Text="{Binding TcpKeyframeOffsetZ, Mode=TwoWay, UpdateSourceTrigger=LostFocus, StringFormat={}{0:0.00}}"
+                             ToolTip.Tip="This key's position offset in millimetres. Other keys keep theirs."/>
+                    <TextBlock Text="mm" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center"
+                               ToolTip.Tip="World offset of this key. Toolhead global orientation Y/X/Z is this key's angle."/>
+                </StackPanel>
 
             </StackPanel>
         </Border>

@@ -798,7 +798,7 @@ public sealed partial class ConsoleCommandRegistry
         {
             Name = "tcpkey",
             Description = "Timeline keyframe at the scrub index. Later toolhead Y/X/Z edits save on that key and ease into the next key or the unkeyed orientation.",
-            Usage = "tcpkey <add|clear>",
+            Usage = "tcpkey <add|delete|clear>",
             Execute = (ctx, args) =>
             {
                 var vp = ctx.Main.Viewport;
@@ -808,12 +808,21 @@ public sealed partial class ConsoleCommandRegistry
                         vp.AddTcpKeyframeCommand.Execute(null);
                         ctx.Log($"[tcpkey] add at move {vp.ToolpathScrubIndex}  ({vp.ScrubKeyframeMarkers.Count} key(s)). Set mill y/x/z to store that orientation on the selected key.");
                         break;
+                    case "delete":
+                        if (!vp.HasSelectedTcpKeyframe)
+                        {
+                            ctx.LogError("[tcpkey] no keyframe selected");
+                            break;
+                        }
+                        vp.DeleteTcpKeyframeCommand.Execute(null);
+                        ctx.Log($"[tcpkey] deleted  ({vp.ScrubKeyframeMarkers.Count} key(s))");
+                        break;
                     case "clear":
                         vp.ClearTcpKeyframesCommand.Execute(null);
                         ctx.Log("[tcpkey] cleared");
                         break;
                     default:
-                        ctx.LogError("[tcpkey] add | clear");
+                        ctx.LogError("[tcpkey] add | delete | clear");
                         break;
                 }
             },

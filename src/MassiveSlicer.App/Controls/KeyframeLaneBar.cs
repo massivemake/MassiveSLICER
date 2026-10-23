@@ -34,6 +34,10 @@ public class KeyframeLaneBar : Control
     /// (KeyIndex, isLeftTick, pointerX, commit). commit=true on release.</summary>
     public Action<int, bool, double, bool>? InfluenceDragged { get; set; }
 
+    /// <summary>Raised while Shift-dragging a key along the lane:
+    /// (KeyIndex, pointerX, commit). commit=true on release.</summary>
+    public Action<int, double, bool>? KeyMoved { get; set; }
+
     private static readonly IBrush SpanBrush = new SolidColorBrush(Color.FromArgb(70, 126, 216, 126));
     private static readonly IBrush TickBrush = new SolidColorBrush(Color.FromArgb(200, 126, 216, 126));
     private static readonly IBrush KeyBrush  = new SolidColorBrush(Color.FromRgb(126, 216, 126));
@@ -42,6 +46,7 @@ public class KeyframeLaneBar : Control
 
     private int  _dragKey  = -1;
     private bool _dragLeft;
+    private bool _dragMove;
     private int  _pressedKey = -1;
 
     static KeyframeLaneBar()
@@ -85,7 +90,7 @@ public class KeyframeLaneBar : Control
         if (items is null || items.Count == 0) return;
         var p = e.GetPosition(this);
 
-        _dragKey = -1; _pressedKey = -1;
+        _dragKey = -1; _pressedKey = -1; _dragMove = false;
         double bestTick = 6.0, bestKey = 7.0;
         for (int i = 0; i < items.Count; i++)
         {
@@ -101,6 +106,24 @@ public class KeyframeLaneBar : Control
         if (_dragKey >= 0 && bestKey + 2 < bestTick) _dragKey = -1;
         if (_dragKey >= 0) _pressedKey = -1;
 
+        // Shift-drag moves the key itself. A plain drag still sizes the tails.
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            int moveKey = -1;
+            double best = 10.0;
+            foreach (var it in items)
+            {
+                double d = Math.Min(Math.Abs(p.X - it.X), Math.Min(Math.Abs(p.X - it.LeftX), Math.Abs(p.X - it.RightX)));
+                if (d < best) { best = d; moveKey = it.KeyIndex; }
+            }
+            if (moveKey >= 0)
+            {
+                _dragMove = true;
+                _dragKey = moveKey;
+                _pressedKey = -1;
+            }
+        }
+
         if (_dragKey >= 0 || _pressedKey >= 0)
         {
             e.Pointer.Capture(this);
@@ -112,7 +135,9 @@ public class KeyframeLaneBar : Control
     {
         base.OnPointerMoved(e);
         if (_dragKey < 0) return;
-        InfluenceDragged?.Invoke(_dragKey, _dragLeft, e.GetPosition(this).X, false);
+        double x = e.GetPosition(this).X;
+        if (_dragMove) KeyMoved?.Invoke(_dragKey, x, false);
+        else InfluenceDragged?.Invoke(_dragKey, _dragLeft, x, false);
         e.Handled = true;
     }
 
@@ -121,8 +146,11 @@ public class KeyframeLaneBar : Control
         base.OnPointerReleased(e);
         if (_dragKey >= 0)
         {
-            InfluenceDragged?.Invoke(_dragKey, _dragLeft, e.GetPosition(this).X, true);
+            double x = e.GetPosition(this).X;
+            if (_dragMove) KeyMoved?.Invoke(_dragKey, x, true);
+            else InfluenceDragged?.Invoke(_dragKey, _dragLeft, x, true);
             _dragKey = -1;
+            _dragMove = false;
             e.Handled = true;
         }
         else if (_pressedKey >= 0)

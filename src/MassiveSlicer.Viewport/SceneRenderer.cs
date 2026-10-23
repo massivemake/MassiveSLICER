@@ -708,6 +708,16 @@ public sealed class SceneRenderer : IDisposable
     public bool ShowBead           { get; set; } = false;
     /// <summary>SDF view: draw the rounded bead instead of the box bead mesh.</summary>
     public bool ShowSdfBead        { get; set; } = false;
+    /// <summary>
+    /// Orbit, pan, zoom, or gizmo drag. Toolpaths draw a coarse bead and skip the
+    /// carve march until the pointer stops. The next settled frame is full quality.
+    /// </summary>
+    private volatile bool _interactionPreview;
+    public bool InteractionPreview
+    {
+        get => _interactionPreview;
+        set => _interactionPreview = value;
+    }
     /// <summary>IceSL occlusion factor. 1000 is the recovered value.</summary>
     public float SdfAoStrength { get; set; } = 1000f;
     /// <summary>Samples each side. 10 is IceSL's full window.</summary>
@@ -1608,8 +1618,14 @@ public sealed class SceneRenderer : IDisposable
                 scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
 
             entry.Renderer.SdfCarveReady = SdfCarveReady;
+            // The stamp is only drawn in SDF. Running it from Preview restarted the
+            // grid forever, because the upload that marks it cached never happens there.
             entry.Renderer.ConfigureSdfSideCarve(
-                SdfCarveBitSides, SdfCarveLengthMm, SdfCarveToolheadA, SdfCarveToolheadB, SdfCarveToolheadC, SdfCarveFlip, SdfCarveBall);
+                ShowSdfBead && SdfCarveBitSides, SdfCarveLengthMm, SdfCarveToolheadA, SdfCarveToolheadB, SdfCarveToolheadC, SdfCarveFlip, SdfCarveBall);
+            entry.Renderer.InteractionPreview = InteractionPreview
+                && !applyScrub
+                && ToolpathSimProgress < 0f
+                && !SlicePlaneViewerActive;
             if (ShowSdfBead)
             {
                 var drawView = draw * view;

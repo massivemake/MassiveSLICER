@@ -16,6 +16,7 @@ public sealed class TcpAttractorItem : ViewModelBase
     bool _suppress;
     double _radiusMm = 300;
     double _heightMm;
+    double _influence = 1;
     double _leanXDeg;
     double _leanYDeg;
     bool _isSelected;
@@ -44,6 +45,9 @@ public sealed class TcpAttractorItem : ViewModelBase
     /// <summary>True when the amber arrowhead currently points back down the bar.</summary>
     public bool ArrowPointsNegative { get; set; }
 
+    /// <summary>Last scale baked into the amber arrow. 1 matches the historical length.</summary>
+    public float ArrowScale { get; set; } = 1f;
+
     /// <summary>Raised when the user edits radius or lean. Readout sync does not raise it.</summary>
     public Action? Changed { get; set; }
 
@@ -62,6 +66,23 @@ public sealed class TcpAttractorItem : ViewModelBase
             _radiusMm = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(EffectiveHeightMm));
+            if (!_suppress) Changed?.Invoke();
+        }
+    }
+
+    /// <summary>
+    /// Strength on top of the distance fade. 1 is the historical lean.
+    /// The sphere or cylinder size does not change with this.
+    /// </summary>
+    public double Influence
+    {
+        get => _influence;
+        set
+        {
+            double next = Math.Clamp(value, 0d, 2d);
+            if (Math.Abs(_influence - next) < 0.005) return;
+            _influence = next;
+            OnPropertyChanged();
             if (!_suppress) Changed?.Invoke();
         }
     }
@@ -186,7 +207,7 @@ public sealed class TcpAttractorItem : ViewModelBase
         if (!_suppress) Changed?.Invoke();
     }
 
-    public void SetReadout(double radiusMm, double leanXDeg, double leanYDeg, string? shape = null, string? frame = null, Vector3? aimDir = null, double? heightMm = null, bool? detract = null)
+    public void SetReadout(double radiusMm, double leanXDeg, double leanYDeg, string? shape = null, string? frame = null, Vector3? aimDir = null, double? heightMm = null, bool? detract = null, double? influence = null)
     {
         _suppress = true;
         RadiusMm = radiusMm;
@@ -197,6 +218,7 @@ public sealed class TcpAttractorItem : ViewModelBase
         if (aimDir is { } aim) SetAim(aim.X, aim.Y, aim.Z);
         if (heightMm is { } height) HeightMm = height;
         if (detract is { } away) Detract = away;
+        if (influence is { } weight) Influence = weight;
         _suppress = false;
     }
 }
@@ -244,6 +266,7 @@ public sealed partial class ViewportViewModel
             OnPropertyChanged(nameof(TcpAimY));
             OnPropertyChanged(nameof(TcpAimZ));
             OnPropertyChanged(nameof(TcpDetract));
+            OnPropertyChanged(nameof(TcpInfluence));
             NotifyRenderNeeded();
         }
     }
@@ -354,6 +377,13 @@ public sealed partial class ViewportViewModel
     {
         get => _selectedTcpAttractor?.Detract ?? false;
         set { if (_selectedTcpAttractor is { } item) item.Detract = value; }
+    }
+
+    /// <summary>Strength of the selected attractor. 1 matches the lean from before this slider.</summary>
+    public double TcpInfluence
+    {
+        get => _selectedTcpAttractor?.Influence ?? 1;
+        set { if (_selectedTcpAttractor is { } item) item.Influence = value; }
     }
 
     void SetSelectedAim(int index, double value)
@@ -624,7 +654,7 @@ public sealed partial class ViewportViewModel
             : parts[0].ToLowerInvariant();
         string usage = deflector
             ? "[tcpadj] usage: tcpadj deflect [add|remove|radius <mm>|diameter <mm>|height <mm>|lean <x> <y>|shape <Spherical|Cylindrical>|frame <Tool|Flange>]"
-            : "[tcpadj] usage: tcpadj [list|add|deflect|remove|radius <mm>|diameter <mm>|height <mm>|lean <x> <y>|shape <Spherical|Cylindrical>|frame <Tool|Flange>|aim <x> <y> <z>|axis <X|Y|Z>|detract <on|off>]";
+            : "[tcpadj] usage: tcpadj [list|add|deflect|remove|radius <mm>|diameter <mm>|height <mm>|influence <0-2>|lean <x> <y>|shape <Spherical|Cylindrical>|frame <Tool|Flange>|aim <x> <y> <z>|axis <X|Y|Z>|detract <on|off>]";
         switch (verb)
         {
             case "list":
@@ -646,6 +676,14 @@ public sealed partial class ViewportViewModel
                 string name = removing.Name;
                 RemoveTcpAttractor(removing);
                 return $"[tcpadj] removed {name}";
+            case "influence":
+                if (deflector) return "[tcpadj] deflectors have no influence";
+                if (parts.Length < 2 || !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float influence))
+                    return usage;
+                var influenceItem = SelectedOf(false);
+                if (influenceItem is null) return "[tcpadj] nothing selected";
+                influenceItem.Influence = influence;
+                return "[tcpadj] " + Describe(influenceItem);
             case "radius":
                 if (parts.Length < 2 || !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float radius))
                     return usage;
@@ -776,7 +814,8 @@ public sealed partial class ViewportViewModel
         string cylinderSize = item.Shape == "Cylindrical"
             ? $" dia={item.RadiusMm * 2:0} h={item.EffectiveHeightMm:0}"
             : "";
-        return $"{item.Name} r={item.RadiusMm:0}{cylinderSize} lean=({item.LeanXDeg:0.#},{item.LeanYDeg:0.#}) " +
+        string weight = item.IsDeflector ? "" : FormattableString.Invariant($" inf={item.Influence:0.##}");
+        return $"{item.Name} r={item.RadiusMm:0}{cylinderSize}{weight} lean=({item.LeanXDeg:0.#},{item.LeanYDeg:0.#}) " +
                $"shape={item.Shape} frame={item.Frame}{aim} " +
                $"at=({sample.Position.X:0},{sample.Position.Y:0},{sample.Position.Z:0})";
     }
@@ -822,6 +861,9 @@ public sealed partial class ViewportViewModel
             : deflector ? "Robot flange" : "Tool";
         if (pose?.Frame == nameof(TcpAdjustFrame.Tool)) frame = "Tool";
         bool detract = !deflector && pose is { Detract: true };
+        float influence = !deflector && pose is not null
+            ? Math.Clamp(pose.Influence, 0f, 2f)
+            : 1f;
         bool pointNegative = !deflector && StickArrowPointsNegative(frame, detract);
         Vector3 aim = Vector3.UnitZ;
         if (!deflector && pose is not null)
@@ -830,7 +872,7 @@ public sealed partial class ViewportViewModel
             aim = new Vector3(parsed.X, parsed.Y, parsed.Z);
         }
 
-        var node = BuildTcpAttractorNode(name, radius, spawn, axis, deflector, cylinder, height, pointNegative);
+        var node = BuildTcpAttractorNode(name, radius, spawn, axis, deflector, cylinder, height, pointNegative, influence);
         PendingNodes.Enqueue(node);
 
         var outliner = CreateOutlinerItem(node, it =>
@@ -847,8 +889,9 @@ public sealed partial class ViewportViewModel
         var item = new TcpAttractorItem(name, node, outliner, deflector);
         var (leanX, leanY) = TcpAttractorEffect.LeanFromAxis(ToNumerics(axis));
         item.SetReadout(radius, leanX, leanY, cylinder ? "Cylindrical" : "Spherical", frame, deflector ? null : aim, height,
-            detract: detract);
+            detract: detract, influence: influence);
         item.ArrowPointsNegative = pointNegative;
+        item.ArrowScale = deflector ? 1f : ArrowVisualScale(influence);
         item.RangeIsCylinder = cylinder;
         item.Changed = () => OnTcpAttractorEdited(item);
         items.Add(item);
@@ -896,6 +939,7 @@ public sealed partial class ViewportViewModel
             OnPropertyChanged(nameof(TcpAimY));
             OnPropertyChanged(nameof(TcpAimZ));
             OnPropertyChanged(nameof(TcpDetract));
+            OnPropertyChanged(nameof(TcpInfluence));
             NotifyRenderNeeded();
         }
         else if (ReferenceEquals(item, _selectedTcpDeflector))
@@ -918,11 +962,13 @@ public sealed partial class ViewportViewModel
         if (!item.IsDeflector)
         {
             bool pointNegative = StickArrowPointsNegative(item.Frame, item.Detract);
-            if (pointNegative != item.ArrowPointsNegative)
+            float arrowScale = ArrowVisualScale((float)item.Influence);
+            if (pointNegative != item.ArrowPointsNegative || MathF.Abs(arrowScale - item.ArrowScale) > 0.001f)
             {
-                item.Node.PendingMesh = BuildStickMesh(item.Name, pointNegative);
+                item.Node.PendingMesh = BuildStickMesh(item.Name, pointNegative, arrowScale);
                 PendingModelRefresh.Enqueue(item.Node);
                 item.ArrowPointsNegative = pointNegative;
+                item.ArrowScale = arrowScale;
             }
         }
 
@@ -966,7 +1012,8 @@ public sealed partial class ViewportViewModel
         float height = (float)item.HeightMm;
         return new TcpAttractor(
             pos, (float)item.RadiusMm, axis, shape, frame, item.IsDeflector, aim, height,
-            Detract: !item.IsDeflector && item.Detract);
+            Detract: !item.IsDeflector && item.Detract,
+            Influence: item.IsDeflector ? 1f : (float)item.Influence);
     }
 
     static Vector3 BodyAxis(Matrix4 world)
@@ -1016,11 +1063,14 @@ public sealed partial class ViewportViewModel
         return System.Numerics.Vector3.Dot(dir, axis) < 0f;
     }
 
-    SceneNode BuildTcpAttractorNode(string name, float radius, Vector3 spawn, Vector3 axis, bool deflector, bool cylinder, float heightMm = 0f, bool pointNegative = false)
+    /// <summary>Arrow size for an influence of 1. A zero weight stays a small positive mesh.</summary>
+    static float ArrowVisualScale(float influence) => MathF.Max(0.05f, influence);
+
+    SceneNode BuildTcpAttractorNode(string name, float radius, Vector3 spawn, Vector3 axis, bool deflector, bool cylinder, float heightMm = 0f, bool pointNegative = false, float influence = 1f)
     {
         var mesh = deflector
             ? BuildBarMesh(name, BuildCylinderGeometry(18f, 160f), deflector: true)
-            : BuildStickMesh(name, pointNegative);
+            : BuildStickMesh(name, pointNegative, ArrowVisualScale(influence));
 
         var node = new SceneNode
         {
@@ -1046,8 +1096,8 @@ public sealed partial class ViewportViewModel
         return node;
     }
 
-    MeshData BuildStickMesh(string name, bool pointNegative)
-        => BuildBarMesh(name, BuildStickArrow(pointNegative), deflector: false);
+    MeshData BuildStickMesh(string name, bool pointNegative, float scale = 1f)
+        => BuildBarMesh(name, BuildStickArrow(pointNegative, scale), deflector: false);
 
     static MeshData BuildBarMesh(string name, (Vector3[] Pos, Vector3[] Nrm, uint[] Idx) body, bool deflector)
     {
@@ -1070,15 +1120,23 @@ public sealed partial class ViewportViewModel
     }
 
     /// <summary>
-    /// Shaft on the +Z side of the handle, cone at the influence end.
-    /// <paramref name="pointNegative"/> puts the tip just past the handle
-    /// and the tail up the bar, so an upright tool arrow stays above the table.
+    /// Influence 1 fits inside the old amber handle: a cylinder of radius 18 mm
+    /// and length 160 mm. The head stays inside that radius, and the tail stays
+    /// inside that length. A downward arrow only pokes a short tip past the origin.
     /// </summary>
-    static (Vector3[] Pos, Vector3[] Nrm, uint[] Idx) BuildStickArrow(bool pointNegative)
+    static (Vector3[] Pos, Vector3[] Nrm, uint[] Idx) BuildStickArrow(bool pointNegative, float scale = 1f)
     {
-        float tipZ = pointNegative ? -48f : 200f;
-        float tailZ = pointNegative ? 200f : 0f;
-        return BuildArrow(tailZ, tipZ, shaftRadius: 14f, headRadius: 42f, headLength: 72f);
+        const float length = 152f;
+        const float tipPast = 12f;
+        const float shaftRadius = 9f;
+        const float headRadius = 16f;
+        const float headLength = 40f;
+        scale = MathF.Max(scale, 0.05f);
+        float tipZ = (pointNegative ? -tipPast : length) * scale;
+        float tailZ = (pointNegative ? length : 0f) * scale;
+        return BuildArrow(
+            tailZ, tipZ,
+            shaftRadius * scale, headRadius * scale, headLength * scale);
     }
 
     static (Vector3[] Pos, Vector3[] Nrm, uint[] Idx) BuildArrow(

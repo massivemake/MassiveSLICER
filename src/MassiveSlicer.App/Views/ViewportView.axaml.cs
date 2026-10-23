@@ -200,7 +200,8 @@ public partial class ViewportView : UserControl
     private readonly Dictionary<SceneNode, List<TcpKey>> _tcpKeyframesByNode = new();
     private readonly Dictionary<SceneNode, Toolpath>     _keyframeBaseByNode = new();
     // Orientation the sliders had when the first key was created. Spans with no
-    // keyframe ease back to this. Slider edits while a key is selected do not move it.
+    // keyframe ease back to this. A later slider edit saves a key at the playhead
+    // and leaves this baseline where it was.
     private readonly Dictionary<SceneNode, (float A, float B, float C)> _orientBaseByNode = new();
     private int _selectedTcpKey = -1;
     private bool _suppressOrientPush;
@@ -641,9 +642,15 @@ public partial class ViewportView : UserControl
             vm.OnSimVideoExportRequested = () => _ = ExportSimVideoAsync(vm);
             vm.OnAddTcpKeyframeRequested    = () => AddTcpKeyframeAtCurrentIndex(vm);
             vm.OnClearTcpKeyframesRequested = () => ClearTcpKeyframes(vm);
-            vm.OnKeyframeLaneClicked      = i => JumpToTcpKeyframe(vm, i);
+            vm.OnDeleteTcpKeyframeRequested = () => DeleteSelectedTcpKeyframe(vm);
+            vm.OnKeyframeLaneClicked      = i => JumpToTcpKeyframe(vm, i, toggle: true);
             vm.OnKeyframeInfluenceDragged = (i, left, px, commit) =>
                 DragTcpKeyframeInfluence(vm, i, left, px, commit);
+            vm.OnKeyframeMoved = (i, px, commit) =>
+                DragTcpKeyframe(vm, i, px, commit);
+            vm.OnTcpKeyframeOffsetEdited = (x, y, z) =>
+                ApplySelectedKeyframeOffset(vm, x, y, z);
+            vm.OnSceneSelectionChanged = node => ReleaseTcpKeyframeSelection(vm, node);
             vm.OnFrameAllRequested = FrameAll;
             WireRealtimeSlicing(vm);
             vm.OnViewPresetRequested = ApplyViewPreset;
@@ -671,6 +678,7 @@ public partial class ViewportView : UserControl
                 _renderer.Camera.Radius         = view.Radius;
                 _renderer.Camera.Target         = new Vector3(view.TargetX, view.TargetY, view.TargetZ);
                 _renderer.Camera.IsOrthographic = view.IsOrthographic;
+                BeginNavigationPreview();
                 GlCanvas.RequestNextFrameRendering();
             };
             vm.RequestActiveToolpathReupload = () =>
@@ -803,10 +811,12 @@ public partial class ViewportView : UserControl
                         _playbackTimer.Stop();
                         _playbackStopwatch.Stop();
                         pvm.SetPlaybackIndex(pvm.ToolpathScrubMax);
+                        ShowBlendedToolhead(pvm);
                         return;
                     }
 
                     pvm.SetPlaybackIndex(moveIdx);
+                    ShowBlendedToolhead(pvm);
 
                     // solutions[i] = joint config at the END of move i.
                     // Interpolate from end-of-previous (= start of this move) to end-of-this.
@@ -2307,6 +2317,8 @@ public partial class ViewportView : UserControl
                     }
                 });
             }
+
+            ReleasePathRecalcAfterUpload(vm);
 
             // Apply any completed reachability results on the GL thread.
             while (_pendingReachability.TryDequeue(out var reach))
@@ -4186,6 +4198,49 @@ public partial class ViewportView : UserControl
         return dx * dx + dy * dy <= 48.0 * 48.0;
     }
 
+    private DispatcherTimer? _navIdle;
+
+    /// <summary>
+    /// Half-resolution plus the coarse bead while the camera or gizmo is moving.
+    /// The idle timer covers the wheel, which has no button release. Orbit and
+    /// gizmo release call <see cref="EndNavigationPreview"/> themselves.
+    /// </summary>
+    private void BeginNavigationPreview()
+    {
+        _renderer.InteractionPreview = true;
+        if (GlCanvas is not null)
+            GlCanvas.InteractionRenderScale = InteractionScale;
+        _navIdle ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _navIdle.Tick -= OnNavigationIdle;
+        _navIdle.Tick += OnNavigationIdle;
+        _navIdle.Stop();
+        _navIdle.Start();
+    }
+
+    private void OnNavigationIdle(object? sender, EventArgs e)
+    {
+        if (_isOrbiting || _isPanning || _gizmoDragAxis != GizmoAxis.None)
+        {
+            _navIdle?.Start();
+            return;
+        }
+        EndNavigationPreview();
+    }
+
+    private void EndNavigationPreview()
+    {
+        _navIdle?.Stop();
+        if (_isOrbiting || _isPanning || _gizmoDragAxis != GizmoAxis.None)
+            return;
+        bool refresh = _renderer.InteractionPreview
+            || (GlCanvas is not null && GlCanvas.InteractionRenderScale < 1f);
+        _renderer.InteractionPreview = false;
+        if (GlCanvas is not null && GlCanvas.InteractionRenderScale < 1f)
+            GlCanvas.InteractionRenderScale = 1f;
+        if (refresh)
+            GlCanvas?.RequestNextFrameRendering();
+    }
+
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         // Taking focus here is what makes the viewport's keyboard shortcuts work, but it must not
@@ -4217,7 +4272,7 @@ public partial class ViewportView : UserControl
             _isPanning = true;
             _panButton = AvaBtn.Left;
             _spaceUsedForPan = true;
-            GlCanvas.InteractionRenderScale = InteractionScale;
+            BeginNavigationPreview();
             e.Pointer.Capture(this);
             _capturedPointer = e.Pointer;
             e.Handled = true;
@@ -4287,7 +4342,7 @@ public partial class ViewportView : UserControl
         {
             _isPanning = true;
             _panButton = AvaBtn.Right;
-            GlCanvas.InteractionRenderScale = InteractionScale;
+            BeginNavigationPreview();
             e.Pointer.Capture(this);
             _capturedPointer = e.Pointer;
             e.Handled = true;
@@ -4526,7 +4581,7 @@ public partial class ViewportView : UserControl
             {
                 _isOrbiting  = true;
                 _orbitButton = btn;
-                GlCanvas.InteractionRenderScale = InteractionScale;
+                BeginNavigationPreview();
                 e.Pointer.Capture(this);
                 _capturedPointer = e.Pointer;
             }
@@ -4539,7 +4594,7 @@ public partial class ViewportView : UserControl
                 _panButton  = btn;
                 if (IsSpaceLeftPan(btn.Value))
                     _spaceUsedForPan = true;
-                GlCanvas.InteractionRenderScale = InteractionScale;
+                BeginNavigationPreview();
                 e.Pointer.Capture(this);
                 _capturedPointer = e.Pointer;
             }
@@ -4636,6 +4691,7 @@ public partial class ViewportView : UserControl
         if (_gizmoDragAxis != GizmoAxis.None)
         {
             _leftDragged = true;
+            BeginNavigationPreview();
             _gizmoDragSnap = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             ProcessGizmoDrag((float)pos.X, (float)pos.Y);
             if (_toolIsDragging)
@@ -4853,8 +4909,7 @@ public partial class ViewportView : UserControl
         {
             if (btn == _orbitButton) { _isOrbiting = false; _orbitButton = null; }
             if (btn == _panButton)   { _isPanning  = false; _panButton   = null; }
-            if (!_isOrbiting && !_isPanning && GlCanvas.InteractionRenderScale < 1f)
-                GlCanvas.InteractionRenderScale = 1f;
+            EndNavigationPreview();
             _capturedPointer?.Capture(null);
             _capturedPointer = null;
             if (ViewportPointerPolicy.ConsumeOrbitPanRelease(isOrbitOrPanButton: true, _leftDragged))
@@ -4921,6 +4976,7 @@ public partial class ViewportView : UserControl
                 // spec is the state. Bake with one re-slice, same as creating a support.
                 _gizmoDragAxis           = GizmoAxis.None;
                 _renderer.ActiveDragAxis = GizmoAxis.None;
+                EndNavigationPreview();
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
                 _leftDragged = false;
@@ -4996,6 +5052,7 @@ public partial class ViewportView : UserControl
                 _toolIsDragging          = false;
                 _gizmoDragAxis           = GizmoAxis.None;
                 _renderer.ActiveDragAxis = GizmoAxis.None;
+                EndNavigationPreview();
                 ClearBedClamp();
                 EndTransformLink();
                 _groupDragMembers = null;
@@ -5168,11 +5225,7 @@ public partial class ViewportView : UserControl
 
         if (!_isOrbiting && !_isPanning)
         {
-            if (GlCanvas.InteractionRenderScale < 1f)
-            {
-                GlCanvas.InteractionRenderScale = 1f;
-                GlCanvas.RequestNextFrameRendering();
-            }
+            EndNavigationPreview();
             _capturedPointer?.Capture(null);
             _capturedPointer = null;
         }
@@ -5225,6 +5278,7 @@ public partial class ViewportView : UserControl
                 _renderer.Camera.Zoom(zoom);
             }
 
+            BeginNavigationPreview();
             GlCanvas.RequestNextFrameRendering();
             e.Handled = true;
             return;
@@ -5259,6 +5313,7 @@ public partial class ViewportView : UserControl
             PanFromTouchpad(dx, dy);
         }
 
+        BeginNavigationPreview();
         GlCanvas.RequestNextFrameRendering();
         e.Handled = true;
     }
@@ -5387,7 +5442,15 @@ public partial class ViewportView : UserControl
                     StartKbTransform(GizmoMode.Scale);
                 }
                 e.Handled = true; break;
-            case Key.Delete: DeleteSelectedNode();                     e.Handled = true; break;
+            case Key.Delete:
+                if (DataContext is ViewportViewModel keyDelVm && DeleteSelectedTcpKeyframe(keyDelVm))
+                    e.Handled = true;
+                else
+                {
+                    DeleteSelectedNode();
+                    e.Handled = true;
+                }
+                break;
             case Key.Escape:
                 if (DataContext is ViewportViewModel pieEscVm && pieEscVm.IsViewPieOpen)
                 {
@@ -6360,7 +6423,10 @@ public partial class ViewportView : UserControl
             // Errors are transient in the footer, permanent in the console. Only the
             // success paths used to schedule a clear, so any error banner — robot
             // validation especially — sat there until the next slice overwrote it.
-            if (isError && !string.IsNullOrWhiteSpace(message))
+            // Robot validation stays on the status bar until the next pass.
+            // Other errors still leave the footer after a few seconds; the console keeps them.
+            if (isError && !string.IsNullOrWhiteSpace(message)
+                && !RobotValidationPresentation.IsRobotValidationStatus(message))
                 ScheduleClearSliceStatus(vm, ErrorBannerMs, clearWhileSlicing: true);
         }
 
@@ -10147,6 +10213,7 @@ public partial class ViewportView : UserControl
         _kbTransformAxis         = GizmoAxis.None;
         _gizmoDragAxis           = GizmoAxis.None;
         _renderer.ActiveDragAxis = GizmoAxis.None;
+        EndNavigationPreview();
         _toolIsDragging          = false;
         // Followers are current — ApplyTransformLink ran on every mouse move of the gesture.
         // Dropping the baseline here stops a later, unrelated edit measuring its delta from it.
@@ -14014,6 +14081,7 @@ public partial class ViewportView : UserControl
         _gizmoDragAxis           = GizmoAxis.None;
         _renderer.ActiveDragAxis = GizmoAxis.None;
         _toolIsDragging          = false;
+        EndNavigationPreview();
         ClearBedClamp();
         GlCanvas.RequestNextFrameRendering();
     }
@@ -14021,6 +14089,7 @@ public partial class ViewportView : UserControl
     private void ApplyKbTransform(Point mousePos)
     {
         if (!_kbTransformActive || _renderer.SelectedNode is not { } node) return;
+        BeginNavigationPreview();
 
         float mx  = (float)mousePos.X;
         float my  = (float)mousePos.Y;
@@ -15004,11 +15073,9 @@ public partial class ViewportView : UserControl
         var existing  = keys.Find(k => k.Index == index);
         if (existing is not null)
         {
+            // Position only. The sliders belong to whichever key is selected, and
+            // copying them here wrote one key's angle onto the key under the playhead.
             existing.Offset = offset;
-            existing.HasOrient = true;
-            existing.OrientA = orient.A;
-            existing.OrientB = orient.B;
-            existing.OrientC = orient.C;
         }
         else
         {
@@ -15020,12 +15087,17 @@ public partial class ViewportView : UserControl
                 OrientA = orient.A, OrientB = orient.B, OrientC = orient.C,
             });
             keys.Sort((a, b) => a.Index.CompareTo(b.Index));
+            vm.RevealTcpKeyframeLane();
         }
         _selectedTcpKey = keys.FindIndex(k => k.Index == index);
+        var saved = keys[_selectedTcpKey];
 
         ApplyTcpKeyframes(vm, node);
+        if (saved.HasOrient)
+            WriteToolhead(vm, mill, saved.OrientA, saved.OrientB, saved.OrientC);
+        PushSelectedKeyframeOffset(vm);
         vm.OnDevLog?.Invoke(
-            $"[tcpkey] move {index}  orient Y={orient.B:0.#} X={orient.C:0.#} Z={orient.A:0.#}  — slider edits save on this key");
+            $"[tcpkey] move {index}  orient Y={saved.OrientB:0.#} X={saved.OrientC:0.#} Z={saved.OrientA:0.#}  offset ({saved.Offset.X:0.#},{saved.Offset.Y:0.#},{saved.Offset.Z:0.#})");
     }
 
     /// <summary>Removes all keyframes for the active toolpath and restores the pristine path.</summary>
@@ -15037,11 +15109,17 @@ public partial class ViewportView : UserControl
         if (_orientBaseByNode.Remove(node, out var baseline))
             WriteToolhead(vm, mill, baseline.A, baseline.B, baseline.C);
         if (_keyframeBaseByNode.Remove(node, out var basePath))
-            SwapScrubbedToolpath(vm, node, basePath);
+            SchedulePathRecalc(vm, () =>
+            {
+                SwapScrubbedToolpath(vm, node, basePath);
+                ReplayToolheadOrientation(vm);
+            });
+        else
+            ReplayToolheadOrientation(vm);
         vm.HasTcpKeyframes = false;
         _selectedTcpKey = -1;
         vm.SetScrubKeyframes([]);
-        ReplayToolheadOrientation(vm);
+        PushSelectedKeyframeOffset(vm);
     }
 
     /// <summary>Drops keyframe state without restoring (a fresh slice replaced the path).</summary>
@@ -15058,12 +15136,24 @@ public partial class ViewportView : UserControl
         }
     }
 
-    /// <summary>Keyframe diamond clicked: select it and jump the scrubber to its moment.</summary>
-    private void JumpToTcpKeyframe(ViewportViewModel vm, int keyIdx)
+    /// <summary>
+    /// Keyframe diamond clicked. A click on the selected diamond clears it and
+    /// leaves the playhead where it is. Any other diamond selects that key and
+    /// jumps the scrubber to its moment.
+    /// </summary>
+    private void JumpToTcpKeyframe(ViewportViewModel vm, int keyIdx, bool toggle = false)
     {
         if (_activeScrubNode is not { } node) return;
         if (!_tcpKeyframesByNode.TryGetValue(node, out var keys)) return;
         if (keyIdx < 0 || keyIdx >= keys.Count) return;
+        if (toggle && TcpKeyframeSelection.ClickClearsSelection(_selectedTcpKey, keyIdx))
+        {
+            _selectedTcpKey = -1;
+            vm.ClearTcpKeyframeSelection();
+            PushSelectedKeyframeOffset(vm);
+            ShowBlendedToolhead(vm);
+            return;
+        }
         _selectedTcpKey = keyIdx;
         vm.SetScrubKeyframes(
             keys.Select(k => (k.Index, k.InfluenceLeft, k.InfluenceRight)).ToArray(),
@@ -15071,6 +15161,7 @@ public partial class ViewportView : UserControl
         var picked = keys[keyIdx];
         if (picked.HasOrient && _toolpathByNode.TryGetValue(node, out var tpKind))
             WriteToolhead(vm, ToolpathHasMillMoves(tpKind), picked.OrientA, picked.OrientB, picked.OrientC);
+        PushSelectedKeyframeOffset(vm);
         vm.ToolpathScrubIndex = picked.Index;   // drives the robot to this moment
     }
 
@@ -15086,16 +15177,212 @@ public partial class ViewportView : UserControl
         if (left) k.InfluenceLeft  = Math.Max(k.Index - idx, 5);
         else      k.InfluenceRight = Math.Max(idx - k.Index, 5);
 
+        bool selectionChanged = _selectedTcpKey != keyIdx;
         _selectedTcpKey = keyIdx;
         vm.SetScrubKeyframes(
             keys.Select(x => (x.Index, x.InfluenceLeft, x.InfluenceRight)).ToArray(),
             keyIdx);
+        if (selectionChanged || commit)
+        {
+            if (k.HasOrient && _toolpathByNode.TryGetValue(node, out var tpKind))
+                WriteToolhead(vm, ToolpathHasMillMoves(tpKind), k.OrientA, k.OrientB, k.OrientC);
+            PushSelectedKeyframeOffset(vm);
+        }
         if (commit)
             ApplyTcpKeyframes(vm, node);   // heavy re-bake only on release
     }
 
+    /// <summary>
+    /// Shift-drag: slide the key along the timeline. Its influence widths stay put.
+    /// The scrubber follows the key. The path rebakes on release.
+    /// </summary>
+    private void DragTcpKeyframe(ViewportViewModel vm, int keyIdx, double px, bool commit)
+    {
+        if (_activeScrubNode is not { } node) return;
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys)) return;
+        if (keyIdx < 0 || keyIdx >= keys.Count) return;
+        if (!_scrubCacheByNode.TryGetValue(node, out var cache) || cache.Length == 0) return;
+
+        var key = keys[keyIdx];
+        int max = cache.Length - 1;
+        var occupied = new List<int>(keys.Count);
+        for (int i = 0; i < keys.Count; i++)
+            if (i != keyIdx) occupied.Add(keys[i].Index);
+        int next = TcpKeyframeIndex.Place(vm.ScrubIndexAtPixel(px), key.Index, max, occupied);
+        bool moved = next != key.Index;
+        if (moved)
+        {
+            key.Index = next;
+            _selectedTcpKey = keyIdx;
+            vm.SetScrubKeyframes(
+                keys.Select(x => (x.Index, x.InfluenceLeft, x.InfluenceRight)).ToArray(),
+                keyIdx);
+            vm.ToolpathScrubIndex = next;
+        }
+
+        if (!commit) return;
+
+        keys.Sort((a, b) => a.Index.CompareTo(b.Index));
+        _selectedTcpKey = keys.FindIndex(k => ReferenceEquals(k, key));
+        if (moved)
+        {
+            ApplyTcpKeyframes(vm, node);
+            if (key.HasOrient && _toolpathByNode.TryGetValue(node, out var tpKind))
+                WriteToolhead(vm, ToolpathHasMillMoves(tpKind), key.OrientA, key.OrientB, key.OrientC);
+            PushSelectedKeyframeOffset(vm);
+        }
+        else
+            JumpToTcpKeyframe(vm, _selectedTcpKey);
+    }
+
+    /// <summary>
+    /// Selecting another scene item drops the toolhead key so Delete removes that
+    /// item. The active toolpath and the current tool keep the key. The timeline
+    /// and the bake stay where they are.
+    /// </summary>
+    private void ReleaseTcpKeyframeSelection(ViewportViewModel vm, SceneNode? node)
+    {
+        if (_selectedTcpKey < 0) return;
+        bool onPath = node is not null && ReferenceEquals(node, _activeScrubNode);
+        bool onTool = node is not null && _currentToolNode is not null
+                      && IsSameOrDescendant(_currentToolNode, node);
+        if (TcpKeyframeSelection.Keep(onPath, onTool)) return;
+
+        _selectedTcpKey = -1;
+        vm.ClearTcpKeyframeSelection();
+        PushSelectedKeyframeOffset(vm);
+        ShowBlendedToolhead(vm);
+    }
+
+    /// <summary>Removes the selected key. The last key restores the unkeyed path. Returns false when none is selected.</summary>
+    private bool DeleteSelectedTcpKeyframe(ViewportViewModel vm)
+    {
+        if (_activeScrubNode is not { } node) return false;
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys) || keys.Count == 0) return false;
+        if (_selectedTcpKey < 0 || _selectedTcpKey >= keys.Count) return false;
+
+        int at = keys[_selectedTcpKey].Index;
+        keys.RemoveAt(_selectedTcpKey);
+        if (keys.Count == 0)
+        {
+            ClearTcpKeyframes(vm);
+            vm.OnDevLog?.Invoke($"[tcpkey] deleted move {at}");
+            return true;
+        }
+
+        _selectedTcpKey = Math.Clamp(_selectedTcpKey, 0, keys.Count - 1);
+        ApplyTcpKeyframes(vm, node);
+        var picked = keys[_selectedTcpKey];
+        if (picked.HasOrient && _toolpathByNode.TryGetValue(node, out var tpKind))
+            WriteToolhead(vm, ToolpathHasMillMoves(tpKind), picked.OrientA, picked.OrientB, picked.OrientC);
+        PushSelectedKeyframeOffset(vm);
+        vm.OnDevLog?.Invoke($"[tcpkey] deleted move {at}  ({keys.Count} key(s))");
+        return true;
+    }
+
+    private readonly Queue<Action> _pathRecalcWork = new();
+    private bool _pathRecalcQueued;
+    private bool _insidePathRecalc;
+    private bool _releaseRecalcAfterUpload;
+    private int _pathRecalcGeneration;
+    private int _releaseRecalcGeneration;
+    private ViewportViewModel? _pathRecalcVm;
+
+    /// <summary>
+    /// Paints the status-bar circle, then runs the rebuild. The heavy walk stays off
+    /// the event that requested it so the circle is on screen for the freeze.
+    /// One hold covers the whole burst. Each new batch gets a generation so an
+    /// older upload cannot turn the circle off, and cannot leave it on either.
+    /// </summary>
+    private void SchedulePathRecalc(ViewportViewModel vm, Action work)
+    {
+        _pathRecalcWork.Enqueue(work);
+        if (_pathRecalcQueued) return;
+        _pathRecalcQueued = true;
+        _pathRecalcVm = vm;
+        _pathRecalcGeneration++;
+        vm.PushPathRecalc();
+        Dispatcher.UIThread.Post(RunScheduledPathRecalc, DispatcherPriority.Background);
+    }
+
+    private void RunScheduledPathRecalc()
+    {
+        var vm = _pathRecalcVm;
+        _insidePathRecalc = true;
+        try
+        {
+            while (_pathRecalcWork.Count > 0)
+            {
+                var step = _pathRecalcWork.Dequeue();
+                try
+                {
+                    step.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    LogToConsole($"[path] rebuild failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+        }
+        finally
+        {
+            _insidePathRecalc = false;
+        }
+        if (_pathRecalcWork.Count > 0)
+        {
+            Dispatcher.UIThread.Post(RunScheduledPathRecalc, DispatcherPriority.Background);
+            return;
+        }
+        _pathRecalcQueued = false;
+        if (vm is null) return;
+        int generation = _pathRecalcGeneration;
+        if (!vm.PendingToolpathReplace.IsEmpty || !vm.PendingToolpath.IsEmpty)
+        {
+            _releaseRecalcAfterUpload = true;
+            _releaseRecalcGeneration = generation;
+            return;
+        }
+        EndPathRecalc(vm, generation);
+    }
+
+    private void ReleasePathRecalcAfterUpload(ViewportViewModel vm)
+    {
+        if (!_releaseRecalcAfterUpload) return;
+        if (!vm.PendingToolpathReplace.IsEmpty || !vm.PendingToolpath.IsEmpty) return;
+        _releaseRecalcAfterUpload = false;
+        int generation = _releaseRecalcGeneration;
+        Dispatcher.UIThread.Post(() => EndPathRecalc(vm, generation));
+    }
+
+    /// <summary>
+    /// Drops the circle when <paramref name="generation"/> is still the newest batch
+    /// and nothing is left to draw. A newer batch, or an upload it enqueued, keeps the hold.
+    /// </summary>
+    private void EndPathRecalc(ViewportViewModel vm, int generation)
+    {
+        bool workQueued = _pathRecalcQueued || _pathRecalcWork.Count > 0;
+        bool uploadPending = !vm.PendingToolpathReplace.IsEmpty || !vm.PendingToolpath.IsEmpty;
+        if (!PathRecalcGate.CanRelease(generation, _pathRecalcGeneration, workQueued, uploadPending))
+        {
+            if (generation == _pathRecalcGeneration && !workQueued && uploadPending)
+            {
+                _releaseRecalcAfterUpload = true;
+                _releaseRecalcGeneration = generation;
+            }
+            return;
+        }
+        vm.PopPathRecalc();
+    }
+
     /// <summary>Re-bakes the eased keyframe offsets into the toolpath and re-poses the robot.</summary>
     private void ApplyTcpKeyframes(ViewportViewModel vm, SceneNode node)
+    {
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys) || keys.Count == 0) return;
+        if (!_keyframeBaseByNode.ContainsKey(node)) return;
+        SchedulePathRecalc(vm, () => ApplyTcpKeyframesNow(vm, node));
+    }
+
+    private void ApplyTcpKeyframesNow(ViewportViewModel vm, SceneNode node)
     {
         if (!_tcpKeyframesByNode.TryGetValue(node, out var keys) || keys.Count == 0) return;
         if (!_keyframeBaseByNode.TryGetValue(node, out var basePath)) return;
@@ -15142,30 +15429,18 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Clones <paramref name="src"/> with the keyframe offsets applied: each key
-    /// contributes a smoothstep bell over its own left/right influence windows; where
-    /// bells overlap the offsets blend by normalised weight, so adjacent keyframes
-    /// ease into each other and everything fades to zero outside the influence spans.
+    /// Clones <paramref name="src"/> with each key's own position offset. A move on a
+    /// key uses that key only. Overlapping windows blend, and the offset fades out
+    /// at the edge of every window.
     /// </summary>
     private Toolpath BuildOffsetToolpath(Toolpath src, List<TcpKey> keys, SceneNode node)
     {
-        NVec3 OffsetAt(double v)
+        var samples = new TcpKeyframeOffset.Sample[keys.Count];
+        for (int i = 0; i < keys.Count; i++)
         {
-            double wsum = 0;
-            var    acc  = NVec3.Zero;
-            foreach (var k in keys)
-            {
-                double d    = v - k.Index;
-                double span = d < 0 ? Math.Max(k.InfluenceLeft, 1) : Math.Max(k.InfluenceRight, 1);
-                double t    = Math.Abs(d) / span;
-                if (t >= 1.0) continue;
-                double x = 1.0 - t;
-                double wgt = x * x * (3.0 - 2.0 * x);
-                acc  += k.Offset * (float)wgt;
-                wsum += wgt;
-            }
-            if (wsum <= 0) return NVec3.Zero;
-            return acc / (float)wsum * (float)Math.Min(wsum, 1.0);
+            var k = keys[i];
+            samples[i] = new TcpKeyframeOffset.Sample(
+                k.Index, k.Offset, k.InfluenceLeft, k.InfluenceRight);
         }
 
         var dst = new Toolpath();
@@ -15180,7 +15455,11 @@ public partial class ViewportView : UserControl
             nl.Contours.AddRange(layer.Contours);
             foreach (var m in layer.Moves)
             {
-                nl.Moves.Add(m with { From = m.From + OffsetAt(fi), To = m.To + OffsetAt(fi + 1) });
+                nl.Moves.Add(m with
+                {
+                    From = m.From + TcpKeyframeOffset.At(fi, samples),
+                    To = m.To + TcpKeyframeOffset.At(fi + 1, samples),
+                });
                 fi++;
             }
             dst.Layers.Add(nl);
@@ -15190,10 +15469,11 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Slider edit while a keyframe is selected: save Y/X/Z on that key. The value the
-    /// sliders had when the first key was created stays the non-keyed orientation.
-    /// Returns true when the change was consumed (including a suppressed push of a
-    /// key's stored angles back into the sliders).
+    /// Slider edit while a keyframe is selected: save Y/X/Z on that key. With keys
+    /// on the path and none selected, the edit is saved as a key at the playhead.
+    /// The value the sliders had when the first key was created stays the orientation
+    /// outside those keys. Returns true when the change was consumed (including a
+    /// suppressed push of the blended angle back into the sliders).
     /// </summary>
     private bool CaptureKeyframeOrientation(ViewportViewModel vm, bool fromMill)
     {
@@ -15208,8 +15488,7 @@ public partial class ViewportView : UserControl
         var now = ReadToolhead(vm, mill);
         if (_selectedTcpKey < 0 || _selectedTcpKey >= keys.Count)
         {
-            _orientBaseByNode[node] = now;
-            PoseKeyframeOrientation(vm, node);
+            SavePlayheadOrientation(vm, node, keys, now);
             return true;
         }
 
@@ -15222,8 +15501,128 @@ public partial class ViewportView : UserControl
         return true;
     }
 
+    /// <summary>
+    /// Saves the current toolhead angles on the move under the playhead.
+    /// An empty move gains a key. A key already on that move takes the new angle.
+    /// The position offset stays the blend the path already had there.
+    /// </summary>
+    private void SavePlayheadOrientation(
+        ViewportViewModel vm, SceneNode node, List<TcpKey> keys, (float A, float B, float C) now)
+    {
+        int index = vm.ToolpathScrubIndex;
+        if (_scrubCacheByNode.TryGetValue(node, out var cache) && cache.Length > 0)
+            index = Math.Clamp(index, 0, cache.Length - 1);
+
+        var existing = keys.Find(k => k.Index == index);
+        if (!TcpKeyframeSelection.InsertAtPlayhead(hasKeys: true, keySelected: false, playheadOccupied: existing is not null))
+        {
+            if (existing is null) return;
+            if (existing.HasOrient
+                && SameAngle(existing.OrientA, now.A)
+                && SameAngle(existing.OrientB, now.B)
+                && SameAngle(existing.OrientC, now.C))
+                return;
+            existing.HasOrient = true;
+            existing.OrientA = now.A;
+            existing.OrientB = now.B;
+            existing.OrientC = now.C;
+            PoseKeyframeOrientation(vm, node);
+            return;
+        }
+
+        if (_toolpathByNode.TryGetValue(node, out var tp))
+        {
+            var eased = OrientationAt(node, index, ToolpathHasMillMoves(tp), vm);
+            if (SameAngle(eased.A, now.A) && SameAngle(eased.B, now.B) && SameAngle(eased.C, now.C))
+                return;
+        }
+
+        int influence = Math.Max((int)vm.KeyframeSmoothing, 5);
+        var samples = new TcpKeyframeOffset.Sample[keys.Count];
+        for (int i = 0; i < keys.Count; i++)
+        {
+            var src = keys[i];
+            samples[i] = new TcpKeyframeOffset.Sample(src.Index, src.Offset, src.InfluenceLeft, src.InfluenceRight);
+        }
+        var held = TcpKeyframeOffset.At(index, samples);
+        keys.Add(new TcpKey
+        {
+            Index = index,
+            Offset = held,
+            InfluenceLeft = influence,
+            InfluenceRight = influence,
+            HasOrient = true,
+            OrientA = now.A,
+            OrientB = now.B,
+            OrientC = now.C,
+        });
+        keys.Sort((a, b) => a.Index.CompareTo(b.Index));
+        vm.RevealTcpKeyframeLane();
+        ApplyTcpKeyframes(vm, node);
+        vm.OnDevLog?.Invoke(
+            $"[tcpkey] move {index}  orient Y={now.B:0.#} X={now.C:0.#} Z={now.A:0.#}  offset ({held.X:0.#},{held.Y:0.#},{held.Z:0.#})");
+    }
+
+    /// <summary>
+    /// With no key selected, the toolhead Y/X/Z sliders show the eased angle at the playhead.
+    /// </summary>
+    private void ShowBlendedToolhead(ViewportViewModel vm)
+    {
+        if (_activeScrubNode is not { } node) return;
+        if (!TcpKeyframeSelection.ShowBlend(HasOrientKeys(node), _selectedTcpKey >= 0)) return;
+        if (!_toolpathByNode.TryGetValue(node, out var tp)) return;
+        bool mill = ToolpathHasMillMoves(tp);
+        var eased = OrientationAt(node, vm.ToolpathScrubIndex, mill, vm);
+        float a = MathF.Round(eased.A, 1);
+        float b = MathF.Round(eased.B, 1);
+        float c = MathF.Round(eased.C, 1);
+        var cur = ReadToolhead(vm, mill);
+        if (SameAngle(cur.A, a) && SameAngle(cur.B, b) && SameAngle(cur.C, c))
+            return;
+        WriteToolhead(vm, mill, a, b, c);
+    }
+
+    static bool SameAngle(float a, float b) => MathF.Abs(a - b) < 0.05f;
+
+    /// <summary>The offset boxes under the lane edit the selected key and no other.</summary>
+    private void ApplySelectedKeyframeOffset(ViewportViewModel vm, double x, double y, double z)
+    {
+        if (_activeScrubNode is not { } node) return;
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys)) return;
+        if (_selectedTcpKey < 0 || _selectedTcpKey >= keys.Count) return;
+        var next = new NVec3((float)x, (float)y, (float)z);
+        var k = keys[_selectedTcpKey];
+        if (k.Offset == next) return;
+        k.Offset = next;
+        ApplyTcpKeyframes(vm, node);
+    }
+
+    /// <summary>Puts the selected key's stored offset into the lane boxes.</summary>
+    private void PushSelectedKeyframeOffset(ViewportViewModel vm)
+    {
+        if (_activeScrubNode is { } node
+            && _tcpKeyframesByNode.TryGetValue(node, out var keys)
+            && _selectedTcpKey >= 0 && _selectedTcpKey < keys.Count)
+        {
+            var o = keys[_selectedTcpKey].Offset;
+            vm.SetTcpKeyframeOffset(o.X, o.Y, o.Z);
+            return;
+        }
+        vm.SetTcpKeyframeOffset(0, 0, 0);
+    }
+
     /// <summary>Write the eased orientation onto the live path and re-solve so play follows it.</summary>
     private void PoseKeyframeOrientation(ViewportViewModel vm, SceneNode node)
+    {
+        if (_insidePathRecalc)
+        {
+            PoseKeyframeOrientationNow(vm, node);
+            return;
+        }
+        SchedulePathRecalc(vm, () => PoseKeyframeOrientationNow(vm, node));
+    }
+
+    private void PoseKeyframeOrientationNow(ViewportViewModel vm, SceneNode node)
     {
         if (_toolpathByNode.TryGetValue(node, out var tp))
             StampOrientOn(tp, node);
@@ -15260,11 +15659,14 @@ public partial class ViewportView : UserControl
             : ReadToolhead(_vm, mill);
         var samples = EaseKeys(keys);
         var origin = new ToolheadOrientEase.Degrees(baseline.A, baseline.B, baseline.C);
+        int moveCount = 0;
+        foreach (var layer in tp.Layers) moveCount += layer.Moves.Count;
+        int pathEnd = Math.Max(0, moveCount - 1);
         int i = 0;
         foreach (var layer in tp.Layers)
         foreach (var m in layer.Moves)
         {
-            var e = ToolheadOrientEase.At(i, origin, samples);
+            var e = ToolheadOrientEase.At(i, origin, samples, pathEnd);
             m.KeyframeToolheadA = e.A;
             m.KeyframeToolheadB = e.B;
             m.KeyframeToolheadC = e.C;
@@ -15293,8 +15695,13 @@ public partial class ViewportView : UserControl
         return (0f, 0f, 0f);
     }
 
+    private int _orientPushTicket;
+
     private void WriteToolhead(ViewportViewModel vm, bool mill, float a, float b, float c)
     {
+        // The slider and the text box both write back. Clearing the guard in this
+        // call let the previous key's number land on the key just selected.
+        int ticket = ++_orientPushTicket;
         _suppressOrientPush = true;
         try
         {
@@ -15313,7 +15720,11 @@ public partial class ViewportView : UserControl
         }
         finally
         {
-            _suppressOrientPush = false;
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (ticket == _orientPushTicket)
+                    _suppressOrientPush = false;
+            }, DispatcherPriority.Background);
         }
     }
 
@@ -15322,8 +15733,11 @@ public partial class ViewportView : UserControl
         if (_tcpKeyframesByNode.TryGetValue(node, out var keys) && keys.Exists(k => k.HasOrient))
         {
             var baseline = _orientBaseByNode.TryGetValue(node, out var b) ? b : ReadToolhead(vm, mill);
+            int pathEnd = -1;
+            if (_scrubCacheByNode.TryGetValue(node, out var cache) && cache.Length > 0)
+                pathEnd = cache.Length - 1;
             var e = ToolheadOrientEase.At(
-                index, new ToolheadOrientEase.Degrees(baseline.A, baseline.B, baseline.C), EaseKeys(keys));
+                index, new ToolheadOrientEase.Degrees(baseline.A, baseline.B, baseline.C), EaseKeys(keys), pathEnd);
             return (e.A, e.B, e.C);
         }
         return ReadToolhead(vm, mill);
@@ -15439,6 +15853,8 @@ public partial class ViewportView : UserControl
     /// </summary>
     private void ScrubIk(int index)
     {
+        if (_vm is { } blendVm)
+            ShowBlendedToolhead(blendVm);
         if (_vm?.ActiveScrubToolpath is null || _activeScrubNode is null) return;
         ScrubIkForNode(_activeScrubNode, index);
     }
@@ -15945,7 +16361,6 @@ public partial class ViewportView : UserControl
                 if (vm is not null)
                 {
                     vm.StatsReachability = reachLabel;
-                    vm.IsValidating = false;
                     vm.SetScrubMarkers(result, singularity, collision);
                     vm.FirstValidationIssueIndex = RobotValidationPresentation.FirstIssueIndex(
                         result, singularity, collision);
@@ -15954,16 +16369,21 @@ public partial class ViewportView : UserControl
                         string collDetail = firstCollHit is { } fh
                             ? $" (first: {RobotCollisionModel.LinkNames[fh.Link]} ↔ {fh.Other})"
                             : "";
-                        SetSliceStatus(vm,
-                            RobotValidationPresentation.ErrorSliceStatus(counts, collDetail),
-                            isError: true);
+                        string detail = RobotValidationPresentation.ErrorSliceStatus(counts, collDetail);
+                        vm.PublishRobotValidation(
+                            RobotValidationPresentation.CompactStatus(counts), detail, hasIssues: true);
+                        vm.IsValidating = false;
+                        SetSliceStatus(vm, detail, isError: true);
                     }
                     else
                     {
-                        // Latest completed pass is clean — replace any prior red
-                        // banner / status-bar warning (ShowSliceStatus is error-only).
-                        SetSliceStatus(vm, RobotValidationPresentation.CleanSliceStatus(counts));
-                        ScheduleClearSliceStatus(vm);
+                        // Latest completed pass is clean — replace any prior fault
+                        // with this verdict. The compact counts stay on the status bar.
+                        string detail = RobotValidationPresentation.CleanSliceStatus(counts);
+                        vm.PublishRobotValidation(
+                            RobotValidationPresentation.CompactStatus(counts), detail, hasIssues: false);
+                        vm.IsValidating = false;
+                        SetSliceStatus(vm, detail);
                     }
                     // Do not re-pose the arm here. The preview slider already drove it,
                     // and this pass finishes about a second later with a different

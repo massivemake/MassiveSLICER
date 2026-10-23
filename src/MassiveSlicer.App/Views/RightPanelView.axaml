@@ -1782,8 +1782,8 @@
                                           ToolTip.Tip="Aims the TCP vector away from the stick. Unchecked, it aims toward the stick."/>
                                 <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56"
                                       IsVisible="{Binding !$parent[Window].DataContext.Viewport.TcpIsCylinder}">
-                                    <TextBlock Grid.Column="0" Text="Influence (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                               ToolTip.Tip="Radius of the sphere. Outside it the toolpath is unchanged. On the bar the extruder matches the bar."/>
+                                    <TextBlock Grid.Column="0" Text="Size (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Area of effect. Radius of the sphere. Outside it the toolpath is unchanged."/>
                                     <Slider Grid.Column="1" Minimum="20" Maximum="2000"
                                             Value="{Binding $parent[Window].DataContext.Viewport.TcpRadiusMm, Mode=TwoWay}"
                                             VerticalAlignment="Center" Margin="8,0,4,0"/>
@@ -1811,6 +1811,16 @@
                                             VerticalAlignment="Center" Margin="8,0,4,0"/>
                                     <TextBox Grid.Column="2" Classes="PanelTextBox"
                                              Text="{Binding $parent[Window].DataContext.Viewport.TcpHeightMm, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                             TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                </Grid>
+                                <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56">
+                                    <TextBlock Grid.Column="0" Text="Influence" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Strength on top of the fade, from 0 to 2. 1 is the old lean: full on the bar, half at half the radius, none at the edge. Lower is weaker. Higher reaches that full lean farther out and beats a lighter attractor of the same size. The amber arrow grows and shrinks with this. At 1 it fits the old handle. It does not change the sphere or cylinder size."/>
+                                    <Slider Grid.Column="1" Minimum="0" Maximum="2"
+                                            Value="{Binding $parent[Window].DataContext.Viewport.TcpInfluence, Mode=TwoWay}"
+                                            VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                    <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                             Text="{Binding $parent[Window].DataContext.Viewport.TcpInfluence, Mode=TwoWay, StringFormat={}{0:0.00}}"
                                              TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                                 </Grid>
                                 <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56">
@@ -1898,8 +1908,8 @@
                                            Classes="LabelMuted" Margin="8,2,8,0" FontSize="11"/>
                                 <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56"
                                       IsVisible="{Binding !$parent[Window].DataContext.Viewport.DeflectorIsCylinder}">
-                                    <TextBlock Grid.Column="0" Text="Influence (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                               ToolTip.Tip="Radius of the sphere. Robot flange is sampled 400 mm back from the tip."/>
+                                    <TextBlock Grid.Column="0" Text="Size (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Area of effect. Radius of the sphere. Robot flange is sampled 400 mm back from the tip."/>
                                     <Slider Grid.Column="1" Minimum="20" Maximum="2000"
                                             Value="{Binding $parent[Window].DataContext.Viewport.DeflectorRadiusMm, Mode=TwoWay}"
                                             VerticalAlignment="Center" Margin="8,0,4,0"/>
@@ -4091,8 +4101,8 @@
                                                               ToolTip.Tip="Aims the TCP vector away from the stick. Unchecked, it aims toward the stick."/>
                                                     <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56"
                                                           IsVisible="{Binding !$parent[Window].DataContext.Viewport.TcpIsCylinder}">
-                                                        <TextBlock Grid.Column="0" Text="Influence (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                                                   ToolTip.Tip="Radius of the sphere. Outside it the mill path is unchanged. On the bar the cutter matches the bar."/>
+                                                        <TextBlock Grid.Column="0" Text="Size (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                                   ToolTip.Tip="Area of effect. Radius of the sphere. Outside it the mill path is unchanged."/>
                                                         <Slider Grid.Column="1" Minimum="20" Maximum="2000"
                                                                 Value="{Binding $parent[Window].DataContext.Viewport.TcpRadiusMm, Mode=TwoWay}"
                                                                 VerticalAlignment="Center" Margin="8,0,4,0"/>
@@ -4120,6 +4130,16 @@
                                                                 VerticalAlignment="Center" Margin="8,0,4,0"/>
                                                         <TextBox Grid.Column="2" Classes="PanelTextBox"
                                                                  Text="{Binding $parent[Window].DataContext.Viewport.TcpHeightMm, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                                                 TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                                    </Grid>
+                                                    <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56">
+                                                        <TextBlock Grid.Column="0" Text="Influence" VerticalAlignment="Center" Classes="LabelMuted"
+                                                                   ToolTip.Tip="Strength on top of the fade, from 0 to 2. 1 is the old lean: full on the bar, half at half the radius, none at the edge. Lower is weaker. Higher reaches that full lean farther out and beats a lighter attractor of the same size. The amber arrow grows and shrinks with this. At 1 it fits the old handle. It does not change the sphere or cylinder size."/>
+                                                        <Slider Grid.Column="1" Minimum="0" Maximum="2"
+                                                                Value="{Binding $parent[Window].DataContext.Viewport.TcpInfluence, Mode=TwoWay}"
+                                                                VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                                        <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                                                 Text="{Binding $parent[Window].DataContext.Viewport.TcpInfluence, Mode=TwoWay, StringFormat={}{0:0.00}}"
                                                                  TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                                                     </Grid>
                                                     <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56">
@@ -4208,8 +4228,8 @@
                                                                Classes="LabelMuted" Margin="8,2,8,0" FontSize="11"/>
                                                     <Grid Margin="8,0,8,0" ColumnDefinitions="*,*,56"
                                                           IsVisible="{Binding !$parent[Window].DataContext.Viewport.DeflectorIsCylinder}">
-                                                        <TextBlock Grid.Column="0" Text="Influence (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                                                   ToolTip.Tip="Radius of the sphere. Robot flange is sampled 400 mm back from the cutter."/>
+                                                        <TextBlock Grid.Column="0" Text="Size (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                                   ToolTip.Tip="Area of effect. Radius of the sphere. Robot flange is sampled 400 mm back from the cutter."/>
                                                         <Slider Grid.Column="1" Minimum="20" Maximum="2000"
                                                                 Value="{Binding $parent[Window].DataContext.Viewport.DeflectorRadiusMm, Mode=TwoWay}"
                                                                 VerticalAlignment="Center" Margin="8,0,4,0"/>

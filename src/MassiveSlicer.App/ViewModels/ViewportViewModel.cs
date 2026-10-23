@@ -1972,6 +1972,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             RealtimeSlicingPaused = value;   // collapse → deferred re-slice fires
             OnPropertyChanged(nameof(ShowTcpHelpers));
             OnPropertyChanged(nameof(ShowClearTcpKeyframes));
+            OnPropertyChanged(nameof(ShowDeleteTcpKeyframe));
             // Edit mode borrows the Toolpath view's display profile (dark,
             // line-oriented); leaving restores the active view's own profile.
             ApplyViewDisplayProfile();
@@ -2017,6 +2018,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             OnPropertyChanged(nameof(ShowSlicePlaneStatsOverlay));
             OnPropertyChanged(nameof(ShowTcpHelpers));
             OnPropertyChanged(nameof(ShowClearTcpKeyframes));
+            OnPropertyChanged(nameof(ShowDeleteTcpKeyframe));
             RefreshSlicePlaneStats();
             OnSlicePlaneViewerChanged?.Invoke(value);
             NotifyRenderNeeded();
@@ -2028,6 +2030,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Clear-keyframes button: only when helpers are shown and keys exist.</summary>
     public bool ShowClearTcpKeyframes => ShowTcpHelpers && HasTcpKeyframes;
+
+    /// <summary>Delete-keyframe button: the selected key, while the timeline helpers are up.</summary>
+    public bool ShowDeleteTcpKeyframe => ShowTcpHelpers && HasSelectedTcpKeyframe;
 
     /// <summary>Camera lock / restore when the 2D slice plane viewer toggles.</summary>
     internal Action<bool>? OnSlicePlaneViewerChanged { get; set; }
@@ -4014,9 +4019,42 @@ public sealed partial class ViewportViewModel : ViewModelBase
         internal set
         {
             if (!SetField(ref _hasTcpKeyframes, value)) return;
+            if (value)
+                TcpKeyframeLaneOpen = true;
             OnPropertyChanged(nameof(ShowClearTcpKeyframes));
+            OnPropertyChanged(nameof(ShowDeleteTcpKeyframe));
+            OnPropertyChanged(nameof(ShowTcpKeyframeLane));
+            OnPropertyChanged(nameof(ShowTcpKeyframeDetails));
+            OnPropertyChanged(nameof(ShowTimelineCaption));
         }
     }
+
+    private bool _tcpKeyframeLaneOpen = true;
+
+    /// <summary>Keyframe lane disclosure. Keys stay on the path while this is closed.</summary>
+    public bool TcpKeyframeLaneOpen
+    {
+        get => _tcpKeyframeLaneOpen;
+        private set
+        {
+            if (!SetField(ref _tcpKeyframeLaneOpen, value)) return;
+            OnPropertyChanged(nameof(ShowTcpKeyframeLane));
+            OnPropertyChanged(nameof(ShowTcpKeyframeDetails));
+        }
+    }
+
+    /// <summary>Lane track and the lime ticks. Hidden while the disclosure is closed.</summary>
+    public bool ShowTcpKeyframeLane => HasTcpKeyframes && TcpKeyframeLaneOpen;
+
+    /// <summary>Selected-key offset boxes. Hidden with the lane, and when no key is selected.</summary>
+    public bool ShowTcpKeyframeDetails => HasSelectedTcpKeyframe && TcpKeyframeLaneOpen;
+
+    /// <summary>Opens the lane. A new key calls this. A drag of an existing key does not.</summary>
+    internal void RevealTcpKeyframeLane() => TcpKeyframeLaneOpen = true;
+
+    public RelayCommand ToggleTcpKeyframeLaneCommand => _toggleTcpKeyframeLane ??=
+        new RelayCommand(() => TcpKeyframeLaneOpen = !TcpKeyframeLaneOpen);
+    private RelayCommand? _toggleTcpKeyframeLane;
 
     private double _keyframeSmoothing = 150;
     /// <summary>Ease window in moves on each side of / between keyframes.</summary>
@@ -4030,6 +4068,62 @@ public sealed partial class ViewportViewModel : ViewModelBase
         }
     }
 
+    private double _tcpKeyframeOffsetX;
+    private double _tcpKeyframeOffsetY;
+    private double _tcpKeyframeOffsetZ;
+    private bool _tcpKeyframeOffsetPush;
+
+    /// <summary>Selected key's position offset, millimetres. Editing writes that key only.</summary>
+    public double TcpKeyframeOffsetX
+    {
+        get => _tcpKeyframeOffsetX;
+        set
+        {
+            if (!SetField(ref _tcpKeyframeOffsetX, value) || _tcpKeyframeOffsetPush) return;
+            OnTcpKeyframeOffsetEdited?.Invoke(_tcpKeyframeOffsetX, _tcpKeyframeOffsetY, _tcpKeyframeOffsetZ);
+        }
+    }
+
+    /// <summary>Selected key's position offset, millimetres. Editing writes that key only.</summary>
+    public double TcpKeyframeOffsetY
+    {
+        get => _tcpKeyframeOffsetY;
+        set
+        {
+            if (!SetField(ref _tcpKeyframeOffsetY, value) || _tcpKeyframeOffsetPush) return;
+            OnTcpKeyframeOffsetEdited?.Invoke(_tcpKeyframeOffsetX, _tcpKeyframeOffsetY, _tcpKeyframeOffsetZ);
+        }
+    }
+
+    /// <summary>Selected key's position offset, millimetres. Editing writes that key only.</summary>
+    public double TcpKeyframeOffsetZ
+    {
+        get => _tcpKeyframeOffsetZ;
+        set
+        {
+            if (!SetField(ref _tcpKeyframeOffsetZ, value) || _tcpKeyframeOffsetPush) return;
+            OnTcpKeyframeOffsetEdited?.Invoke(_tcpKeyframeOffsetX, _tcpKeyframeOffsetY, _tcpKeyframeOffsetZ);
+        }
+    }
+
+    /// <summary>Loads a key's offset into the lane boxes without treating it as an edit.</summary>
+    internal void SetTcpKeyframeOffset(double x, double y, double z)
+    {
+        _tcpKeyframeOffsetPush = true;
+        try
+        {
+            TcpKeyframeOffsetX = x;
+            TcpKeyframeOffsetY = y;
+            TcpKeyframeOffsetZ = z;
+        }
+        finally
+        {
+            _tcpKeyframeOffsetPush = false;
+        }
+    }
+
+    internal Action<double, double, double>? OnTcpKeyframeOffsetEdited { get; set; }
+
     internal Action? OnAddTcpKeyframeRequested { get; set; }
     internal Action? OnClearTcpKeyframesRequested { get; set; }
     internal Action? OnTcpKeyframeSmoothingChanged { get; set; }
@@ -4041,6 +4135,12 @@ public sealed partial class ViewportViewModel : ViewModelBase
     public RelayCommand ClearTcpKeyframesCommand => _clearTcpKeyframesCommand ??=
         new RelayCommand(() => OnClearTcpKeyframesRequested?.Invoke());
     private RelayCommand? _clearTcpKeyframesCommand;
+
+    internal Action? OnDeleteTcpKeyframeRequested { get; set; }
+
+    public RelayCommand DeleteTcpKeyframeCommand => _deleteTcpKeyframeCommand ??=
+        new RelayCommand(() => OnDeleteTcpKeyframeRequested?.Invoke());
+    private RelayCommand? _deleteTcpKeyframeCommand;
 
     /// <summary>Swaps the scrubbed toolpath (same move count) without resetting the position.</summary>
     internal void ReplaceScrubToolpathInPlace(Toolpath toolpath)
@@ -4245,6 +4345,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Timeline tick legend visibility (any validation markers present).</summary>
     public bool ShowScrubLegend => HasUnreachableMarkers || HasSingularityMarkers || HasCollisionMarkers;
+
+    /// <summary>The caption line under the scrubber: validation ticks, and KEYFRAMES once a key exists.</summary>
+    public bool ShowTimelineCaption => ShowScrubLegend || HasTcpKeyframes;
     public bool HasUnreachableMarkers => _scrubUnreachableMarkers.Count > 0;
     public bool HasSingularityMarkers => _scrubSingularityMarkers.Count > 0;
     public bool HasCollisionMarkers   => _scrubCollisionMarkers.Count > 0;
@@ -4266,8 +4369,25 @@ public sealed partial class ViewportViewModel : ViewModelBase
     {
         _scrubKeyframes      = keys;
         _selectedKeyframeIdx = selectedIdx;
+        OnPropertyChanged(nameof(HasSelectedTcpKeyframe));
+        OnPropertyChanged(nameof(ShowDeleteTcpKeyframe));
+        OnPropertyChanged(nameof(ShowTcpKeyframeDetails));
         RecomputeScrubMarkers();
     }
+
+    /// <summary>Drops the lane highlight. The keys, the scrubber, and the bake stay.</summary>
+    internal void ClearTcpKeyframeSelection()
+    {
+        if (_selectedKeyframeIdx < 0) return;
+        _selectedKeyframeIdx = -1;
+        OnPropertyChanged(nameof(HasSelectedTcpKeyframe));
+        OnPropertyChanged(nameof(ShowDeleteTcpKeyframe));
+        OnPropertyChanged(nameof(ShowTcpKeyframeDetails));
+        RecomputeScrubMarkers();
+    }
+
+    /// <summary>True when a single timeline keyframe is selected.</summary>
+    public bool HasSelectedTcpKeyframe => _selectedKeyframeIdx >= 0;
 
     private IReadOnlyList<MassiveSlicer.Controls.KeyframeLaneItem> _keyframeLaneItems = [];
     public IReadOnlyList<MassiveSlicer.Controls.KeyframeLaneItem> KeyframeLaneItems
@@ -4320,6 +4440,10 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// (keyIdx, isLeft, lanePixelX, commit).</summary>
     internal Action<int, bool, double, bool>? OnKeyframeInfluenceDragged { get; set; }
 
+    /// <summary>Wired by the viewport code-behind: Shift-drag of a key
+    /// (keyIdx, lanePixelX, commit).</summary>
+    internal Action<int, double, bool>? OnKeyframeMoved { get; set; }
+
     /// <summary>Converts a lane/track pixel X to a move index (clamped).</summary>
     internal int ScrubIndexAtPixel(double x)
     {
@@ -4366,6 +4490,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         ScrubSingularityMarkers = sin;
         ScrubCollisionMarkers   = col;
         OnPropertyChanged(nameof(ShowScrubLegend));
+        OnPropertyChanged(nameof(ShowTimelineCaption));
         OnPropertyChanged(nameof(HasUnreachableMarkers));
         OnPropertyChanged(nameof(HasSingularityMarkers));
         OnPropertyChanged(nameof(HasCollisionMarkers));
@@ -4410,7 +4535,126 @@ public sealed partial class ViewportViewModel : ViewModelBase
     public bool IsValidating
     {
         get => _isValidating;
-        set => SetField(ref _isValidating, value);
+        set
+        {
+            if (!SetField(ref _isValidating, value)) return;
+            RaisePathRecalc();
+        }
+    }
+
+    private bool _pathRecalcHeld;
+
+    /// <summary>
+    /// True while a change is rebuilding the path: a slice, a keyframe rebake, or the
+    /// reachability pass. The status circle at the left of the footer reads this.
+    /// A burst of rebakes holds it once. It drops when the newest rebake's upload
+    /// has finished, unless a slice or the reachability pass is still running.
+    /// </summary>
+    public bool IsPathRecalculating => _pathRecalcHeld || IsSlicing || IsValidating;
+
+    /// <summary>Turns the rebuild hold on. A second call while it is already on does nothing.</summary>
+    public void PushPathRecalc()
+    {
+        if (_pathRecalcHeld) return;
+        bool was = IsPathRecalculating;
+        _pathRecalcHeld = true;
+        if (!was) RaisePathRecalc();
+    }
+
+    /// <summary>Turns the rebuild hold off. The circle stays up while a slice or the reachability pass is still running.</summary>
+    public void PopPathRecalc()
+    {
+        if (!_pathRecalcHeld) return;
+        _pathRecalcHeld = false;
+        if (!IsPathRecalculating) RaisePathRecalc();
+    }
+
+    private string _validationCompact = "";
+    private string _validationDetail = "";
+    private bool _validationExpanded;
+    private bool _validationHasIssues;
+
+    /// <summary>A robot-validation verdict is on file. The counts stay until the next pass replaces them.</summary>
+    public bool HasValidationResult => _validationCompact.Length > 0;
+
+    /// <summary>Compact counts are on the status bar. Hidden while the next pass is running.</summary>
+    public bool ShowValidationLine => HasValidationResult && !IsPathRecalculating;
+
+    /// <summary>Singularity, unreachable, and collision counts. This is the line on the right of the status bar.</summary>
+    public string ValidationLineText => _validationCompact;
+
+    /// <summary>Issue counts use the same red as the old validation alert. A clean pass stays muted.</summary>
+    public bool ValidationLineIsAlert => ShowValidationLine && _validationHasIssues;
+
+    /// <summary>Full verdict: Z range, first collision, and the fault warning.</summary>
+    public string ValidationDetail => _validationDetail;
+
+    /// <summary>Tooltip for the compact line. Empty while that line is hidden.</summary>
+    public string ValidationTip => ShowValidationLine ? _validationDetail : "";
+
+    /// <summary>Click opened the full verdict in the original alert row.</summary>
+    public bool ValidationExpanded => _validationExpanded;
+
+    /// <summary>
+    /// The alert row above the status bar. Other errors still use it.
+    /// A robot-validation result uses it only after the compact line is clicked,
+    /// and it hides while the next pass is running.
+    /// </summary>
+    public bool ShowValidationBanner =>
+        !IsPathRecalculating
+        && ShowSliceStatus
+        && !IsValidationSentence(_sliceStatusMessage);
+
+    private static bool IsValidationSentence(string? text)
+        => !string.IsNullOrEmpty(text)
+           && text.Contains("Robot validation:", StringComparison.Ordinal);
+
+    /// <summary>Alert-row text. Expanded validation shows the full sentence; everything else shows the status message.</summary>
+    public string ValidationBannerText =>
+        HasValidationResult && _validationExpanded ? _validationDetail : _sliceStatusMessage;
+
+    /// <summary>Stores the latest verdict without moving the status-bar slot. The full sentence stays available for hover and click.</summary>
+    public void PublishRobotValidation(string compact, string detail, bool hasIssues)
+    {
+        _validationCompact = compact ?? "";
+        _validationDetail = detail ?? "";
+        _validationHasIssues = hasIssues;
+        _validationExpanded = false;
+        RaiseValidationLine();
+    }
+
+    /// <summary>Opens or closes the full sentence in the alert row. The compact counts stay where they are.</summary>
+    public void ToggleValidationLine()
+    {
+        if (!ShowValidationLine) return;
+        _validationExpanded = !_validationExpanded;
+        RaiseValidationLine();
+    }
+
+    /// <summary>True when this footer string is the current validation verdict, compact or full.</summary>
+    public bool IsValidationFeedback(string? text)
+        => HasValidationResult && (text == _validationCompact || text == _validationDetail);
+
+    private void RaiseValidationLine()
+    {
+        OnPropertyChanged(nameof(HasValidationResult));
+        OnPropertyChanged(nameof(ShowValidationLine));
+        OnPropertyChanged(nameof(ValidationLineText));
+        OnPropertyChanged(nameof(ValidationLineIsAlert));
+        OnPropertyChanged(nameof(ValidationDetail));
+        OnPropertyChanged(nameof(ValidationTip));
+        OnPropertyChanged(nameof(ValidationExpanded));
+        OnPropertyChanged(nameof(ValidationBannerText));
+        OnPropertyChanged(nameof(ShowValidationBanner));
+    }
+
+    private void RaisePathRecalc()
+    {
+        OnPropertyChanged(nameof(IsPathRecalculating));
+        OnPropertyChanged(nameof(ShowValidationLine));
+        OnPropertyChanged(nameof(ValidationLineIsAlert));
+        OnPropertyChanged(nameof(ValidationTip));
+        OnPropertyChanged(nameof(ShowValidationBanner));
     }
 
     public string[] PlaybackSpeedOptions { get; } = ["25%", "50%", "100%", "200%", "400%"];
@@ -6124,6 +6368,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 SliceCommand?.RaiseCanExecuteChanged();
                 UpdateSliceCommand?.RaiseCanExecuteChanged();
                 OnPropertyChanged(nameof(ShowSliceStatus));
+                RaisePathRecalc();
             }
         }
     }
@@ -6168,7 +6413,11 @@ public sealed partial class ViewportViewModel : ViewModelBase
         set
         {
             if (SetField(ref _sliceStatusMessage, value))
+            {
                 OnPropertyChanged(nameof(ShowSliceStatus));
+                OnPropertyChanged(nameof(ShowValidationBanner));
+                OnPropertyChanged(nameof(ValidationBannerText));
+            }
         }
     }
 
@@ -6183,7 +6432,10 @@ public sealed partial class ViewportViewModel : ViewModelBase
             // ShowSliceStatus gates on this too — without the notify the banner only
             // re-evaluates when the message text also changes.
             if (SetField(ref _sliceStatusIsError, value))
+            {
                 OnPropertyChanged(nameof(ShowSliceStatus));
+                OnPropertyChanged(nameof(ShowValidationBanner));
+            }
         }
     }
 
@@ -6536,6 +6788,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Selects a scene node when the user clicks it in the outliner.</summary>
     internal Action<SceneNode>? OnOutlinerSelectRequested { get; set; }
+
+    /// <summary>Fires after a scene selection change. The viewport drops a toolhead key here.</summary>
+    internal Action<SceneNode?>? OnSceneSelectionChanged { get; set; }
 
     /// <summary>Fired when the "Apply" action runs on a mesh's Modifiers group — the View does
     /// the actual fold-over-working-set split (needs OpenTK transform math + PlanarMeshSplitter,
@@ -7036,6 +7291,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         OnPropertyChanged(nameof(SelectedOutlinerItem));
         OnPropertyChanged(nameof(SelectedModifierOwner));
         OnTransformGroupChanged?.Invoke(_transformGroup.Select(r => r.Node).ToList(), item.Node);
+        OnSceneSelectionChanged?.Invoke(item.Node);
     }
 
     internal void ClearTransformGroup()
@@ -7164,6 +7420,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// <summary>Highlights the matching outliner row (scan → blue row; import → accent row).</summary>
     internal void SetOutlinerSelection(SceneNode? node)
     {
+        try
+        {
         ClearTransformGroup();
 
         // Viewport-driven sync must not wipe ctrl/shift multi-select in the outliner.
@@ -7219,6 +7477,11 @@ public sealed partial class ViewportViewModel : ViewModelBase
         if ((item.IsEffector || item.IsTcpAttractor || item.IsModifier || item.IsModifiersGroup)
             && (ActiveGizmoModeInternal == GizmoMode.None || ActiveGizmoModeInternal == GizmoMode.Scale))
             ActiveGizmoModeInternal = GizmoMode.Translate;
+        }
+        finally
+        {
+            OnSceneSelectionChanged?.Invoke(node);
+        }
     }
 
     internal void OnOutlinerScanClicked(OutlinerItemViewModel item, bool shiftHeld, bool ctrlHeld)
@@ -7229,26 +7492,33 @@ public sealed partial class ViewportViewModel : ViewModelBase
             return;
         }
 
-        FlattenScansToBedGroup();
-
-        if (shiftHeld && _scanSelectionAnchor is not null)
+        try
         {
-            SelectScanRange(_scanSelectionAnchor, item);
-            _scanSelectionAnchor = item;
-            return;
-        }
+            FlattenScansToBedGroup();
 
-        if (ctrlHeld)
+            if (shiftHeld && _scanSelectionAnchor is not null)
+            {
+                SelectScanRange(_scanSelectionAnchor, item);
+                _scanSelectionAnchor = item;
+                return;
+            }
+
+            if (ctrlHeld)
+            {
+                ToggleScanOutlinerSelection(item);
+                _scanSelectionAnchor = item;
+                return;
+            }
+
+            ClearScanOutlinerSelection();
+            _selectedScanItems.Add(item);
+            _scanSelectionAnchor = item;
+            RefreshCanMergeScans();
+        }
+        finally
         {
-            ToggleScanOutlinerSelection(item);
-            _scanSelectionAnchor = item;
-            return;
+            OnSceneSelectionChanged?.Invoke(item.Node);
         }
-
-        ClearScanOutlinerSelection();
-        _selectedScanItems.Add(item);
-        _scanSelectionAnchor = item;
-        RefreshCanMergeScans();
     }
 
     void SelectScanRange(OutlinerItemViewModel anchor, OutlinerItemViewModel end)
@@ -8921,6 +9191,14 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     public void RequestDeleteNode(SceneNode node)
     {
+        // A handle sits under the bed node. The generic lookup hits that bed group
+        // and refuses, which left Delete and Clear doing nothing. Drop the handle.
+        if (FindTcpAttractor(node) is { } handle)
+        {
+            RemoveTcpAttractor(handle);
+            return;
+        }
+
         if (FindOutlinerItem(node) is not { } item) return;
         if (item == _rotaryGroupItem || item == _robotGroupItem) return;
 

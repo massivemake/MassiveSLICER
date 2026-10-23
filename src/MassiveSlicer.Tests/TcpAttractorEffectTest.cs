@@ -89,6 +89,42 @@ public class TcpAttractorEffectTest
     }
 
     [Fact]
+    public void Influence_scales_the_fade_and_keeps_the_center_strongest()
+    {
+        var path = MillPath(Vector3.Zero, Vector3.UnitZ);
+        var full = new TcpAttractor(Vector3.Zero, 400f, Vector3.UnitX);
+        var half = full with { Influence = 0.5f };
+        var heavy = full with { Influence = 2f };
+        var fullCut = -Vector3.Normalize(TcpAttractorEffect.ApplyMill(path, [full]).Layers[0].Moves[0].Normal);
+        var halfCut = -Vector3.Normalize(TcpAttractorEffect.ApplyMill(path, [half]).Layers[0].Moves[0].Normal);
+        var heavyCut = -Vector3.Normalize(TcpAttractorEffect.ApplyMill(path, [heavy]).Layers[0].Moves[0].Normal);
+        Assert.Equal(1f, full.Influence);
+        Assert.True(Vector3.Dot(fullCut, -Vector3.UnitX) > 0.99f, $"full {fullCut}");
+        Assert.True(Vector3.Dot(heavyCut, fullCut) > 0.99f, $"heavy {heavyCut}");
+        Assert.True(Vector3.Dot(halfCut, -Vector3.UnitX) > 0.2f && Vector3.Dot(halfCut, -Vector3.UnitX) < 0.9f,
+            $"half {halfCut}");
+
+        var mid = MillPath(new Vector3(200f, 0f, 0f), Vector3.UnitZ);
+        var midLight = -Vector3.Normalize(
+            TcpAttractorEffect.ApplyMill(mid, [new TcpAttractor(Vector3.Zero, 400f, Vector3.UnitX)]).Layers[0].Moves[0].Normal);
+        var midHeavy = -Vector3.Normalize(
+            TcpAttractorEffect.ApplyMill(mid, [new TcpAttractor(Vector3.Zero, 400f, Vector3.UnitX, Influence: 2f)]).Layers[0].Moves[0].Normal);
+        Assert.True(Vector3.Dot(midHeavy, -Vector3.UnitX) > Vector3.Dot(midLight, -Vector3.UnitX),
+            $"mid light {midLight} heavy {midHeavy}");
+
+        var weak = new TcpAttractor(Vector3.Zero, 400f, -Vector3.UnitX, Influence: 1f);
+        var won = -Vector3.Normalize(
+            TcpAttractorEffect.ApplyMill(path, [heavy, weak]).Layers[0].Moves[0].Normal);
+        Assert.True(Vector3.Dot(won, -Vector3.UnitX) > 0.99f, $"won {won}");
+
+        var outside = MillPath(new Vector3(500f, 0f, 10f), Vector3.UnitZ);
+        var kept = -Vector3.Normalize(
+            TcpAttractorEffect.ApplyMill(outside, [new TcpAttractor(Vector3.Zero, 100f, Vector3.UnitX, Influence: 4f)])
+                .Layers[0].Moves[0].Normal);
+        Assert.True(Vector3.Dot(kept, -Vector3.UnitZ) > 0.999f, $"outside {kept}");
+    }
+
+    [Fact]
     public void Mill_move_on_the_cylinder_matches_the_cylinder_axis()
     {
         var axis = TcpAttractorEffect.AxisFromLean(25f, -15f);
@@ -288,6 +324,30 @@ public class TcpAttractorEffectTest
         var away = TcpAttractorPose.From(new TcpAttractor(
             new Vector3(1, 2, 3), 40f, Vector3.UnitZ, Detract: true));
         Assert.True(away.ToAttractor().Detract);
+        Assert.Equal(1f, away.ToAttractor().Influence);
+        Assert.Equal(1f, loaded.Influence);
+
+        var weighted = TcpAttractorPose.From(new TcpAttractor(
+            new Vector3(1, 2, 3), 40f, Vector3.UnitZ, Influence: 1.5f));
+        Assert.Equal(1.5f, weighted.ToAttractor().Influence, 3);
+        var capped = TcpAttractorPose.From(new TcpAttractor(
+            new Vector3(1, 2, 3), 40f, Vector3.UnitZ, Influence: 3f));
+        Assert.Equal(2f, capped.ToAttractor().Influence, 3);
+
+        var opts = new System.Text.Json.JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault,
+        };
+        string zeroJson = System.Text.Json.JsonSerializer.Serialize(
+            TcpAttractorPose.From(new TcpAttractor(Vector3.Zero, 40f, Vector3.UnitZ, Influence: 0f)), opts);
+        Assert.Contains("\"Influence\":0", zeroJson);
+        var zeroBack = System.Text.Json.JsonSerializer.Deserialize<TcpAttractorPose>(zeroJson, opts);
+        Assert.NotNull(zeroBack);
+        Assert.Equal(0f, zeroBack!.ToAttractor().Influence);
+        var omitted = System.Text.Json.JsonSerializer.Deserialize<TcpAttractorPose>(
+            "{\"RadiusMm\":40,\"AxisZ\":1}", opts);
+        Assert.NotNull(omitted);
+        Assert.Equal(1f, omitted!.ToAttractor().Influence);
     }
 
     [Fact]

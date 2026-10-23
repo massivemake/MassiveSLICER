@@ -330,6 +330,17 @@ public sealed class MainWindowViewModel : ViewModelBase
                                 or nameof(ViewportViewModel.HasPrePrintScanStep))
                 SyncLfam3WorkflowSidebar();
 
+            if (e.PropertyName is nameof(ViewportViewModel.IsPathRecalculating))
+            {
+                if (Viewport.IsPathRecalculating)
+                {
+                    if (Viewport.IsValidationFeedback(StatusBar.OperationFeedback))
+                        StatusBar.OperationFeedback = string.Empty;
+                }
+                else if (Viewport.ShowValidationLine)
+                    StatusBar.OperationFeedback = Viewport.ValidationLineText;
+            }
+
             if (e.PropertyName is nameof(ViewportViewModel.IsSlicing))
             {
                 StatusBar.IsProgressActive = Viewport.IsSlicing;
@@ -361,7 +372,9 @@ public sealed class MainWindowViewModel : ViewModelBase
                     // be running; robot validation finishes *after* IsSlicing goes false,
                     // so its warnings never reached the console except by race.
                     Console.LogError(Viewport.SliceStatusMessage);
-                    StatusBar.OperationFeedback = Viewport.SliceStatusMessage;
+                    StatusBar.OperationFeedback = Viewport.ShowValidationLine
+                        ? Viewport.ValidationLineText
+                        : Viewport.SliceStatusMessage;
                     _lastProgressLogMessage = Viewport.SliceStatusMessage;
                 }
                 else if (Viewport.IsSlicing)
@@ -369,8 +382,12 @@ public sealed class MainWindowViewModel : ViewModelBase
                     LogProgressDetail(Viewport.SliceStatusMessage);
                     UpdateBusy(Viewport.SliceStatusMessage);
                 }
+                else if (Viewport.ShowValidationLine)
+                    StatusBar.OperationFeedback = Viewport.ValidationLineText;
                 else if (!string.IsNullOrWhiteSpace(Viewport.SliceStatusMessage))
                     StatusBar.OperationFeedback = Viewport.SliceStatusMessage;
+                else if (!Viewport.HasValidationResult)
+                    StatusBar.OperationFeedback = string.Empty;
             }
 
             if (e.PropertyName is nameof(ViewportViewModel.SliceProgressPercent) && Viewport.IsSlicing)

@@ -15,6 +15,7 @@ public class RobotValidationPresentationTest
         Assert.False(RobotValidationPresentation.BlocksExport(clean));
         Assert.Equal("All 1640090 reachable", RobotValidationPresentation.ReachabilityLabel(clean));
         Assert.Equal("Robot validation: All 1640090 reachable.", RobotValidationPresentation.CleanSliceStatus(clean));
+        Assert.Equal("0 singularity · 0 unreachable · 0 collisions", RobotValidationPresentation.CompactStatus(clean));
         Assert.Equal(-1, RobotValidationPresentation.FirstIssueIndex(
             [true, true, true], [false, false, false], null));
     }
@@ -34,6 +35,7 @@ public class RobotValidationPresentationTest
         Assert.Contains("12 unreachable", banner);
         Assert.Contains("between Z 420 and 890 mm", banner);
         Assert.True(RobotValidationPresentation.IsRobotValidationError(banner));
+        Assert.Equal("1,007 singularity · 12 unreachable · 0 collisions", RobotValidationPresentation.CompactStatus(dirty));
     }
 
     [Fact]
@@ -46,6 +48,7 @@ public class RobotValidationPresentationTest
         Assert.False(RobotValidationPresentation.BlocksExport(collisions));
         Assert.Contains("4 collision (sampled 1/8)", RobotValidationPresentation.ReachabilityLabel(collisions));
         Assert.Contains("4 predicted collision moves", RobotValidationPresentation.ErrorSliceStatus(collisions, " (first: A2 ↔ bed)"));
+        Assert.Equal("0 singularity · 0 unreachable · 4 collisions", RobotValidationPresentation.CompactStatus(collisions));
     }
 
     [Fact]
@@ -76,5 +79,8 @@ public class RobotValidationPresentationTest
             "Robot validation: All 1640090 reachable."));
         Assert.False(RobotValidationPresentation.IsRobotValidationError("Slice complete — 12 layers"));
         Assert.False(RobotValidationPresentation.IsRobotValidationError(null));
+        Assert.True(RobotValidationPresentation.IsRobotValidationStatus(
+            "Robot validation: All 1640090 reachable."));
+        Assert.False(RobotValidationPresentation.IsRobotValidationStatus("Slice complete — 12 layers"));
     }
 }
