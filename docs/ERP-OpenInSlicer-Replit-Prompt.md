@@ -67,6 +67,63 @@ Desktop status: macOS support for these links is on branch `feature/erp-review-l
 on a Mac (cold start, already-open, save-back). Windows has handled `massiveslicer://open` since
 August; share-relative paths are new on the same branch.
 
+## Part 2 — STL → new MASS in the Production folder (PROPOSED — desktop not built yet)
+
+> **Status (2026-10-26):** agreed design, not yet in any MassiveSLICER build. You can build the
+> LAB side against this spec now. Today's builds ignore these links (the app opens with no
+> file), so nothing breaks — but don't announce the button until we confirm the desktop build.
+
+**Goal:** a model file in LAB (STL etc.) gets an **Open in MassiveSLICER** button. The click
+starts a MassiveSLICER project from that model, and Save writes the `.mass` straight into the
+folder LAB chose, with no Save As dialog.
+
+### The link
+
+```
+massiveslicer://open?path=<model, share-relative>&saveTo=<new .mass, share-relative>&project=<id>&element=<id>
+```
+
+| Param | Required | Rules |
+|---|---|---|
+| `path` | yes | Share-relative model file: `.stl`, `.obj`, `.3mf`, `.glb`, `.gltf`, `.step`, `.stp` |
+| `saveTo` | yes for model files | Share-relative path ending `.mass`. **LAB decides the folder** (e.g. `<project folder>/06-Production Documents/<model name>.mass`) — the slicer never guesses folder conventions |
+| `project` | optional | LAB project id — links the new `.mass` to the project |
+| `element` | optional | LAB element id — saves then report against that element |
+
+- `encodeURIComponent` every value. Each param at most once. Same NAS rules as `.mass` links:
+  both paths must be on the share, no `..`, each machine maps them to `Z:\` or
+  `/Volumes/MassiveFILES`.
+- Example:
+  ```js
+  const q = new URLSearchParams({
+    path:    "Projects/26-284 Head/03-Design/part.stl",
+    saveTo:  "Projects/26-284 Head/06-Production Documents/part.mass",
+    project: "42",
+    element: "99",
+  });
+  const href = "massiveslicer://open?" + q.toString().replace(/\+/g, "%20");
+  ```
+
+### What MassiveSLICER will do
+
+1. **If `saveTo` already exists → open that `.mass` and ignore the model.** Clicking the same STL
+   twice never wipes slicing work. So the button is safe to click repeatedly.
+2. Otherwise: new project, import the model (placed on the bed like Import does), set the save
+   location to `saveTo`, link to `project`/`element` if given.
+3. **Nothing is written until the user presses Save.** Looking and closing leaves no stray file.
+4. On that first Save the `.mass` is created at `saveTo`, and LAB receives the usual
+   `POST /api/slicer/v1/workspace-saves` with `path` = `saveTo` (plus `projectId`/`elementId`
+   when linked). That record is LAB's signal that the MASS now exists — show it with its own
+   Open button from then on.
+5. The model file itself is never modified.
+
+### Questions for you (answer when you build)
+
+- Which folder should `saveTo` use for each project type — `06-Production Documents`, a
+  `mass Files` subfolder, something else? It's entirely your call; tell us so our docs match.
+- Name collisions: if two different STLs would produce the same `saveTo` name, choose distinct
+  names on the LAB side (e.g. append the element name or revision).
+
 ## Known limitation
 
 Two people can open the same `.mass` and the later Save wins. MassiveSLICER will add a
