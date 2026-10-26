@@ -13,6 +13,10 @@ public partial class ViewportOverlayView : UserControl
     private DispatcherTimer? _regionSelectLongPress;
     private bool _regionSelectLongPressFired;
     private ViewportViewModel? _dockMarginVm;
+    private bool _graphResizing;
+    private double _graphResizeStartHeight;
+    private double _graphResizeStartY;
+    private TopLevel? _graphHomeTop;
 
     public ViewportOverlayView()
     {
@@ -32,11 +36,24 @@ public partial class ViewportOverlayView : UserControl
         ScrubTrackGrid.AddHandler(PointerPressedEvent, OnScrubTrackPointerPressed,
             Avalonia.Interactivity.RoutingStrategies.Tunnel);
         KeyframeLane.KeyframeClicked = i =>
-            (DataContext as ViewportViewModel)?.OnKeyframeLaneClicked?.Invoke(i);
+            (DataContext as ViewportViewModel)?.OnKeyframeLaneClicked?.Invoke(i, true);
+        KeyframeLane.TailClicked = i =>
+            (DataContext as ViewportViewModel)?.OnKeyframeLaneClicked?.Invoke(i, false);
         KeyframeLane.InfluenceDragged = (i, left, x, commit) =>
             (DataContext as ViewportViewModel)?.OnKeyframeInfluenceDragged?.Invoke(i, left, x, commit);
         KeyframeLane.KeyMoved = (i, x, commit) =>
             (DataContext as ViewportViewModel)?.OnKeyframeMoved?.Invoke(i, x, commit);
+        TrimLane.EndDragged = (isStart, x) =>
+            (DataContext as ViewportViewModel)?.DragTimelineTrim(isStart, x);
+
+        JointGraphHost.PointerEntered += (_, _) => AttachJointGraphHome();
+        JointGraphHost.PointerExited += (_, _) =>
+        {
+            if (!_graphResizing) DetachJointGraphHome();
+        };
+        JointGraphResizeGrip.PointerPressed += OnJointGraphResizePressed;
+        JointGraphResizeGrip.PointerMoved += OnJointGraphResizeMoved;
+        JointGraphResizeGrip.PointerReleased += OnJointGraphResizeReleased;
 
         // Keep the bottom corner docks (ERP / Live I/O) 16px above whichever
         // timeline bar is showing; heights vary (keyframe lane, workflow bar).
@@ -337,5 +354,64 @@ public partial class ViewportOverlayView : UserControl
             ViewPillsBar.HorizontalAlignment = HorizontalAlignment.Right;
             TopChromeHost.Margin = new Thickness(0, 8, 0, 0);
         }
+    }
+
+    void AttachJointGraphHome()
+    {
+        if (_graphHomeTop is not null) return;
+        if (TopLevel.GetTopLevel(this) is not { } top) return;
+        top.AddHandler(KeyDownEvent, OnJointGraphHomeKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        _graphHomeTop = top;
+    }
+
+    void DetachJointGraphHome()
+    {
+        if (_graphHomeTop is null) return;
+        _graphHomeTop.RemoveHandler(KeyDownEvent, OnJointGraphHomeKey);
+        _graphHomeTop = null;
+    }
+
+    void OnJointGraphHomeKey(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Home || e.KeyModifiers != KeyModifiers.None) return;
+        if (TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is StyledElement focused)
+        {
+            string name = focused.GetType().Name;
+            if (name.Contains("TextBox", StringComparison.Ordinal)
+                || name.Contains("TextPresenter", StringComparison.Ordinal))
+                return;
+        }
+        if (DataContext is not ViewportViewModel vm || !vm.ShowJointGraph) return;
+        vm.ResetJointGraphView();
+        e.Handled = true;
+    }
+
+    void OnJointGraphResizePressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is not ViewportViewModel vm) return;
+        if (!e.GetCurrentPoint(JointGraphResizeGrip).Properties.IsLeftButtonPressed) return;
+        _graphResizeStartHeight = vm.JointGraphHeight;
+        _graphResizeStartY = e.GetPosition(this).Y;
+        _graphResizing = true;
+        e.Pointer.Capture(JointGraphResizeGrip);
+        JointGraphChart.Focus();
+        e.Handled = true;
+    }
+
+    void OnJointGraphResizeMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_graphResizing || DataContext is not ViewportViewModel vm) return;
+        double delta = _graphResizeStartY - e.GetPosition(this).Y;
+        vm.JointGraphHeight = _graphResizeStartHeight + delta;
+        e.Handled = true;
+    }
+
+    void OnJointGraphResizeReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_graphResizing) return;
+        _graphResizing = false;
+        e.Pointer.Capture(null);
+        if (!JointGraphHost.IsPointerOver) DetachJointGraphHome();
+        e.Handled = true;
     }
 }

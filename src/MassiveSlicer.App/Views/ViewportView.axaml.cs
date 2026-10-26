@@ -641,13 +641,15 @@ public partial class ViewportView : UserControl
             vm.OnSimScrubRequested = SimScrubIk;
             vm.OnSimVideoExportRequested = () => _ = ExportSimVideoAsync(vm);
             vm.OnAddTcpKeyframeRequested    = () => AddTcpKeyframeAtCurrentIndex(vm);
+            vm.OnToolheadOrientationRequested = (y, x, z) => SetGlobalToolheadOrientation(y, x, z);
             vm.OnClearTcpKeyframesRequested = () => ClearTcpKeyframes(vm);
             vm.OnDeleteTcpKeyframeRequested = () => DeleteSelectedTcpKeyframe(vm);
-            vm.OnKeyframeLaneClicked      = i => JumpToTcpKeyframe(vm, i, toggle: true);
+            vm.OnKeyframeLaneClicked      = (i, toggle) => JumpToTcpKeyframe(vm, i, toggle);
             vm.OnKeyframeInfluenceDragged = (i, left, px, commit) =>
                 DragTcpKeyframeInfluence(vm, i, left, px, commit);
             vm.OnKeyframeMoved = (i, px, commit) =>
                 DragTcpKeyframe(vm, i, px, commit);
+            vm.JointGraphSync = SyncJointGraph;
             vm.OnTcpKeyframeOffsetEdited = (x, y, z) =>
                 ApplySelectedKeyframeOffset(vm, x, y, z);
             vm.OnSceneSelectionChanged = node => ReleaseTcpKeyframeSelection(vm, node);
@@ -1193,6 +1195,11 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.ToolheadB)
                                     or nameof(AdditiveSettingsViewModel.ToolheadC))
                 {
+                    // A ring drag writes the sliders every sample. The release
+                    // poses the path once. Replaying here would re-solve the
+                    // whole program on each mouse move.
+                    if (_toolOrientGizmoDrag)
+                        return;
                     if (!CaptureKeyframeOrientation(vm, fromMill: false))
                         ReplayToolheadOrientation(vm);
                 }
@@ -1212,6 +1219,9 @@ public partial class ViewportView : UserControl
                     }
                 }
 
+                // Orientation still rebuilds from the raw path. Motion and extruder edits do not:
+                // a print-speed change used to clone the whole program and start a new reachability
+                // solve. Speed and RPM are the live panel values times the move's scale.
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.SmoothRotation)
                                     or nameof(AdditiveSettingsViewModel.SmoothRotationRadius)
                                     or nameof(AdditiveSettingsViewModel.SmoothRotationMaxRateDegPerMm)
@@ -1219,14 +1229,17 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.OrientationMaxTiltDeg)
                                     or nameof(AdditiveSettingsViewModel.FirstLayerZeroTilt)
                                     or nameof(AdditiveSettingsViewModel.LayerLeanPercent)
-                                    or nameof(AdditiveSettingsViewModel.LayerLeanMaxTiltDeg)
-                                    or nameof(AdditiveSettingsViewModel.LayerSpeedAdaptEnabled)
-                                    or nameof(AdditiveSettingsViewModel.LayerSpeedBasisDisplay)
-                                    or nameof(AdditiveSettingsViewModel.LayerSpeedMinMmS)
-                                    or nameof(AdditiveSettingsViewModel.LayerSpeedMaxMmS)
-                                    or nameof(AdditiveSettingsViewModel.LayerSpeedNotes)
-                                    or nameof(AdditiveSettingsViewModel.PrintSpeed))
+                                    or nameof(AdditiveSettingsViewModel.LayerLeanMaxTiltDeg))
                     RebuildToolpathsFromRaw(additive);
+                else if (IsLayerSpeedInput(pe.PropertyName))
+                {
+                    if (NeedsLayerSpeedReprocess(additive, pe.PropertyName))
+                        ScheduleLayerSpeed();
+                    else if (pe.PropertyName == nameof(AdditiveSettingsViewModel.PrintSpeed))
+                        RefreshMotionReadout(vm, recomputeStats: true);
+                }
+                else if (IsMotionReadout(pe.PropertyName))
+                    RefreshMotionReadout(vm, recomputeStats: IsMotionStatsInput(pe.PropertyName));
             };
 
             additive.OnSimulateThermalRequested = () => RunThermalSimulation(vm, additive);
@@ -4991,6 +5004,7 @@ public partial class ViewportView : UserControl
             if (_gizmoDragAxis != GizmoAxis.None)
             {
                 bool cutDragging = DataContext is ViewportViewModel { IsCutToolActive: true };
+                bool orientDrag = _toolOrientGizmoDrag;
                 bool tilted = false;
                 bool scaled = false;
                 if (!cutDragging
@@ -5035,7 +5049,7 @@ public partial class ViewportView : UserControl
                                 vmGz.ConstrainModifierPlanesUnder(member.Node);
                         }
                     }
-                    else
+                    else if (!orientDrag)
                     {
                         if (!projection)
                             ApplyBedRules(gzNode, _bedWasRestingAtDragStart, bedEdit);
@@ -5049,6 +5063,7 @@ public partial class ViewportView : UserControl
                     }
                     if (scaled) vmGz.RefreshScaleFields();
                 }
+                _toolOrientGizmoDrag     = false;
                 _toolIsDragging          = false;
                 _gizmoDragAxis           = GizmoAxis.None;
                 _renderer.ActiveDragAxis = GizmoAxis.None;
@@ -5061,11 +5076,18 @@ public partial class ViewportView : UserControl
                 if (!cutDragging && DataContext is ViewportViewModel vmGz2)
                 {
                     SyncSelectionTransformDisplay(vmGz2);
-                    if (IsToolNodeSelected() && vmGz2.IsScrubSessionActive && _activeScrubNode is not null)
+                    if (orientDrag)
                     {
-                        // Dragging the TCP mid-scrub = keyframe the offset at this moment
-                        // (no re-slice — the adjustment lives on the toolpath timeline).
-                        AddTcpKeyframeAtCurrentIndex(vmGz2);
+                        // The rings already wrote the sliders. Commit that edit the
+                        // way a slider does: baseline, or the selected key. Do not
+                        // insert a key at the playhead.
+                        FinishToolheadOrientationDrag(vmGz2);
+                    }
+                    else if (IsToolNodeSelected() && vmGz2.IsScrubSessionActive && _activeScrubNode is not null)
+                    {
+                        // A translate drag keyframes where the tip moved.
+                        var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+                        AddTcpKeyframeAtCurrentIndex(vmGz2, translatedTcp: dragOp == GizmoMode.Translate);
                     }
                     else if (_renderer.SelectedNode is { } tcpNode && vmGz2.IsTcpAttractorNode(tcpNode))
                     {
@@ -5429,7 +5451,9 @@ public partial class ViewportView : UserControl
                 StartKbTransform(GizmoMode.Translate);
                 e.Handled = true; break;
             case Key.R:
-                if (!IsToolNodeSelected())
+                if (IsToolNodeSelected())
+                    SetGizmoMode(GizmoMode.Rotate);
+                else
                 {
                     SetGizmoMode(GizmoMode.None);
                     StartKbTransform(GizmoMode.Rotate);
@@ -6258,7 +6282,9 @@ public partial class ViewportView : UserControl
     /// <summary>Cylinder-projection paths store the cutter at the station. Draw them on the part.</summary>
     RotaryDrawPose? RotaryDrawFor(PendingToolpathEntry entry)
     {
-        if (_rotaryBedPivot is null || !ToolpathUsesRotary(entry.Toolpath))
+        // A heated base is a fixed plate. E1 in an imported program must not
+        // swing those points around the rotary table.
+        if (_vm is { ActivePrintSurfaceIsHeated: true } || _rotaryBedPivot is null || !ToolpathUsesRotary(entry.Toolpath))
         {
             _toolpathRotaryWorldAtGenerate.Remove(entry.Node);
             return null;
@@ -7496,6 +7522,9 @@ public partial class ViewportView : UserControl
                 nameof(SubtractiveSettingsViewModel.ToolheadA)
                 or nameof(SubtractiveSettingsViewModel.ToolheadB)
                 or nameof(SubtractiveSettingsViewModel.ToolheadC)))
+                return;
+            // Ring drag: sliders update live, the path re-solves on release.
+            if (_toolOrientGizmoDrag)
                 return;
             if (_activeScrubNode is { } nd
                 && _toolpathByNode.TryGetValue(nd, out var tp)
@@ -9839,8 +9868,12 @@ public partial class ViewportView : UserControl
 
         // Locked outliner rows (robot, bed, locked toolheads) can't be selected —
         // except dev-editable props while dev mode is on.
+        // The mounted toolhead row stays locked so it is not dragged like a part.
+        // The click still has to select it, or the orientation rings never appear.
+        bool mountedTool = node is not null && ReferenceEquals(node, _currentToolNode);
         if (node is not null && vm.IsNodeLockedInOutliner(node)
-            && !(vm.IsDevMode && IsDevNode(node)))
+            && !(vm.IsDevMode && IsDevNode(node))
+            && !mountedTool)
             node = null;
 
         if (node is not null && OutlinerModelOps.IsScan(node) && vm.SelectedScanCount >= 1)
@@ -9976,6 +10009,109 @@ public partial class ViewportView : UserControl
         r1 = Vector3.Normalize(TransformDir(r1, rot));
         r2 = Vector3.Normalize(TransformDir(r2, rot));
         _ikDragTargetRot = (r0, r1, r2);
+    }
+
+    private bool ActiveScrubIsMill()
+        => _activeScrubNode is { } node
+           && _toolpathByNode.TryGetValue(node, out var tp)
+           && ToolpathHasMillMoves(tp);
+
+    /// <summary>
+    /// The rotate rings edit TOOLHEAD GLOBAL ORIENTATION. The sweep is applied
+    /// to the angles from when the drag started, so the total matches the ring.
+    /// </summary>
+    private void BeginToolheadOrientationDrag()
+    {
+        _toolOrientGizmoDrag = true;
+        _toolIsDragging = false;
+        if (DataContext is not ViewportViewModel vm)
+        {
+            _toolOrientDragMill = false;
+            _toolOrientDragStart = (0f, 0f, 0f);
+            return;
+        }
+        _toolOrientDragMill = ActiveScrubIsMill();
+        _toolOrientDragStart = ReadToolhead(vm, _toolOrientDragMill);
+        _toolOrientHoldTcp = _renderer.TcpFrameMatrix?.Row3.Xyz;
+    }
+
+    private void ApplyToolheadOrientationDrag(float deltaRad)
+    {
+        if (DataContext is not ViewportViewModel vm) return;
+        int axis = _gizmoDragAxis switch
+        {
+            GizmoAxis.X => 0,
+            GizmoAxis.Y => 1,
+            GizmoAxis.Z => 2,
+            _ => -1,
+        };
+        float deg = MathHelper.RadiansToDegrees(deltaRad);
+        var start = _toolOrientDragStart;
+        var next = ToolheadOrientationDrag.Apply(start.A, start.B, start.C, axis, deg);
+        WriteToolhead(vm, _toolOrientDragMill, next.A, next.B, next.C);
+        _scrubIkCacheStale = true;
+        if (vm.IsToolpathSelected || vm.IsScrubSessionActive || _activeScrubNode is not null)
+            ScrubIk(vm.ToolpathScrubIndex);
+        else
+            PoseToolheadAtHeldTcp(vm);
+    }
+
+    /// <summary>
+    /// No toolpath is loaded, so scrub has nothing to aim at. Turn the mounted
+    /// tool at the tip captured when the ring was grabbed. Preview joints only.
+    /// </summary>
+    private void PoseToolheadAtHeldTcp(ViewportViewModel vm)
+    {
+        if (_ikSolver is null || vm.Robot is not { } robot) return;
+        if (_toolOrientHoldTcp is not { } world) return;
+        robot.Desync();
+        RefreshIkSceneKinematics();
+        var targetRobroot = world - GetLiveRobrootWorldPos();
+        var (a, b, c) = ReadToolhead(vm, _toolOrientDragMill);
+        var down = Vector3.UnitZ;
+        var targetRot = _toolOrientDragMill
+            ? _ikSolver.TargetRotFromMillNormal(down, 0f, a, b, c)
+            : _ikSolver.TargetRotFromGlobalOrientation(down, a, b, c);
+        var seed = new[]
+        {
+            (float)robot.A1, (float)robot.A2, (float)robot.A3,
+            (float)robot.A4, (float)robot.A5, (float)robot.A6,
+        };
+        var result = _ikSolver.Solve(targetRobroot, seed, targetRot, maxIterations: 40,
+            requireOrientation: !_toolOrientDragMill);
+        if (result is null) return;
+        robot.A1 = Math.Round(result[0], 2);
+        robot.A2 = Math.Round(result[1], 2);
+        robot.A3 = Math.Round(result[2], 2);
+        robot.A4 = Math.Round(result[3], 2);
+        robot.A5 = Math.Round(result[4], 2);
+        robot.A6 = Math.Round(result[5], 2);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Ring released. One baseline or selected-key update, then one replay.
+    /// Does not insert a playhead key.
+    /// </summary>
+    private void FinishToolheadOrientationDrag(ViewportViewModel vm)
+    {
+        _orientPushTicket++;
+        _suppressOrientPush = false;
+        if (!CaptureKeyframeOrientation(vm, fromMill: _toolOrientDragMill))
+            ReplayToolheadOrientation(vm);
+    }
+
+    /// <summary>Console <c>toolorient</c>. Panel order is Y, X, Z. One replay, no new key.</summary>
+    private void SetGlobalToolheadOrientation(float yDeg, float xDeg, float zDeg)
+    {
+        if (DataContext is not ViewportViewModel vm) return;
+        bool mill = ActiveScrubIsMill();
+        _toolOrientDragMill = mill;
+        WriteToolhead(vm, mill,
+            ToolheadOrientationDrag.Wrap(zDeg),
+            ToolheadOrientationDrag.Wrap(yDeg),
+            ToolheadOrientationDrag.Wrap(xDeg));
+        FinishToolheadOrientationDrag(vm);
     }
 
     private bool IsToolNodeSelected()
@@ -10215,6 +10351,8 @@ public partial class ViewportView : UserControl
         _renderer.ActiveDragAxis = GizmoAxis.None;
         EndNavigationPreview();
         _toolIsDragging          = false;
+        if (IsToolNodeSelected() && _kbTransformOp == GizmoMode.Translate)
+            SetGizmoMode(GizmoMode.Rotate);
         // Followers are current — ApplyTransformLink ran on every mouse move of the gesture.
         // Dropping the baseline here stops a later, unrelated edit measuring its delta from it.
         EndTransformLink();
@@ -14081,6 +14219,8 @@ public partial class ViewportView : UserControl
         _gizmoDragAxis           = GizmoAxis.None;
         _renderer.ActiveDragAxis = GizmoAxis.None;
         _toolIsDragging          = false;
+        if (IsToolNodeSelected() && _kbTransformOp == GizmoMode.Translate)
+            SetGizmoMode(GizmoMode.Rotate);
         EndNavigationPreview();
         ClearBedClamp();
         GlCanvas.RequestNextFrameRendering();
@@ -14804,6 +14944,11 @@ public partial class ViewportView : UserControl
 
     private SceneNode? _lastOutlinerSyncedNode;
     private bool _wasToolNodeSelected;
+    /// <summary>Ring drag is writing Toolhead Y/X/Z. Skip the full-path replay until release.</summary>
+    private bool _toolOrientGizmoDrag;
+    private Vector3? _toolOrientHoldTcp;
+    private bool _toolOrientDragMill;
+    private (float A, float B, float C) _toolOrientDragStart;
 
     private void UpdateFocusOverlay()
     {
@@ -14855,9 +15000,13 @@ public partial class ViewportView : UserControl
             try
             {
                 vm.Robot?.Desync();
-                SetGizmoMode(GizmoMode.Translate);
+                // Rings on the click that selects the tool. Leaving the mode
+                // alone after that lets G grab, and lets Move / R switch it.
                 if (!_wasToolNodeSelected)
+                {
+                    SetGizmoMode(GizmoMode.Rotate);
                     vm.OnToolheadSelected?.Invoke();
+                }
             }
             catch (Exception ex)
             {
@@ -14914,7 +15063,7 @@ public partial class ViewportView : UserControl
     /// (<see cref="ToolpathMove.RpmPercentOverride"/>, e.g. the brim) which replaces the
     /// nominal-times-scale product entirely; a scale cannot express it.
     /// </summary>
-    private readonly List<(NVec3 Local, float Scale, float RpmScale, float? RpmAbs, float TempC)>
+    private readonly List<(NVec3 Local, float Scale, float RpmScale, float? RpmAbs, float TempC, int LayerIndex)>
         _viewTagBands = [];
 
     private void StartViewTagTimer(ViewportViewModel vm)
@@ -14979,7 +15128,7 @@ public partial class ViewportView : UserControl
                     if (found)
                     {
                         _viewTagBands.Add((new NVec3(best.X - origin.X, best.Y - origin.Y, best.Z - origin.Z),
-                                           scale, rpmScale, rpmAbs, layer.ThermalTempC));
+                                           scale, rpmScale, rpmAbs, layer.ThermalTempC, layer.Index));
                         nextBand += ViewTagBandMm;
                     }
                 }
@@ -14994,10 +15143,14 @@ public partial class ViewportView : UserControl
         float rpmBase   = vm.AdditiveSettings?.GetEffectiveExtrusionSpeedPercent() ?? 100f;
         float flow      = (float)(vm.AdditiveSettings?.SelectedPreset?.FlowRateFor(
                               vm.AdditiveSettings?.ActiveExtruderIsHf ?? false) ?? 0.463);
+        // Layer 0 (and a one-layer imported SRC) uses the first-layer speed and RPM when set.
+        KrlExportSettings? firstLayer = vm.AdditiveSettings is { } tagAdd
+            ? ToolpathRpm.ForLayer(tagAdd.ToRpmExportInputs(), 0)
+            : null;
 
         var wt   = node.WorldTransform;
         var tags = new List<ViewportViewModel.ViewTag>(_viewTagBands.Count);
-        foreach (var (local, scale, rpmScale, rpmAbs, tempC) in _viewTagBands)
+        foreach (var (local, scale, rpmScale, rpmAbs, tempC, layerIndex) in _viewTagBands)
         {
             var world = new TkVector3(
                 local.X * wt.M11 + local.Y * wt.M21 + local.Z * wt.M31 + wt.M41,
@@ -15009,11 +15162,17 @@ public partial class ViewportView : UserControl
 
             var overlayPt = this.TranslatePoint(new Point(p.X + 14, p.Y - 9), OverlayView)
                             ?? new Point(p.X + 14, p.Y - 9);
+            float bandSpeed = layerIndex == 0 && firstLayer is { } first
+                ? first.PrintSpeedMps * 1000f
+                : baseSpeed;
+            float bandRpm = layerIndex == 0 && firstLayer is { } firstRpm
+                ? ToolpathRpm.BasePercent(firstRpm)
+                : rpmBase;
             string text = vm.ViewMode switch
             {
-                "Speed"   => $"{baseSpeed * scale:0} mm/s",
+                "Speed"   => $"{bandSpeed * scale:0} mm/s",
                 "Thermal" => float.IsNaN(tempC) ? "— °C" : $"{tempC:0} °C interface",
-                _         => $"{rpmAbs ?? rpmBase * rpmScale:0}% RPM (Flowrate {flow:0.###})",
+                _         => $"{rpmAbs ?? bandRpm * rpmScale:0}% RPM (Flowrate {flow:0.###})",
             };
             tags.Add(new ViewportViewModel.ViewTag(overlayPt.X, overlayPt.Y, text));
         }
@@ -15023,38 +15182,39 @@ public partial class ViewportView : UserControl
     // -- TCP keyframes -----------------------------------------------------------
 
     /// <summary>
-    /// Records (or updates) a keyframe at the current scrub index. A TCP drag stores a
-    /// position offset. The toolhead Y/X/Z sliders are stored too: later slider edits
-    /// while this key stays selected overwrite that saved orientation. Playback eases
-    /// from it into the next key, or back to the orientation captured here as the
-    /// non-keyed baseline.
+    /// Records (or updates) a keyframe at the current scrub index. The toolhead
+    /// Y/X/Z sliders are stored on a new key. A later slider edit while that key
+    /// stays selected overwrites the saved angle and does not move the cuts.
+    /// <paramref name="translatedTcp"/> is a translate drag of the tip: only that
+    /// stores a position offset. Tilting the toolhead, or pressing key-plus,
+    /// leaves every cut where it was.
     /// </summary>
-    private void AddTcpKeyframeAtCurrentIndex(ViewportViewModel vm)
+    private void AddTcpKeyframeAtCurrentIndex(ViewportViewModel vm, bool translatedTcp = false)
     {
         if (_activeScrubNode is not { } node) return;
         if (!_scrubCacheByNode.TryGetValue(node, out var cache) || cache.Length == 0) return;
 
         int index = Math.Clamp(vm.ToolpathScrubIndex, 0, cache.Length - 1);
 
-        // Nominal path position at this move (same transform chain as ScrubIkForNode).
-        var (pos, _) = cache[index];
-        NVec3 nominal;
-        if (_toolpathOriginByNode.TryGetValue(node, out var origin))
-        {
-            var wt = node.WorldTransform;
-            float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
-            nominal = new NVec3(
-                lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
-                lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
-                lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
-        }
-        else nominal = pos;
-
-        // Where the TCP actually is now (after the user's drag). No drag still pins
-        // the key so the orientation sliders have somewhere to save.
+        // A tilted spindle's tip is not the cut. Sampling it on an angle key
+        // used to slide the whole window off the part.
         var offset = NVec3.Zero;
-        if (_renderer.TcpFrameMatrix is { } tcpMat)
+        if (TcpKeyframeSelection.StoresPositionOffset(translatedTcp)
+            && _renderer.TcpFrameMatrix is { } tcpMat)
         {
+            var (pos, _) = cache[index];
+            NVec3 nominal;
+            if (_toolpathOriginByNode.TryGetValue(node, out var origin))
+            {
+                var wt = node.WorldTransform;
+                float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
+                nominal = new NVec3(
+                    lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
+                    lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
+                    lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
+            }
+            else nominal = pos;
+
             var tcpWorld = new NVec3(tcpMat.M41, tcpMat.M42, tcpMat.M43);
             offset = tcpWorld - nominal;
         }
@@ -15073,9 +15233,11 @@ public partial class ViewportView : UserControl
         var existing  = keys.Find(k => k.Index == index);
         if (existing is not null)
         {
-            // Position only. The sliders belong to whichever key is selected, and
-            // copying them here wrote one key's angle onto the key under the playhead.
-            existing.Offset = offset;
+            // Position only, and only after a translate. An angle edit keeps the
+            // cuts, and copying the sliders here wrote one key's angle onto the
+            // key under the playhead.
+            if (TcpKeyframeSelection.StoresPositionOffset(translatedTcp))
+                existing.Offset = offset;
         }
         else
         {
@@ -15092,7 +15254,10 @@ public partial class ViewportView : UserControl
         _selectedTcpKey = keys.FindIndex(k => k.Index == index);
         var saved = keys[_selectedTcpKey];
 
-        ApplyTcpKeyframes(vm, node);
+        // An angle pressed onto a key that is already here does not move the cuts,
+        // so the 1.7M-move rebake stays put. A new key still stamps its angle.
+        if (existing is null || TcpKeyframeSelection.StoresPositionOffset(translatedTcp))
+            ApplyTcpKeyframes(vm, node);
         if (saved.HasOrient)
             WriteToolhead(vm, mill, saved.OrientA, saved.OrientB, saved.OrientC);
         PushSelectedKeyframeOffset(vm);
@@ -15111,7 +15276,7 @@ public partial class ViewportView : UserControl
         if (_keyframeBaseByNode.Remove(node, out var basePath))
             SchedulePathRecalc(vm, () =>
             {
-                SwapScrubbedToolpath(vm, node, basePath);
+                SwapScrubbedToolpath(vm, node, basePath, rebaseToCentroid: true);
                 ReplayToolheadOrientation(vm);
             });
         else
@@ -15182,6 +15347,9 @@ public partial class ViewportView : UserControl
         vm.SetScrubKeyframes(
             keys.Select(x => (x.Index, x.InfluenceLeft, x.InfluenceRight)).ToArray(),
             keyIdx);
+        // The tail stays put as a size handle. Selecting it parks the playhead on the key.
+        if (vm.ToolpathScrubIndex != k.Index)
+            vm.ToolpathScrubIndex = k.Index;
         if (selectionChanged || commit)
         {
             if (k.HasOrient && _toolpathByNode.TryGetValue(node, out var tpKind))
@@ -15193,7 +15361,7 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Shift-drag: slide the key along the timeline. Its influence widths stay put.
+    /// Ctrl-drag: slide the key along the timeline. Its influence widths stay put.
     /// The scrubber follows the key. The path rebakes on release.
     /// </summary>
     private void DragTcpKeyframe(ViewportViewModel vm, int keyIdx, double px, bool commit)
@@ -15388,7 +15556,10 @@ public partial class ViewportView : UserControl
         if (!_keyframeBaseByNode.TryGetValue(node, out var basePath)) return;
 
         var modified = BuildOffsetToolpath(basePath, keys, node);
-        SwapScrubbedToolpath(vm, node, modified);
+        // The offset moves the centroid. Rebase so the node matches that origin.
+        // Keeping the old center draws every move shifted by the average offset,
+        // including the moves outside the green window that should stay on the part.
+        SwapScrubbedToolpath(vm, node, modified, rebaseToCentroid: true);
 
         vm.HasTcpKeyframes = true;
         vm.SetScrubKeyframes(
@@ -15402,7 +15573,12 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>In-place toolpath swap that keeps the scrub position and node pose.</summary>
-    private void SwapScrubbedToolpath(ViewportViewModel vm, SceneNode node, Toolpath toolpath)
+    /// <param name="rebaseToCentroid">
+    /// Park the node on the new geometry centroid. Required when the points themselves
+    /// moved (a keyframe offset). Leaving the old center on the node shifts the whole
+    /// draw by the centroid delta.
+    /// </param>
+    private void SwapScrubbedToolpath(ViewportViewModel vm, SceneNode node, Toolpath toolpath, bool rebaseToCentroid = false)
     {
         _toolpathByNode[node]    = toolpath;
         _scrubCacheByNode[node]  = BuildScrubCache(toolpath);
@@ -15411,6 +15587,7 @@ public partial class ViewportView : UserControl
         var preservedLocal = node.LocalTransform;
         if (!_toolpathOriginByNode.TryGetValue(node, out var preservedOrigin))
             preservedOrigin = new NVec3(preservedLocal.M41, preservedLocal.M42, preservedLocal.M43);
+        _millRotaryAtGenerate.TryGetValue(node, out var rotary);
 
         vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
         {
@@ -15422,6 +15599,10 @@ public partial class ViewportView : UserControl
             PreserveRelativePose    = true,
             PreservedLocalTransform = preservedLocal,
             PreservedOrigin         = preservedOrigin,
+            RebaseToFreshCentroid   = rebaseToCentroid,
+            RotaryE1AtGenerate      = rotary.E1,
+            RotaryCenter            = rotary.Center,
+            RotaryWorldAtGenerate   = rotary.World,
         });
         if (ReferenceEquals(node, _activeScrubNode))
             vm.ReplaceScrubToolpathInPlace(toolpath);
@@ -15470,10 +15651,9 @@ public partial class ViewportView : UserControl
 
     /// <summary>
     /// Slider edit while a keyframe is selected: save Y/X/Z on that key. With keys
-    /// on the path and none selected, the edit is saved as a key at the playhead.
-    /// The value the sliders had when the first key was created stays the orientation
-    /// outside those keys. Returns true when the change was consumed (including a
-    /// suppressed push of the blended angle back into the sliders).
+    /// on the path and none selected, the edit changes the global baseline and does
+    /// not add a key. Returns true when the change was consumed (including a
+    /// suppressed push of the baseline back into the sliders).
     /// </summary>
     private bool CaptureKeyframeOrientation(ViewportViewModel vm, bool fromMill)
     {
@@ -15482,13 +15662,13 @@ public partial class ViewportView : UserControl
         if (!_toolpathByNode.TryGetValue(node, out var tp)) return false;
         bool mill = ToolpathHasMillMoves(tp);
         if (mill != fromMill) return true;
-        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys) || keys.Count == 0)
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys) || !keys.Exists(k => k.HasOrient))
             return false;
 
         var now = ReadToolhead(vm, mill);
         if (_selectedTcpKey < 0 || _selectedTcpKey >= keys.Count)
         {
-            SavePlayheadOrientation(vm, node, keys, now);
+            UpdateOrientBaseline(vm, node, now);
             return true;
         }
 
@@ -15501,85 +15681,34 @@ public partial class ViewportView : UserControl
         return true;
     }
 
-    /// <summary>
-    /// Saves the current toolhead angles on the move under the playhead.
-    /// An empty move gains a key. A key already on that move takes the new angle.
-    /// The position offset stays the blend the path already had there.
-    /// </summary>
-    private void SavePlayheadOrientation(
-        ViewportViewModel vm, SceneNode node, List<TcpKey> keys, (float A, float B, float C) now)
+    /// <summary>Stores the slider angles as the orientation outside every influence window.</summary>
+    private void UpdateOrientBaseline(ViewportViewModel vm, SceneNode node, (float A, float B, float C) now)
     {
-        int index = vm.ToolpathScrubIndex;
-        if (_scrubCacheByNode.TryGetValue(node, out var cache) && cache.Length > 0)
-            index = Math.Clamp(index, 0, cache.Length - 1);
-
-        var existing = keys.Find(k => k.Index == index);
-        if (!TcpKeyframeSelection.InsertAtPlayhead(hasKeys: true, keySelected: false, playheadOccupied: existing is not null))
-        {
-            if (existing is null) return;
-            if (existing.HasOrient
-                && SameAngle(existing.OrientA, now.A)
-                && SameAngle(existing.OrientB, now.B)
-                && SameAngle(existing.OrientC, now.C))
-                return;
-            existing.HasOrient = true;
-            existing.OrientA = now.A;
-            existing.OrientB = now.B;
-            existing.OrientC = now.C;
-            PoseKeyframeOrientation(vm, node);
+        if (_orientBaseByNode.TryGetValue(node, out var had)
+            && SameAngle(had.A, now.A) && SameAngle(had.B, now.B) && SameAngle(had.C, now.C))
             return;
-        }
-
-        if (_toolpathByNode.TryGetValue(node, out var tp))
-        {
-            var eased = OrientationAt(node, index, ToolpathHasMillMoves(tp), vm);
-            if (SameAngle(eased.A, now.A) && SameAngle(eased.B, now.B) && SameAngle(eased.C, now.C))
-                return;
-        }
-
-        int influence = Math.Max((int)vm.KeyframeSmoothing, 5);
-        var samples = new TcpKeyframeOffset.Sample[keys.Count];
-        for (int i = 0; i < keys.Count; i++)
-        {
-            var src = keys[i];
-            samples[i] = new TcpKeyframeOffset.Sample(src.Index, src.Offset, src.InfluenceLeft, src.InfluenceRight);
-        }
-        var held = TcpKeyframeOffset.At(index, samples);
-        keys.Add(new TcpKey
-        {
-            Index = index,
-            Offset = held,
-            InfluenceLeft = influence,
-            InfluenceRight = influence,
-            HasOrient = true,
-            OrientA = now.A,
-            OrientB = now.B,
-            OrientC = now.C,
-        });
-        keys.Sort((a, b) => a.Index.CompareTo(b.Index));
-        vm.RevealTcpKeyframeLane();
-        ApplyTcpKeyframes(vm, node);
-        vm.OnDevLog?.Invoke(
-            $"[tcpkey] move {index}  orient Y={now.B:0.#} X={now.C:0.#} Z={now.A:0.#}  offset ({held.X:0.#},{held.Y:0.#},{held.Z:0.#})");
+        _orientBaseByNode[node] = now;
+        PoseKeyframeOrientation(vm, node);
     }
 
     /// <summary>
-    /// With no key selected, the toolhead Y/X/Z sliders show the eased angle at the playhead.
+    /// With no key selected, the toolhead Y/X/Z sliders show the global baseline.
+    /// Scrub and play leave them there, so moving a slider edits that baseline.
     /// </summary>
     private void ShowBlendedToolhead(ViewportViewModel vm)
     {
+        // A ring drag owns the sliders until release. Putting the baseline
+        // back here would cancel the drag on the next scrub solve.
+        if (_toolOrientGizmoDrag) return;
         if (_activeScrubNode is not { } node) return;
         if (!TcpKeyframeSelection.ShowBlend(HasOrientKeys(node), _selectedTcpKey >= 0)) return;
         if (!_toolpathByNode.TryGetValue(node, out var tp)) return;
         bool mill = ToolpathHasMillMoves(tp);
-        var eased = OrientationAt(node, vm.ToolpathScrubIndex, mill, vm);
-        float a = MathF.Round(eased.A, 1);
-        float b = MathF.Round(eased.B, 1);
-        float c = MathF.Round(eased.C, 1);
+        var baseline = _orientBaseByNode.TryGetValue(node, out var b) ? b : ReadToolhead(vm, mill);
         var cur = ReadToolhead(vm, mill);
-        if (SameAngle(cur.A, a) && SameAngle(cur.B, b) && SameAngle(cur.C, c))
+        if (SameAngle(cur.A, baseline.A) && SameAngle(cur.B, baseline.B) && SameAngle(cur.C, baseline.C))
             return;
-        WriteToolhead(vm, mill, a, b, c);
+        WriteToolhead(vm, mill, baseline.A, baseline.B, baseline.C);
     }
 
     static bool SameAngle(float a, float b) => MathF.Abs(a - b) < 0.05f;
@@ -16013,7 +16142,11 @@ public partial class ViewportView : UserControl
         bool millScrub = _toolpathByNode.TryGetValue(scrubNode, out var tpOri)
                          && ToolpathHasMillMoves(tpOri);
         float millYaw = millScrub ? MillMoveYaw(tpOri, moveIdx) : 0f;
-        var orient = OrientationAt(scrubNode, index, millScrub, vm);
+        // A ring drag shows the slider angle on this frame. The eased keys
+        // catch up when the ring is released.
+        var orient = _toolOrientGizmoDrag
+            ? ReadToolhead(vm, millScrub)
+            : OrientationAt(scrubNode, index, millScrub, vm);
         var targetRot = millScrub
             ? solver.TargetRotFromMillNormal(worldNormal, millYaw, orient.A, orient.B, orient.C)
             : solver.TargetRotFromGlobalOrientation(worldNormal, orient.A, orient.B, orient.C);
@@ -16390,9 +16523,128 @@ public partial class ViewportView : UserControl
                     // wrist. Markers and playback pick up the new solutions; the
                     // pose the user stopped on stays put.
                 }
+                SyncJointGraph();
                 GlCanvas.RequestNextFrameRendering();
             });
         });
+    }
+
+    private DispatcherTimer? _layerSpeedTimer;
+    private DispatcherTimer? _motionStatsTimer;
+
+    private static bool IsLayerSpeedInput(string? name)
+        => name is nameof(AdditiveSettingsViewModel.PrintSpeed)
+            or nameof(AdditiveSettingsViewModel.LayerSpeedAdaptEnabled)
+            or nameof(AdditiveSettingsViewModel.LayerSpeedBasisDisplay)
+            or nameof(AdditiveSettingsViewModel.LayerSpeedMinMmS)
+            or nameof(AdditiveSettingsViewModel.LayerSpeedMaxMmS)
+            or nameof(AdditiveSettingsViewModel.LayerSpeedNotes);
+
+    /// <summary>
+    /// Adaptive speed stores mm/s divided by the print speed, so those scales have to be
+    /// rewritten when the print speed or the adaptive window changes. Turning it off clears
+    /// scales that were written while it was on. A plain print-speed edit while it is off
+    /// leaves every scale at 1 and only the readout changes.
+    /// </summary>
+    private static bool NeedsLayerSpeedReprocess(AdditiveSettingsViewModel s, string? name)
+    {
+        if (!IsLayerSpeedInput(name)) return false;
+        if (s.LayerSpeedAdaptEnabled) return true;
+        return name == nameof(AdditiveSettingsViewModel.LayerSpeedAdaptEnabled);
+    }
+
+    private static bool IsMotionReadout(string? name)
+        => name is nameof(AdditiveSettingsViewModel.TravelSpeed)
+            or nameof(AdditiveSettingsViewModel.WipeSpeed)
+            or nameof(AdditiveSettingsViewModel.ExtrusionSpeedOffset)
+            or nameof(AdditiveSettingsViewModel.ExtrusionRpmOverridePercent)
+            or nameof(AdditiveSettingsViewModel.BeadWidth)
+            or nameof(AdditiveSettingsViewModel.LayerHeight)
+            or nameof(AdditiveSettingsViewModel.SelectedPresetIndex)
+            or nameof(AdditiveSettingsViewModel.ActiveExtruderIsHf)
+            or nameof(AdditiveSettingsViewModel.FirstLayerSpeed)
+            or nameof(AdditiveSettingsViewModel.FirstLayerRpm)
+            or nameof(AdditiveSettingsViewModel.FirstLayerPrintSpeedOffset)
+            or nameof(AdditiveSettingsViewModel.FirstLayerRpmOffset)
+            or nameof(AdditiveSettingsViewModel.FirstLayerAdjustmentsEnabled)
+            or nameof(AdditiveSettingsViewModel.FirstLayerHeight);
+
+    private static bool IsMotionStatsInput(string? name)
+        => name is nameof(AdditiveSettingsViewModel.TravelSpeed)
+            or nameof(AdditiveSettingsViewModel.WipeSpeed)
+            or nameof(AdditiveSettingsViewModel.BeadWidth)
+            or nameof(AdditiveSettingsViewModel.LayerHeight)
+            or nameof(AdditiveSettingsViewModel.SelectedPresetIndex);
+
+    private void RefreshMotionReadout(ViewportViewModel vm, bool recomputeStats)
+    {
+        vm.NotifyToolpathMotionReadout();
+        if (recomputeStats)
+            ScheduleMotionStats();
+    }
+
+    private void ScheduleMotionStats()
+    {
+        if (_motionStatsTimer is null)
+        {
+            _motionStatsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            _motionStatsTimer.Tick += (_, _) =>
+            {
+                _motionStatsTimer.Stop();
+                if (DataContext is not ViewportViewModel live) return;
+                if (MotionStatsToolpath(live) is { } tp)
+                    ApplyToolpathStats(live, tp);
+            };
+        }
+        _motionStatsTimer.Stop();
+        _motionStatsTimer.Start();
+    }
+
+    private void ScheduleLayerSpeed()
+    {
+        if (_layerSpeedTimer is null)
+        {
+            _layerSpeedTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            _layerSpeedTimer.Tick += (_, _) =>
+            {
+                _layerSpeedTimer.Stop();
+                if (DataContext is ViewportViewModel live && live.AdditiveSettings is { } s)
+                    ApplyLayerSpeedInPlace(live, s);
+            };
+        }
+        _layerSpeedTimer.Stop();
+        _layerSpeedTimer.Start();
+    }
+
+    /// <summary>
+    /// Rewrites per-move speed scales on the path that is already drawn. Does not upload a
+    /// new toolpath, so the stored joint solutions and the realtime pause stay as they are.
+    /// The next frame's RPM pass rebuilds the line colours from the new scales.
+    /// </summary>
+    private void ApplyLayerSpeedInPlace(ViewportViewModel vm, AdditiveSettingsViewModel s)
+    {
+        if (_toolpathByNode.IsEmpty) return;
+        var settings = BuildSliceSettings(s, _renderer.BedZ);
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            LayerSpeedPostProcessor.ApplyInPlace(tp, settings);
+            _rpmApplied.Remove(node);
+        }
+        _rpmDirty = true;
+        vm.NotifyToolpathMotionReadout();
+        if (MotionStatsToolpath(vm) is { } statsTp)
+            ApplyToolpathStats(vm, statsTp);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private Toolpath? MotionStatsToolpath(ViewportViewModel vm)
+    {
+        if (_activeScrubNode is { } node && _toolpathByNode.TryGetValue(node, out var scrubbed))
+            return scrubbed;
+        if (vm.IsToolpathSelected && _renderer.SelectedNode is { } selected
+            && _toolpathByNode.TryGetValue(selected, out var selectedPath))
+            return selectedPath;
+        return null;
     }
 
     /// <summary>
@@ -18438,7 +18690,18 @@ public partial class ViewportView : UserControl
             EndTransformLink();
             BeginGroupDrag(groupVm, dragOp);
         }
-        BeginToolIkDrag(node);
+        if (IsToolNodeSelected()
+            && dragOp == GizmoMode.Rotate
+            && axis is GizmoAxis.X or GizmoAxis.Y or GizmoAxis.Z)
+        {
+            // The rings write the orientation sliders. They do not solve an
+            // IK pose, and they do not carry the toolpath with the tool node.
+            EndTransformLink();
+            _toolIsDragging = false;
+            BeginToolheadOrientationDrag();
+        }
+        else
+            BeginToolIkDrag(node);
         switch (dragOp)
         {
             case GizmoMode.Translate:
@@ -19243,6 +19506,12 @@ public partial class ViewportView : UserControl
             delta = MathHelper.DegreesToRadians(MathF.Round(deg / StepDeg) * StepDeg);
         }
 
+        if (_toolOrientGizmoDrag)
+        {
+            ApplyToolheadOrientationDrag(delta);
+            return;
+        }
+
         if (_toolIsDragging)
         {
             ApplyToolRotationDelta(delta);
@@ -19813,18 +20082,23 @@ public partial class ViewportView : UserControl
         var settings = vm.AdditiveSettings;
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
+        if (!TryExportSpan(vm, toolpath, out var rpmPath, out var trim)) return;
 
-        if (!await BlockExportOnRpmLimitAsync(vm, toolpath, settings)) return;
+        if (!await BlockExportOnRpmLimitAsync(vm, rpmPath, settings)) return;
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
         if (topLevel is null) return;
 
+        var suggested = trim is { } named
+            ? TimelineTrim.AppendProgramSuffix(
+                RobotKrlPaths.SuggestedFileName(node.Name), named.Start, named.End, RobotKrlPaths.MaxSrcStemLength)
+            : RobotKrlPaths.SuggestedFileName(node.Name);
         var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title              = "Export KRL",
+            Title              = trim is null ? "Export KRL" : "Export section",
             DefaultExtension   = "src",
-            SuggestedFileName  = RobotKrlPaths.SuggestedFileName(node.Name),
+            SuggestedFileName  = suggested,
             FileTypeChoices    = [new("KRL Source") { Patterns = ["*.src"] }],
         });
         if (file is null) return;
@@ -19832,14 +20106,74 @@ public partial class ViewportView : UserControl
         var path = file.TryGetLocalPath();
         if (path is null) return;
 
-        // Enforce PointLoader-safe stem even if the user typed special characters in the dialog.
+        if (trim is { } span)
+            path = SectionSrcPath(path, span.Start, span.End);
+        else
+        {
+            // Enforce PointLoader-safe stem even if the user typed special characters in the dialog.
+            path = SavePathUtil.Normalize(path, "src");
+            var dir = Path.GetDirectoryName(path) ?? ".";
+            var stem = RobotKrlPaths.SanitizeStem(Path.GetFileNameWithoutExtension(path));
+            if (string.IsNullOrWhiteSpace(stem)) stem = "PrintJob";
+            path = Path.Combine(dir, stem + ".src");
+        }
+
+        if (!await WriteKrlAsync(vm, toolpath, node, cell, settings, path, trim)) return;
+        if (trim is { } done)
+        {
+            LogToConsole($"[trim] wrote {path}  moves {done.Start}–{done.End}");
+            SetSliceStatus(vm, $"Section {done.Start}–{done.End} exported");
+        }
+    }
+
+    /// <summary>
+    /// The marked timeline section, or null when Save and Send should write the
+    /// whole path. An empty span is reported and returns false.
+    /// </summary>
+    private bool TryExportSpan(
+        ViewportViewModel vm, Toolpath toolpath,
+        out Toolpath rpmPath, out (int Start, int End)? trim)
+    {
+        trim = vm.HasTimelineTrim
+            ? (vm.TimelineTrimStart!.Value, vm.TimelineTrimEnd!.Value)
+            : null;
+        if (trim is not { } span)
+        {
+            rpmPath = toolpath;
+            return true;
+        }
+
+        try
+        {
+            rpmPath = TimelineTrim.Extract(toolpath, span.Start, span.End);
+            return true;
+        }
+        catch (InvalidOperationException ex)
+        {
+            LogToConsole($"[trim] {ex.Message}");
+            SetSliceStatus(vm, ex.Message, isError: true);
+            rpmPath = toolpath;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// PointLoader-safe <c>.src</c> path whose stem ends in <c>_mStart-End</c>.
+    /// The suffix names the scrub span and is kept when the stem is shortened.
+    /// </summary>
+    private static string SectionJobName(string name, (int Start, int End)? trim)
+        => trim is { } span
+            ? TimelineTrim.AppendProgramSuffix(name, span.Start, span.End, RobotKrlPaths.MaxSrcStemLength)
+            : name;
+
+    private static string SectionSrcPath(string path, int start, int end)
+    {
         path = SavePathUtil.Normalize(path, "src");
         var dir = Path.GetDirectoryName(path) ?? ".";
         var stem = RobotKrlPaths.SanitizeStem(Path.GetFileNameWithoutExtension(path));
         if (string.IsNullOrWhiteSpace(stem)) stem = "PrintJob";
-        path = Path.Combine(dir, stem + ".src");
-
-        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
+        stem = TimelineTrim.AppendProgramSuffix(stem, start, end, RobotKrlPaths.MaxSrcStemLength);
+        return Path.Combine(dir, stem + ".src");
     }
 
     /// <summary>Writes the active toolpath's KRL into <paramref name="dir"/> named after
@@ -19893,12 +20227,19 @@ public partial class ViewportView : UserControl
         var cell     = vm.ActiveCell;
         var settings = vm.AdditiveSettings;
         if (toolpath is null || node is null || cell is null || settings is null) return null;
+        if (!TryExportSpan(vm, toolpath, out _, out var trim)) return null;
 
         // Rev in the filename (and therefore the KRL program name) so the operator
         // can tell revisions apart on the controller, e.g. "2026_0710 - Drone Print V90 Rev08.src".
         // Sanitized for PointLoader (keeps spaces / " - " / RevNN; drops crazy punctuation).
+        // A marked section keeps that rev name and adds _mStart-End.
         string path = Path.Combine(dir, RobotKrlPaths.SuggestedSrcFileName(node.Name, rev));
-        return await WriteKrlAsync(vm, toolpath, node, cell, settings, path) ? path : null;
+        if (trim is { } span)
+            path = SectionSrcPath(path, span.Start, span.End);
+        if (!await WriteKrlAsync(vm, toolpath, node, cell, settings, path, trim)) return null;
+        if (trim is { } done)
+            LogToConsole($"[trim] wrote {path}  moves {done.Start}–{done.End}");
+        return path;
     }
 
     private async Task SendToRobotAsync(ViewportViewModel vm)
@@ -19916,6 +20257,7 @@ public partial class ViewportView : UserControl
         var settings = vm.AdditiveSettings;
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
+        if (!TryExportSpan(vm, toolpath, out var rpmPath, out var trim)) return;
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
         var mvm = topLevel?.DataContext as MainWindowViewModel;
@@ -19932,7 +20274,7 @@ public partial class ViewportView : UserControl
             return;
         }
 
-        if (!await BlockExportOnRpmLimitAsync(vm, toolpath, settings)) return;
+        if (!await BlockExportOnRpmLimitAsync(vm, rpmPath, settings)) return;
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         // The NAS keeps a copy per revision (3D Print Files/Rev N/) and the robot
@@ -19953,7 +20295,12 @@ public partial class ViewportView : UserControl
         {
             fileName = RobotKrlPaths.SuggestedSrcFileName(node.Name);
             srcPath  = Path.Combine(Path.GetTempPath(), fileName);
-            if (!await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath)) return;
+            if (trim is { } span)
+            {
+                srcPath = SectionSrcPath(srcPath, span.Start, span.End);
+                fileName = Path.GetFileName(srcPath);
+            }
+            if (!await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath, trim)) return;
             mvm?.Console.Log("[robot] workspace not saved on the NAS — no 3D Print Files copy kept.");
         }
         byte[] content = await File.ReadAllBytesAsync(srcPath);
@@ -20062,9 +20409,10 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        if (!TryExportSpan(vm, toolpath, out var exportPath, out var trim)) return;
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
-        bool millJob = toolpath.Layers.Any(l => l.Moves.Any(m => m.Kind == MoveKind.Mill));
+        bool millJob = exportPath.Layers.Any(l => l.Moves.Any(m => m.Kind == MoveKind.Mill));
         var mill = vm.SubtractiveSettings;
 
         var wt = node.WorldTransform;
@@ -20085,7 +20433,9 @@ public partial class ViewportView : UserControl
 
         var exportSettings = new MassiveDriveExportSettings
         {
-            Name = string.IsNullOrWhiteSpace(node.Name) ? (millJob ? "mill-job" : "print-job") : node.Name,
+            Name = SectionJobName(
+                string.IsNullOrWhiteSpace(node.Name) ? (millJob ? "mill-job" : "print-job") : node.Name,
+                trim),
             CellId = target.CellId ?? cell.MassiveDriveCellId ?? "lfam3",
             JobId = Guid.NewGuid().ToString("N")[..12],
             Tool = toolNo,
@@ -20127,7 +20477,7 @@ public partial class ViewportView : UserControl
         MassiveDriveJobBuild build;
         try
         {
-            build = await Task.Run(() => MassiveDriveJobExporter.Export(toolpath, exportSettings));
+            build = await Task.Run(() => MassiveDriveJobExporter.Export(exportPath, exportSettings));
         }
         catch (Exception ex)
         {
@@ -20141,7 +20491,9 @@ public partial class ViewportView : UserControl
         bool useLegacy = MassiveDriveSendPolicy.UseLegacyJson(segCount, forceLegacy);
         mvm?.Console.Log(
             $"[drive] Sending \"{exportSettings.Name}\" ({segCount} segs) T{exportSettings.Tool} B{exportSettings.Base} BASE "
-            + $"{(useLegacy ? "v1 JSON" : "v2")} → {target.Url} …");
+            + $"{(useLegacy ? "v1 JSON" : "v2")} → {target.Url}"
+            + (trim is { } span ? $"  section {span.Start}–{span.End}" : "")
+            + " …");
 
         try
         {
@@ -20251,6 +20603,8 @@ public partial class ViewportView : UserControl
                 }
                 }
             }
+
+            mvm?.StatusBar.ShowUploadedDriveJob(packageId);
 
             if (millJob)
             {
@@ -20589,22 +20943,7 @@ public partial class ViewportView : UserControl
     /// no second calculation that could drift.
     /// </summary>
     private static KrlExportSettings RpmInputs(AdditiveSettingsViewModel s)
-        => new()
-        {
-            ProgramName          = "rpm",
-            BeadWidthMm          = (float)s.BeadWidth,
-            LayerHeightMm        = (float)s.LayerHeight,
-            PrintSpeedMps        = (float)(s.PrintSpeed / 1000.0),
-            // Per-head flow: an HF toolhead has its own rate. Only a fallback for RPM
-            // (ExtrusionRpmPercent is always set below) but rpm-report prints it, and a
-            // report naming the wrong head's flow is the sort of small lie this avoids.
-            FlowRate             = (float)(s.SelectedPreset?.FlowRateFor(s.ActiveExtruderIsHf) ?? 0.463),
-            ExtrusionRpmPercent  = s.GetEffectiveExtrusionSpeedPercent(),
-            FirstLayerSpeedMps   = s.HasFirstLayerPrintSpeedAdjust
-                                       ? (float)(s.FirstLayerSpeedEffective / 1000.0) : 0f,
-            FirstLayerRpmPercent = s.HasFirstLayerRpmAdjust
-                                       ? (float)s.FirstLayerRpmEffective : 0f,
-        };
+        => s.ToRpmExportInputs();
 
     /// <summary>Copies the shared RPM inputs onto a full export settings record.</summary>
     private static KrlExportSettings WithRpmInputs(KrlExportSettings s, AdditiveSettingsViewModel a)
@@ -20735,7 +21074,8 @@ public partial class ViewportView : UserControl
         SceneNode node,
         CellConfig cell,
         AdditiveSettingsViewModel settings,
-        string path)
+        string path,
+        (int Start, int End)? trim = null)
     {
         // The export's own cell decides the robot recipe, even if the active-cell hook
         // has not caught up yet.
@@ -20774,8 +21114,26 @@ public partial class ViewportView : UserControl
             }
         }
 
+        // Section export copies the span after the full-path rail plan, so each kept
+        // move still carries the E1 the whole job would have used. A second plan on
+        // the short copy would restart the rail. Full exports pass no trim.
+        var exportPath = toolpath;
+        if (trim is { } span)
+        {
+            try
+            {
+                exportPath = TimelineTrim.Extract(toolpath, span.Start, span.End);
+            }
+            catch (InvalidOperationException ex)
+            {
+                LogToConsole($"[trim] {ex.Message}");
+                SetSliceStatus(vm, ex.Message, isError: true);
+                return false;
+            }
+        }
+
         // Relief-milling toolpath: export a spindle program (LIN cuts + rapids), not extrusion.
-        bool isMill = toolpath.Layers.Any(l => l.Moves.Any(m => m.Kind == MoveKind.Mill));
+        bool isMill = exportPath.Layers.Any(l => l.Moves.Any(m => m.Kind == MoveKind.Mill));
         if (isMill && vm.SubtractiveSettings is { } sub)
         {
             int spindleIdx = cell.EffectiveTools
@@ -20822,7 +21180,7 @@ public partial class ViewportView : UserControl
                 WorkspaceFileName = CurrentMassWorkspaceFileName(),
                 CellName         = cell.Name,
             };
-            var millKrl = await Task.Run(() => KrlExporter.Export(toolpath, millExport));
+            var millKrl = await Task.Run(() => KrlExporter.Export(exportPath, millExport));
             await File.WriteAllTextAsync(path, millKrl);
             return true;
         }
@@ -20911,7 +21269,7 @@ public partial class ViewportView : UserControl
         string krl;
         try
         {
-            krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));
+            krl = await Task.Run(() => KrlExporter.Export(exportPath, exportSettings));
         }
         catch (RpmLimitExceededException ex)
         {

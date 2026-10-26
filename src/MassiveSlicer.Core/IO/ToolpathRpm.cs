@@ -132,10 +132,9 @@ public static class ToolpathRpm
         int flat = 0, overCount = 0;
         float peak = 0f;
 
-        for (int li = 0; li < toolpath.Layers.Count; li++)
+        foreach (var layer in toolpath.Layers)
         {
-            var layer  = toolpath.Layers[li];
-            var layerS = ForLayer(settings, li);
+            var layerS = ForLayer(settings, layer.Index);
 
             int spanFirst = -1, spanLast = -1;
             float spanPeak = 0f;
@@ -157,7 +156,7 @@ public static class ToolpathRpm
                 {
                     if (spanFirst >= 0)
                     {
-                        spans.Add(new OverLimitSpan(li, layer.Z, spanFirst, spanLast, spanPeak));
+                        spans.Add(new OverLimitSpan(layer.Index, layer.Z, spanFirst, spanLast, spanPeak));
                         spanFirst = -1;
                         spanPeak  = 0f;
                     }
@@ -173,7 +172,7 @@ public static class ToolpathRpm
 
             // A span never crosses a layer boundary -- layers can carry different settings.
             if (spanFirst >= 0)
-                spans.Add(new OverLimitSpan(li, layer.Z, spanFirst, spanLast, spanPeak));
+                spans.Add(new OverLimitSpan(layer.Index, layer.Z, spanFirst, spanLast, spanPeak));
         }
 
         return new Analysis(perMove, overLimit, overCount, peak, spans);

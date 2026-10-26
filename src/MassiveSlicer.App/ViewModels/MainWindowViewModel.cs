@@ -3601,7 +3601,8 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     /// <summary>
     /// Imports a KUKA KRL (.src) program's Cartesian motion as a scrubbable toolpath in the outliner.
-    /// <c>{X 0, Y 0, Z 0}</c> is the cell <c>bed.origin</c> (Print Bed 0,0,0) — not ROBROOT + BASE_DATA.
+    /// <c>{X 0, Y 0, Z 0}</c> keeps the cell bed marker in XY. A heated base
+    /// replaces only Z with the plate height. Any other base uses the marker Z too.
     /// </summary>
     public bool ImportKrlToolpath(string path)
     {
@@ -3616,11 +3617,15 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             var text = System.IO.File.ReadAllText(path);
             var off  = System.Numerics.Vector3.Zero;
+            string place = "raw KRL coordinates";
             if (Viewport.ActiveCell is { } cell)
             {
-                // Drawn Print Bed 0,0,0 (blue BASE marker), not ROBROOT+BASE Z.
-                var m = cell.Bed.BaseMarkerWorld(cell.Robot.WorldPosition);
-                off = new System.Numerics.Vector3(m.X, m.Y, m.Z);
+                int baseNo = Viewport.Robot is { KrlBaseIndex: > 0 } robot ? robot.KrlBaseIndex : 0;
+                var origin = PrintSurface.ImportOrigin(cell, baseNo);
+                off = new System.Numerics.Vector3(origin.X, origin.Y, origin.Z);
+                place = PrintSurface.IsHeatedBase(cell, baseNo)
+                    ? $"BASE {baseNo} bed marker XY, heated plate Z ({off.X:0.#}, {off.Y:0.#}, {off.Z:0.#})"
+                    : $"bed marker ({off.X:0.#}, {off.Y:0.#}, {off.Z:0.#})";
             }
             else
                 Console.Log("[krl] No active cell — placing the toolpath in raw KRL base coordinates.");
@@ -3634,13 +3639,28 @@ public sealed class MainWindowViewModel : ViewModelBase
                 return false;
             }
 
+            var add = RightPanel.Additive;
+            if (kind == KrlImportKind.Print && add.LayerSpeedAdaptEnabled && tp.Layers.Count > 0)
+                MassiveSlicer.Core.Slicing.Effects.LayerSpeedPostProcessor.ApplyInPlace(tp, add.ToLayerSpeedSettings());
+
             var name = $"KRL: {System.IO.Path.GetFileNameWithoutExtension(path)}";
             Viewport.AddImportedToolpath(tp, name,
                 kind: kind == KrlImportKind.Print
                     ? OutlinerToolpathKind.Print
                     : OutlinerToolpathKind.Mill);
-            Console.Log($"[krl] Imported {moves} moves from {System.IO.Path.GetFileName(path)} -> \"{name}\" " +
-                        $"({(kind == KrlImportKind.Print ? "print" : "mill")}). " +
+            float scaleMin = float.MaxValue, scaleMax = float.MinValue;
+            foreach (var layer in tp.Layers)
+                foreach (var m in layer.Moves)
+                    if (m.Kind == MoveKind.Extrude)
+                    {
+                        if (m.PrintSpeedScale < scaleMin) scaleMin = m.PrintSpeedScale;
+                        if (m.PrintSpeedScale > scaleMax) scaleMax = m.PrintSpeedScale;
+                    }
+            string spread = scaleMin <= scaleMax
+                ? $" Speed scale {scaleMin:0.000}..{scaleMax:0.000}."
+                : "";
+            Console.Log($"[krl] Imported {moves} moves, {tp.Layers.Count} layer(s) from {System.IO.Path.GetFileName(path)} -> \"{name}\" " +
+                        $"({(kind == KrlImportKind.Print ? "print" : "mill")}) on {place}.{spread} " +
                         "Select it in the outliner to scrub the toolpath.");
             return true;
         }

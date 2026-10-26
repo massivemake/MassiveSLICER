@@ -654,12 +654,13 @@ public static class KrlExporter
             var (la, lb, lc) = KukaAbc(layer.PlaneNormal, s);
             var smoothedLayer = smoothedByLayer?[li];
 
-            // First-layer speed/RPM override: a per-layer settings copy for the extrude
-            // speed/RPM emission on layer 0 only. Overriding PrintSpeedMps and
-            // ExtrusionRpmPercent here reaches every downstream speed/RPM call without
-            // threading params; 0-valued overrides leave layerS == s (no behavior change).
-            // Shared with the RPM check so both see the same first layer.
-            var layerS = ToolpathRpm.ForLayer(s, li);
+            // First-layer speed/RPM follows this layer's own index, not its place in
+            // the list. A timeline trim keeps the original Index, so a mid-print
+            // excerpt does not pick up the layer-0 override. A full path stores
+            // Index equal to the list position. Overriding PrintSpeedMps and
+            // ExtrusionRpmPercent here reaches every downstream speed/RPM call;
+            // 0-valued overrides leave layerS == s. Shared with the RPM check.
+            var layerS = ToolpathRpm.ForLayer(s, layer.Index);
 
             for (int mi = 0; mi < layer.Moves.Count; mi++)
             {

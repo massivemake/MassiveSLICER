@@ -117,7 +117,7 @@
                 <Button Classes="ExportCta" Padding="5,4"
                         CornerRadius="0,4,4,0"
                         Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
-                        ToolTip.Tip="Download the KRL program (.src) to a file instead">
+                        ToolTip.Tip="{Binding $parent[Window].DataContext.Viewport.ExportActionTip}">
                     <ia:Icon Value="mdi-content-save" FontSize="12" Foreground="#242424"/>
                 </Button>
             </StackPanel>

@@ -57,6 +57,25 @@ public sealed class PrintSurfaceTest
     }
 
     [Fact]
+    public void Lfam3_base6_import_keeps_marker_xy_and_uses_heated_z()
+    {
+        var cell = Load("LFAM3");
+        var heated = PrintSurface.ImportOrigin(cell, 6);
+        var rotary = PrintSurface.ImportOrigin(cell, 1);
+        var marker = cell.Bed.BaseMarkerWorld(cell.Robot.WorldPosition);
+        var plate = cell.HeatedBed!.WorldOrigin(cell.Robot.WorldPosition);
+
+        Assert.Equal(marker.X, rotary.X, 2);
+        Assert.Equal(marker.Y, rotary.Y, 2);
+        Assert.Equal(marker.Z, rotary.Z, 2);
+
+        Assert.Equal(marker.X, heated.X, 2);
+        Assert.Equal(marker.Y, heated.Y, 2);
+        Assert.Equal(plate.Z, heated.Z, 2);
+        Assert.True(MathF.Abs(heated.Z - rotary.Z) > 200f);
+    }
+
+    [Fact]
     public void Lfam3_base6_export_frame_is_heated_not_rotary()
     {
         var cell = Load("LFAM3");

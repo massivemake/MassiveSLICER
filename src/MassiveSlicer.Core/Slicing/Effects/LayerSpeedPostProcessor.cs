@@ -17,10 +17,25 @@ public static class LayerSpeedPostProcessor
 {
     public static Toolpath Apply(Toolpath toolpath, SliceSettings settings)
     {
+        var result = ToolpathClone.Copy(toolpath);
+        ApplyInPlace(result, settings);
+        return result;
+    }
+
+    /// <summary>
+    /// Writes adaptive speed scales onto <paramref name="toolpath"/> itself.
+    /// The viewport uses this so a motion-setting edit does not replace the path,
+    /// drop its reachability solutions, or start another solve.
+    /// </summary>
+    public static void ApplyInPlace(Toolpath toolpath, SliceSettings settings)
+    {
         // Brim speed is deliberately independent of Adaptive Speed, so it still applies when
         // the feature is off.
         if (!settings.LayerSpeedAdaptEnabled || toolpath.Layers.Count == 0)
-            return ResetScales(toolpath, settings);
+        {
+            ResetScalesInPlace(toolpath);
+            return;
+        }
 
         float baseMmS = settings.PrintSpeedMps * 1000f;
         float minMmS  = Math.Max(settings.LayerSpeedMinMmS, 0.1f);
@@ -48,8 +63,7 @@ public static class LayerSpeedPostProcessor
         const float brimScale = 1f;
         float? brimRpm = (float?)null;
 
-        var result = ToolpathClone.Copy(toolpath);
-        for (int i = 0; i < result.Layers.Count; i++)
+        for (int i = 0; i < toolpath.Layers.Count; i++)
         {
             float mapped = SpeedScaleForValue(layerValues[i], minValue, maxValue, minMmS, maxMmS, baseMmS);
             float speedMmS = mapped * baseMmS;
@@ -57,10 +71,10 @@ public static class LayerSpeedPostProcessor
             // push a long layer past the process speed that just failed on the floor.
             if (settings.LayerSpeedBasis == LayerSpeedBasis.PrintFeedback)
                 speedMmS = Math.Min(speedMmS, baseMmS);
-            speedMmS *= NoteFactor(notes, result.Layers[i].Index + 1);
+            speedMmS *= NoteFactor(notes, toolpath.Layers[i].Index + 1);
             float scale = speedMmS / Math.Max(baseMmS, 0.1f);
 
-            var layer = result.Layers[i];
+            var layer = toolpath.Layers[i];
             for (int mi = 0; mi < layer.Moves.Count; mi++)
             {
                 var move = layer.Moves[mi];
@@ -75,11 +89,10 @@ public static class LayerSpeedPostProcessor
                     continue;
                 }
                 if (!IsAdaptable(move)) continue;
+                if (Math.Abs(move.PrintSpeedScale - scale) < 1e-6f) continue;
                 layer.Moves[mi] = move with { PrintSpeedScale = scale };
             }
         }
-
-        return result;
     }
 
     public static float SpeedScaleForValue(
@@ -178,9 +191,8 @@ public static class LayerSpeedPostProcessor
     private static bool IsAdaptable(ToolpathMove move)
         => move.Kind == MoveKind.Extrude && !move.IsWipe && !move.IsLayerStitch && !move.IsBrim;
 
-    private static Toolpath ResetScales(Toolpath toolpath, SliceSettings settings)
+    private static void ResetScalesInPlace(Toolpath toolpath)
     {
-        float baseMmS   = settings.PrintSpeedMps * 1000f;
         // Brim no longer carries its own speed/RPM override — those moved out to be rebuilt
         // under a first-layer feature. Scale 1 leaves brim at the nominal print speed, and it
         // stays OUT of the Adaptive Speed window (see IsAdaptable) so it is predictable rather
@@ -188,8 +200,7 @@ public static class LayerSpeedPostProcessor
         const float brimScale = 1f;
         float? brimRpm = (float?)null;
 
-        var result = ToolpathClone.Copy(toolpath);
-        foreach (var layer in result.Layers)
+        foreach (var layer in toolpath.Layers)
         {
             for (int mi = 0; mi < layer.Moves.Count; mi++)
             {
@@ -202,6 +213,5 @@ public static class LayerSpeedPostProcessor
                 layer.Moves[mi] = move with { PrintSpeedScale = want, RpmPercentOverride = wantRpm };
             }
         }
-        return result;
     }
 }

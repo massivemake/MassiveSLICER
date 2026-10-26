@@ -27,46 +27,39 @@ public class ToolheadOrientEaseTest
     }
 
     [Fact]
-    public void Before_the_first_key_eases_from_the_start_of_the_path()
+    public void Inside_the_window_the_angle_falls_off_to_the_baseline_at_the_tail()
     {
-        // A one-move tail used to stay at the baseline until the diamond.
-        var key = Key(100, y: -90f, left: 1, right: 1);
+        var key = Key(100, y: -90f, left: 100, right: 100);
         Assert.Equal(0f, At(0, baseY: 0f, key).B, 3);
         Assert.Equal(-45f, At(50, baseY: 0f, key).B, 3);
         Assert.Equal(-90f, At(100, baseY: 0f, key).B, 3);
     }
 
     [Fact]
-    public void After_the_last_key_eases_out_to_the_end_of_the_path()
+    public void Past_the_tail_the_angle_stays_on_the_baseline()
     {
-        var key = Key(100, y: 90f, left: 1, right: 1);
-        var mid = ToolheadOrientEase.At(150, new ToolheadOrientEase.Degrees(0f, 0f, 0f), new[] { key }, 200);
-        var end = ToolheadOrientEase.At(200, new ToolheadOrientEase.Degrees(0f, 0f, 0f), new[] { key }, 200);
-        Assert.Equal(45f, mid.B, 3);
-        Assert.Equal(0f, end.B, 3);
+        var key = Key(100, y: 90f, left: 40, right: 40);
+        var past = ToolheadOrientEase.At(150, new ToolheadOrientEase.Degrees(0f, 12f, 0f), new[] { key }, 200);
+        Assert.Equal(12f, past.B, 3);
+        Assert.Equal(12f, At(50, baseY: 12f, key).B, 3);
     }
 
     [Fact]
-    public void Between_two_keys_eases_from_one_saved_orientation_to_the_next()
+    public void A_blank_gap_between_windows_stays_on_the_baseline()
     {
         var keys = new[] { Key(100, y: 94f), Key(200, y: 10f) };
-        var mid = At(150, baseY: 0f, keys);
-        Assert.Equal(52f, mid.B, 3);
-
-        // The blank gap does not fall back to the non-keyed 0° while both keys are in play.
-        Assert.True(mid.B > 40f);
+        Assert.Equal(0f, At(150, baseY: 0f, keys).B, 3);
+        Assert.Equal(12f, At(150, baseY: 12f, keys).B, 3);
     }
 
     [Fact]
-    public void A_keys_window_keeps_its_own_angle_when_another_key_changes()
+    public void A_keys_window_falls_off_on_its_own_when_another_key_is_elsewhere()
     {
         var keys = new[] { Key(100, y: 94f, right: 20), Key(200, y: 10f, left: 20) };
-        // Move 110 is inside the first window (ends at 120) and outside the second (starts at 180).
-        var held = At(110, baseY: 0f, keys);
-        Assert.Equal(94f, held.B, 3);
-
-        var other = At(190, baseY: 0f, keys);
-        Assert.Equal(10f, other.B, 3);
+        // Move 110 is halfway along the first tail and outside the second window.
+        Assert.Equal(47f, At(110, baseY: 0f, keys).B, 3);
+        Assert.Equal(5f, At(190, baseY: 0f, keys).B, 3);
+        Assert.Equal(0f, At(150, baseY: 0f, keys).B, 3);
     }
 
     [Fact]
@@ -78,10 +71,13 @@ public class ToolheadOrientEaseTest
     }
 
     [Fact]
-    public void Opposite_angles_blend_to_zero_halfway_between_the_keys()
+    public void Overlapping_windows_blend_and_a_gap_does_not()
     {
-        var keys = new[] { Key(0, y: -90f, right: 10), Key(100, y: 90f, left: 10) };
-        Assert.Equal(0f, At(50, baseY: 0f, keys).B, 3);
+        var overlap = new[] { Key(100, y: 94f, right: 80), Key(140, y: 10f, left: 80) };
+        Assert.Equal(52f, At(120, baseY: 12f, overlap).B, 3);
+
+        var gap = new[] { Key(0, y: -90f, right: 10), Key(100, y: 90f, left: 10) };
+        Assert.Equal(12f, At(50, baseY: 12f, gap).B, 3);
     }
 
     [Fact]
@@ -91,16 +87,16 @@ public class ToolheadOrientEaseTest
         // used to wrap across ±180, and the slider then sat on −180 until the next key.
         var exact = new[]
         {
-            new ToolheadOrientEase.Key(0, A: -90f, B: 0f, C: 0f, 1, 1),
-            new ToolheadOrientEase.Key(100, A: 90f, B: 0f, C: 0f, 1, 1),
+            new ToolheadOrientEase.Key(0, A: -90f, B: 0f, C: 0f, 1, 100),
+            new ToolheadOrientEase.Key(100, A: 90f, B: 0f, C: 0f, 100, 1),
         };
         Assert.Equal(0f, ToolheadOrientEase.At(50, new ToolheadOrientEase.Degrees(0, 0, 0), exact).A, 3);
 
         Assert.Equal(181f, ToolheadOrientEase.ShortestDelta(-90.5f, 90.5f), 3);
         var hair = new[]
         {
-            new ToolheadOrientEase.Key(0, A: -90.5f, B: 0f, C: 0f, 1, 1),
-            new ToolheadOrientEase.Key(100, A: 90.5f, B: 0f, C: 0f, 1, 1),
+            new ToolheadOrientEase.Key(0, A: -90.5f, B: 0f, C: 0f, 1, 100),
+            new ToolheadOrientEase.Key(100, A: 90.5f, B: 0f, C: 0f, 100, 1),
         };
         var origin = new ToolheadOrientEase.Degrees(0, 0, 0);
         Assert.Equal(0f, ToolheadOrientEase.At(50, origin, hair).A, 3);
@@ -114,8 +110,8 @@ public class ToolheadOrientEaseTest
         Assert.Equal(20f, d, 3);
         var keys = new[]
         {
-            new ToolheadOrientEase.Key(0, A: 170f, B: 0f, C: 0f, 1, 1),
-            new ToolheadOrientEase.Key(10, A: -170f, B: 0f, C: 0f, 1, 1),
+            new ToolheadOrientEase.Key(0, A: 170f, B: 0f, C: 0f, 1, 10),
+            new ToolheadOrientEase.Key(10, A: -170f, B: 0f, C: 0f, 10, 1),
         };
         var mid = ToolheadOrientEase.At(5, new ToolheadOrientEase.Degrees(0, 0, 0), keys);
         Assert.Equal(180f, mid.A, 3);

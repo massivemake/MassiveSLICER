@@ -144,4 +144,51 @@ public class DropToPlateFrameTest
         Assert.Equal(once.Y, twice.Y, 3);
         Assert.Equal(once.Z, twice.Z, 3);
     }
+
+    [Fact]
+    public void Dropping_twice_with_a_placement_does_not_climb()
+    {
+        // Live imports call EnsurePlacement after seating, then parent under the rotary pivot.
+        // A later edit goes through SetPlacement. The part must not gain Z on a second drop.
+        var pivot = RotaryParent();
+        var cube  = CubeNode();
+        cube.LocalTransform = Matrix4.CreateTranslation(100f, 200f, 400f);
+        cube.EnsurePlacement(new Vector3(50f, 50f, 50f));
+        cube.LocalTransform = cube.LocalTransform * pivot.WorldTransform.Inverted();
+        pivot.AddChild(cube);
+
+        ViewportView.DropNodeToBed(cube, BedZ);
+        var once = WorldMinZ(cube);
+        ViewportView.DropNodeToBed(cube, BedZ);
+        var twice = WorldMinZ(cube);
+
+        Assert.Equal(BedZ, once, 2);
+        Assert.Equal(once, twice, 2);
+    }
+
+    [Fact]
+    public void Writing_the_displayed_pivot_back_does_not_climb()
+    {
+        // The position boxes show the pivot in world space and write that number back.
+        // Doing it again, the way a field loses focus after some other change, must not lift the part.
+        var pivot = RotaryParent();
+        var cube  = CubeNode();
+        cube.LocalTransform = Matrix4.CreateTranslation(100f, 200f, 400f);
+        cube.EnsurePlacement(new Vector3(50f, 50f, 50f));
+        cube.LocalTransform = cube.LocalTransform * pivot.WorldTransform.Inverted();
+        pivot.AddChild(cube);
+
+        float z0 = WorldMinZ(cube);
+        for (int i = 0; i < 5; i++)
+        {
+            var p = cube.Placement!.Value;
+            var shown = Vector3.TransformPosition(p.Origin, cube.WorldTransform);
+            var parentWorld = cube.Parent!.WorldTransform;
+            Matrix4.Invert(parentWorld, out var invParent);
+            p.Position = Vector3.TransformPosition(shown, invParent);
+            cube.SetPlacement(p);
+        }
+
+        Assert.Equal(z0, WorldMinZ(cube), 2);
+    }
 }

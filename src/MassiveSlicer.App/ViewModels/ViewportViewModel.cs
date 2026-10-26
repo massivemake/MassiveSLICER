@@ -809,9 +809,18 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Tooltip for the green Send button.</summary>
     public string SendActionTip =>
-        SelectedSendTarget?.Kind == SendTargetKind.MassiveDrive
+        (SelectedSendTarget?.Kind == SendTargetKind.MassiveDrive
             ? "Write a Drive job folder (v2) and POST a pointer, or send small jobs as v1 JSON. Starts the path executor (RSI + extruder). No print KRL on the robot."
-            : "Send the KRL program to the selected cell's robot (D drive over SMB) and report it to the ERP";
+            : "Send the KRL program to the selected cell's robot (D drive over SMB) and report it to the ERP")
+        + ExportSpanNote();
+
+    /// <summary>Tooltip for the save-.src button beside Send.</summary>
+    public string ExportActionTip =>
+        "Download the KRL program (.src) to a file." + ExportSpanNote();
+
+    string ExportSpanNote() => HasTimelineTrim
+        ? $" Marked section {TimelineTrimStart}–{TimelineTrimEnd} is what this writes. The points stay where they are in the full program."
+        : "";
 
     /// <summary>Rebuild Robot / MassiveDRIVE send destinations from the active cell.</summary>
     public void RebuildSendTargets()
@@ -860,7 +869,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Writes the active toolpath's KRL program into the given directory,
     /// named "&lt;geometry&gt; RevNN.src", and returns the written path — or null when
-    /// no toolpath is active. Wired by the viewport view.</summary>
+    /// no toolpath is active. A marked timeline section writes that span instead,
+    /// with <c>_mStart-End</c> on the file name. Wired by the viewport view.</summary>
     internal Func<string, int, Task<string?>>? ExportKrlToDirectory { get; set; }
 
     /// <summary>Joint-margin / elbow-stretch summary of the last robot validation (console <c>reach-report</c>).</summary>
@@ -3708,6 +3718,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 // so without this the viewport freezes when scrubbing through
                 // unreachable poses.
                 NotifyRenderNeeded();
+                RefreshJointGraphPlayhead();
             }
         }
     }
@@ -3774,6 +3785,10 @@ public sealed partial class ViewportViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Raises the timeline speed/RPM label after a motion or extruder edit.</summary>
+    public void NotifyToolpathMotionReadout()
+        => OnPropertyChanged(nameof(ToolpathScrubSpeedRpmLabel));
+
     /// <summary>
     /// Live "speed · RPM" readout for the current scrub/playback move, matching
     /// what KRL export writes ($VEL.CP and $ANOUT[4]): print speed × per-move
@@ -3833,31 +3848,21 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 }
                 return $"{tSpeed:0} mm/s · RPM {KrlAnout.RpmIdlePercent:0}%";
             }
-            double speed;
-            float rpmScale;
             if (mv.IsWipe)
             {
-                speed = add.WipeSpeed;
-                rpmScale = mv.WipeRpmScale;
+                // Wipe export writes the wipe speed and turns the extruder off on the move
+                // itself. The readout keeps the wipe RPM scale so a smash (scale 0) still shows.
+                float wipePct = mv.RpmPercentOverride is { } wipeAbs
+                    ? Math.Min(Math.Max(wipeAbs, 0f), 100f)
+                    : Math.Min(add.GetEffectiveExtrusionSpeedPercent() * Math.Max(mv.WipeRpmScale, 0f), 100f);
+                return $"{add.WipeSpeed:0} mm/s · RPM {wipePct:0}%";
             }
-            else
-            {
-                float sScale = Math.Max(mv.PrintSpeedScale, 1e-6f);
-                rpmScale = sScale * Math.Max(mv.HeightScale, 1e-6f);
-                if (mv.IsResumeRamp)
-                {
-                    sScale *= Math.Max(mv.ResumeSpeedScale, 1e-6f);
-                    rpmScale *= Math.Max(mv.ResumeRpmScale, 1e-6f);
-                }
-                speed = add.PrintSpeed * sScale;
-            }
-            // An absolute demand (brim RPM) replaces the nominal-times-scale product outright —
-            // no scale can express it, so reporting the scaled value here would contradict both
-            // the RPM gradient and the exported program.
-            float pct = mv.RpmPercentOverride is { } abs
-                ? Math.Min(Math.Max(abs, 0f), 100f)
-                : Math.Min(add.GetEffectiveExtrusionSpeedPercent() * Math.Max(rpmScale, 0f), 100f);
-            return $"{speed:0} mm/s · RPM {pct:0}%";
+
+            // Same layer rule as the exporter: layer index 0 may carry a first-layer
+            // speed or RPM. An imported SRC is one layer 0, so those overrides cover it.
+            var layerS = ToolpathRpm.ForLayer(add.ToRpmExportInputs(), tp.Layers[li].Index);
+            var demand = ToolpathMotionReadout.ForExtrude(mv, layerS);
+            return $"{demand.SpeedMmS:0} mm/s · RPM {demand.RpmPercent:0}%";
         }
     }
 
@@ -4125,6 +4130,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal Action<double, double, double>? OnTcpKeyframeOffsetEdited { get; set; }
 
     internal Action? OnAddTcpKeyframeRequested { get; set; }
+    /// <summary>Panel order Y, X, Z. The viewport writes the sliders and replays once.</summary>
+    internal Action<float, float, float>? OnToolheadOrientationRequested { get; set; }
     internal Action? OnClearTcpKeyframesRequested { get; set; }
     internal Action? OnTcpKeyframeSmoothingChanged { get; set; }
 
@@ -4163,6 +4170,12 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// </summary>
     internal void ResetScrubIndex(int max, Toolpath? toolpath, bool preservePosition = false)
     {
+        // A different toolpath drops the section marks. The same path (a re-arm)
+        // keeps them, then clamps to the new move count below.
+        bool samePath = ReferenceEquals(toolpath, ActiveScrubToolpath);
+        if (!samePath)
+            ClearTimelineTrim();
+
         if (_isPlaying)
         {
             _isPlaying = false;
@@ -4249,6 +4262,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
         OnPropertyChanged(nameof(ToolpathScrubFillHeight));
         if (_isSlicePlaneViewerActive)
             RefreshSlicePlaneStats();
+        if (samePath)
+            ClampTimelineTrimToMax();
+        JointGraphSync?.Invoke();
     }
 
     /// <summary>
@@ -4266,6 +4282,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         _scrubSyncing     = true;
         ToolpathScrubText = index.ToString();
         _scrubSyncing     = false;
+        RefreshJointGraphPlayhead();
     }
 
     // Slider geometry constants (must match the Slider Height / thumb size in the AXAML).
@@ -4303,7 +4320,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     // -- Scrubber markers (unreachable = red, singularity = purple) ---------------
 
-    private const double ScrubThumbWidth = 12.0;
+    internal const double ScrubThumbWidth = 12.0;
 
     private double _scrubTrackPixelWidth = 400.0;
     public double ScrubTrackPixelWidth
@@ -4314,6 +4331,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
             if (Math.Abs(_scrubTrackPixelWidth - value) < 0.5) return;
             _scrubTrackPixelWidth = value;
             RecomputeScrubMarkers();
+            PublishTimelineTrim();
+            RefreshJointGraphPlayhead();
         }
     }
 
@@ -4347,7 +4366,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
     public bool ShowScrubLegend => HasUnreachableMarkers || HasSingularityMarkers || HasCollisionMarkers;
 
     /// <summary>The caption line under the scrubber: validation ticks, and KEYFRAMES once a key exists.</summary>
-    public bool ShowTimelineCaption => ShowScrubLegend || HasTcpKeyframes;
+    public bool ShowTimelineCaption => ShowScrubLegend || HasTcpKeyframes || ShowTimelineTrimLane;
     public bool HasUnreachableMarkers => _scrubUnreachableMarkers.Count > 0;
     public bool HasSingularityMarkers => _scrubSingularityMarkers.Count > 0;
     public bool HasCollisionMarkers   => _scrubCollisionMarkers.Count > 0;
@@ -4434,15 +4453,144 @@ public sealed partial class ViewportViewModel : ViewModelBase
     public RelayCommand AddStructuralSupportCommand => _addStructSupportCmd ??=
         new RelayCommand(() => OnAddStructuralSupportRequested?.Invoke());
 
-    internal Action<int>? OnKeyframeLaneClicked { get; set; }
+    /// <summary>Lane press. The bool is true for a diamond click, which toggles
+    /// the selected key off. A tail click passes false and always jumps there.</summary>
+    internal Action<int, bool>? OnKeyframeLaneClicked { get; set; }
 
     /// <summary>Wired by the viewport code-behind: influence tick dragged
     /// (keyIdx, isLeft, lanePixelX, commit).</summary>
     internal Action<int, bool, double, bool>? OnKeyframeInfluenceDragged { get; set; }
 
-    /// <summary>Wired by the viewport code-behind: Shift-drag of a key
+    /// <summary>Wired by the viewport code-behind: Ctrl-drag of a key
     /// (keyIdx, lanePixelX, commit).</summary>
     internal Action<int, double, bool>? OnKeyframeMoved { get; set; }
+
+    // -- Timeline section (session only, one range on the active scrub path) ------
+
+    private int? _timelineTrimStart;
+    private int? _timelineTrimEnd;
+
+    /// <summary>Inclusive scrub index of the section start. Null until the operator sets it.</summary>
+    public int? TimelineTrimStart => _timelineTrimStart;
+
+    /// <summary>Exclusive scrub index of the section end. The last exported LIN lands here.</summary>
+    public int? TimelineTrimEnd => _timelineTrimEnd;
+
+    /// <summary>True when both ends are set and the end is after the start.</summary>
+    public bool HasTimelineTrim =>
+        _timelineTrimStart is int s && _timelineTrimEnd is int e && e > s;
+
+    /// <summary>The section lane is up once either end has been placed.</summary>
+    public bool ShowTimelineTrimLane =>
+        _timelineTrimStart is not null || _timelineTrimEnd is not null;
+
+    /// <summary>Caption such as <c>SECTION 100–200</c>. Empty when no end is set.</summary>
+    public string TimelineTrimLabel => (_timelineTrimStart, _timelineTrimEnd) switch
+    {
+        (int s, int e) => $"SECTION {s}–{e}",
+        (int s, null) => $"SECTION {s}–",
+        (null, int e) => $"SECTION –{e}",
+        _ => "",
+    };
+
+    private MassiveSlicer.Controls.TrimLaneSpan? _timelineTrimSpan;
+    /// <summary>Handle positions in scrub-track pixels. Null when the lane is hidden.</summary>
+    public MassiveSlicer.Controls.TrimLaneSpan? TimelineTrimSpan
+    {
+        get => _timelineTrimSpan;
+        private set => SetField(ref _timelineTrimSpan, value);
+    }
+
+    public RelayCommand SetTimelineTrimStartCommand => _setTimelineTrimStartCommand ??=
+        new RelayCommand(() => SetTimelineTrimStart(ToolpathScrubIndex));
+    private RelayCommand? _setTimelineTrimStartCommand;
+
+    public RelayCommand SetTimelineTrimEndCommand => _setTimelineTrimEndCommand ??=
+        new RelayCommand(() => SetTimelineTrimEnd(ToolpathScrubIndex));
+    private RelayCommand? _setTimelineTrimEndCommand;
+
+    public RelayCommand ClearTimelineTrimCommand => _clearTimelineTrimCommand ??=
+        new RelayCommand(ClearTimelineTrim, () => ShowTimelineTrimLane);
+    private RelayCommand? _clearTimelineTrimCommand;
+
+    /// <summary>Pins the section start to a scrub index. The points are not moved.</summary>
+    internal void SetTimelineTrimStart(int index)
+    {
+        _timelineTrimStart = ClampTrimIndex(index);
+        PublishTimelineTrim();
+    }
+
+    /// <summary>Pins the section end to a scrub index. The points are not moved.</summary>
+    internal void SetTimelineTrimEnd(int index)
+    {
+        _timelineTrimEnd = ClampTrimIndex(index);
+        PublishTimelineTrim();
+    }
+
+    /// <summary>Replaces both ends. Used by <c>trim &lt;start&gt; &lt;end&gt;</c>.</summary>
+    internal void SetTimelineTrim(int start, int end)
+    {
+        _timelineTrimStart = ClampTrimIndex(start);
+        _timelineTrimEnd = ClampTrimIndex(end);
+        PublishTimelineTrim();
+    }
+
+    /// <summary>Drops the section. Save and Send go back to the whole path.</summary>
+    internal void ClearTimelineTrim()
+    {
+        if (_timelineTrimStart is null && _timelineTrimEnd is null) return;
+        _timelineTrimStart = null;
+        _timelineTrimEnd = null;
+        PublishTimelineTrim();
+    }
+
+    /// <summary>Lane drag. <paramref name="isStart"/> picks the handle. The playhead stays.</summary>
+    internal void DragTimelineTrim(bool isStart, double pixelX)
+    {
+        int index = ScrubIndexAtPixel(pixelX);
+        if (isStart) SetTimelineTrimStart(index);
+        else SetTimelineTrimEnd(index);
+    }
+
+    private int ClampTrimIndex(int index) => Math.Clamp(index, 0, Math.Max(_toolpathScrubMax, 0));
+
+    private void ClampTimelineTrimToMax()
+    {
+        if (_timelineTrimStart is null && _timelineTrimEnd is null) return;
+        if (_timelineTrimStart is int s) _timelineTrimStart = ClampTrimIndex(s);
+        if (_timelineTrimEnd is int e) _timelineTrimEnd = ClampTrimIndex(e);
+        if (_timelineTrimStart is int a && _timelineTrimEnd is int b && b <= a)
+        {
+            _timelineTrimStart = null;
+            _timelineTrimEnd = null;
+        }
+        PublishTimelineTrim();
+    }
+
+    private void PublishTimelineTrim()
+    {
+        int max = _toolpathScrubMax;
+        double w = _scrubTrackPixelWidth;
+        double Px(int i) => max > 0
+            ? ScrubThumbWidth / 2.0 + (double)i / max * (w - ScrubThumbWidth) - 0.5
+            : 0;
+        TimelineTrimSpan = (_timelineTrimStart, _timelineTrimEnd) switch
+        {
+            (int s, int e) => new MassiveSlicer.Controls.TrimLaneSpan(Px(s), Px(e), true, true),
+            (int s, null) => new MassiveSlicer.Controls.TrimLaneSpan(Px(s), Px(s), true, false),
+            (null, int e) => new MassiveSlicer.Controls.TrimLaneSpan(Px(e), Px(e), false, true),
+            _ => null,
+        };
+        OnPropertyChanged(nameof(TimelineTrimStart));
+        OnPropertyChanged(nameof(TimelineTrimEnd));
+        OnPropertyChanged(nameof(HasTimelineTrim));
+        OnPropertyChanged(nameof(ShowTimelineTrimLane));
+        OnPropertyChanged(nameof(TimelineTrimLabel));
+        OnPropertyChanged(nameof(ShowTimelineCaption));
+        OnPropertyChanged(nameof(SendActionTip));
+        OnPropertyChanged(nameof(ExportActionTip));
+        ClearTimelineTrimCommand?.RaiseCanExecuteChanged();
+    }
 
     /// <summary>Converts a lane/track pixel X to a move index (clamped).</summary>
     internal int ScrubIndexAtPixel(double x)
@@ -5831,6 +5979,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     public ViewportViewModel()
     {
+        InitJointGraph();
         WireViewProfileTracking();
         LiveIo.ExpandedChanged += () =>
         {

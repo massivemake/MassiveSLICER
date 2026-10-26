@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using MassiveSlicer.App;
 using System;
 using System.Collections.Generic;
 
@@ -27,14 +28,19 @@ public class KeyframeLaneBar : Control
         set => SetValue(ItemsProperty, value);
     }
 
-    /// <summary>Raised when a keyframe diamond is clicked (arg: KeyIndex).</summary>
+    /// <summary>Raised when a keyframe diamond is clicked (arg: KeyIndex).
+    /// A second click on the selected diamond clears it.</summary>
     public Action<int>? KeyframeClicked { get; set; }
 
-    /// <summary>Raised while an influence tick is dragged:
+    /// <summary>Raised when a tail is clicked with no modifier (arg: KeyIndex).
+    /// Selects that key and jumps the timeline. Does not resize the tail.</summary>
+    public Action<int>? TailClicked { get; set; }
+
+    /// <summary>Raised while Shift-dragging an influence tick:
     /// (KeyIndex, isLeftTick, pointerX, commit). commit=true on release.</summary>
     public Action<int, bool, double, bool>? InfluenceDragged { get; set; }
 
-    /// <summary>Raised while Shift-dragging a key along the lane:
+    /// <summary>Raised while Ctrl-dragging a key along the lane:
     /// (KeyIndex, pointerX, commit). commit=true on release.</summary>
     public Action<int, double, bool>? KeyMoved { get; set; }
 
@@ -47,6 +53,7 @@ public class KeyframeLaneBar : Control
     private int  _dragKey  = -1;
     private bool _dragLeft;
     private bool _dragMove;
+    private bool _selectTail;
     private int  _pressedKey = -1;
 
     static KeyframeLaneBar()
@@ -90,7 +97,7 @@ public class KeyframeLaneBar : Control
         if (items is null || items.Count == 0) return;
         var p = e.GetPosition(this);
 
-        _dragKey = -1; _pressedKey = -1; _dragMove = false;
+        _dragKey = -1; _pressedKey = -1; _dragMove = false; _selectTail = false;
         double bestTick = 6.0, bestKey = 7.0;
         for (int i = 0; i < items.Count; i++)
         {
@@ -104,24 +111,47 @@ public class KeyframeLaneBar : Control
         }
         // A tick grab wins over the diamond unless the diamond is clearly closer.
         if (_dragKey >= 0 && bestKey + 2 < bestTick) _dragKey = -1;
-        if (_dragKey >= 0) _pressedKey = -1;
+        // The closer tail wins over a nearby diamond, same as before. A plain
+        // press on that tail selects the key. It does not start a resize.
+        bool onTail = _dragKey >= 0;
+        bool onDiamond = _pressedKey >= 0 && !onTail;
+        if (onTail) _pressedKey = -1;
 
-        // Shift-drag moves the key itself. A plain drag still sizes the tails.
-        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        int moveKey = -1;
+        if (ctrl)
         {
-            int moveKey = -1;
             double best = 10.0;
             foreach (var it in items)
             {
                 double d = Math.Min(Math.Abs(p.X - it.X), Math.Min(Math.Abs(p.X - it.LeftX), Math.Abs(p.X - it.RightX)));
                 if (d < best) { best = d; moveKey = it.KeyIndex; }
             }
-            if (moveKey >= 0)
-            {
+        }
+
+        switch (TcpKeyframeSelection.Gesture(ctrl, shift, onDiamond, onTail, ctrlTarget: moveKey >= 0))
+        {
+            case KeyframeLaneGesture.MoveKey:
                 _dragMove = true;
                 _dragKey = moveKey;
                 _pressedKey = -1;
-            }
+                break;
+            case KeyframeLaneGesture.ResizeTail:
+                _pressedKey = -1;
+                break;
+            case KeyframeLaneGesture.SelectTail:
+                _pressedKey = _dragKey;
+                _dragKey = -1;
+                _selectTail = true;
+                break;
+            case KeyframeLaneGesture.SelectDiamond:
+                _dragKey = -1;
+                break;
+            default:
+                _dragKey = -1;
+                _pressedKey = -1;
+                break;
         }
 
         if (_dragKey >= 0 || _pressedKey >= 0)
@@ -155,8 +185,10 @@ public class KeyframeLaneBar : Control
         }
         else if (_pressedKey >= 0)
         {
-            KeyframeClicked?.Invoke(_pressedKey);
+            if (_selectTail) TailClicked?.Invoke(_pressedKey);
+            else KeyframeClicked?.Invoke(_pressedKey);
             _pressedKey = -1;
+            _selectTail = false;
             e.Handled = true;
         }
         e.Pointer.Capture(null);

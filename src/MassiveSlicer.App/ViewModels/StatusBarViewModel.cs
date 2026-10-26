@@ -56,6 +56,34 @@ public sealed class StatusBarViewModel : ViewModelBase
         set => SetField(ref _operationFeedback, value);
     }
 
+    private string _driveJobText = "";
+
+    /// <summary>
+    /// Job id from the last successful MassiveDRIVE upload, shown at the
+    /// bottom-right of the status bar. Slice progress and the validation
+    /// counts use <see cref="OperationFeedback"/> and do not clear this.
+    /// </summary>
+    public string DriveJobText
+    {
+        get => _driveJobText;
+        private set
+        {
+            if (!SetField(ref _driveJobText, value)) return;
+            OnPropertyChanged(nameof(HasDriveJob));
+        }
+    }
+
+    /// <summary>True after a Drive upload has returned a job id.</summary>
+    public bool HasDriveJob => _driveJobText.Length > 0;
+
+    /// <summary>Pins <paramref name="packageId"/> on the status bar. Blank ids are ignored.</summary>
+    public void ShowUploadedDriveJob(string? packageId)
+    {
+        var id = packageId?.Trim();
+        if (string.IsNullOrEmpty(id)) return;
+        DriveJobText = "Job " + id;
+    }
+
     public string BuildLabel { get; } = BuildInfo.Label;
 
     private bool _isBuildStale;

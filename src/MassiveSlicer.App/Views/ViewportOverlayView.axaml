@@ -1758,7 +1758,7 @@
                         <Button Classes="ToolbarButton" Padding="6,4"
                                 IsVisible="{Binding ShowTcpHelpers}"
                                 Command="{Binding AddTcpKeyframeCommand}"
-                                ToolTip.Tip="Add a keyframe at this moment. Drag the TCP to save a position offset, then set Toolhead global orientation — Y/X/Z is stored on this key and eases into the next keyframe or back to the unkeyed orientation. Shift-drag the key to move it. Drag a tail to size its ease.">
+                                ToolTip.Tip="Add a keyframe at this moment. Drag the TCP to save a position offset, then set Toolhead global orientation — Y/X/Z is stored on this key and falls off to the baseline at each tail. Overlapping windows blend. With no key selected, the sliders edit that baseline and do not add a key. Click a key to jump the timeline there. Ctrl-drag the key to move it. Shift-drag a tail to size its ease.">
                             <ia:Icon Value="mdi-key-plus" FontSize="15"/>
                         </Button>
                         <Button Classes="ToolbarButton" Padding="6,4"
@@ -1772,6 +1772,27 @@
                                 Command="{Binding ClearTcpKeyframesCommand}"
                                 ToolTip.Tip="Clear all TCP keyframes and restore the original toolpath">
                             <ia:Icon Value="mdi-key-remove" FontSize="15"/>
+                        </Button>
+                        <Button Classes="ToolbarButton" Padding="6,4"
+                                Command="{Binding SetTimelineTrimStartCommand}"
+                                ToolTip.Tip="Set the section start at the playhead. Save and Send then write from here, at this move's place in the full program.">
+                            <ia:Icon Value="mdi-flag-outline" FontSize="15"/>
+                        </Button>
+                        <Button Classes="ToolbarButton" Padding="6,4"
+                                Command="{Binding SetTimelineTrimEndCommand}"
+                                ToolTip.Tip="Set the section end at the playhead. Save and Send then stop on this move.">
+                            <ia:Icon Value="mdi-flag" FontSize="15"/>
+                        </Button>
+                        <Button Classes="ToolbarButton" Padding="6,4"
+                                IsVisible="{Binding ShowTimelineTrimLane}"
+                                Command="{Binding ClearTimelineTrimCommand}"
+                                ToolTip.Tip="Clear the section marks. Save and Send write the whole path.">
+                            <ia:Icon Value="mdi-close" FontSize="15"/>
+                        </Button>
+                        <Button Classes="ToolbarButton" Padding="6,4"
+                                Command="{Binding ToggleJointGraphCommand}"
+                                ToolTip.Tip="Show every joint on one chart, each line from its own software stop to the other. Drag the top of the chart to resize it. Scroll to zoom, right-drag to pan. Click the chart, then F focuses the whole graph. Home does the same while the pointer is on it. The lines are the reachability check already stored. Opening this does not start a new solve.">
+                            <ia:Icon Value="mdi-chart-line" FontSize="15"/>
                         </Button>
                         <TextBlock Text="{Binding ToolpathScrubSpeedRpmLabel}"
                                    Classes="Readout"
@@ -1895,11 +1916,17 @@
                     <TextBlock Text="Alt-click or double-click a tick to inspect"
                                FontSize="10" Opacity="0.55" VerticalAlignment="Center"
                                IsVisible="{Binding ShowScrubLegend}"/>
+                    <TextBlock Text="{Binding TimelineTrimLabel}"
+                               FontSize="9"
+                               Classes="LabelMuted"
+                               VerticalAlignment="Center"
+                               IsVisible="{Binding ShowTimelineTrimLane}"
+                               ToolTip.Tip="Moves included in the section export. The start is the first printed point. The end is where the last line lands."/>
                 </StackPanel>
 
                 <!-- Diamond lane. Hidden with the chevron, so the timeline gets shorter.
-                     Diamonds are clickable (jump + select); the small side ticks drag
-                     to resize each key's ease-in / ease-out influence window. -->
+                     A click selects the key and jumps the timeline there. Ctrl-drag
+                     moves a key. Shift-drag a tail to resize its falloff back to the baseline. -->
                 <Grid Height="24" Margin="0,2,0,0"
                       IsVisible="{Binding ShowTcpKeyframeLane}"
                       ColumnDefinitions="Auto,*,Auto">
@@ -1917,6 +1944,106 @@
                     <Border Grid.Column="2" Margin="8,0,0,0"
                             Width="{Binding #ScrubRightControls.Bounds.Width}"/>
                 </Grid>
+
+                <!-- Section span. Drag either end. The playhead stays put.
+                     Aligned to the scrub track the same way the keyframe lane is. -->
+                <Grid Height="18" Margin="0,1,0,0"
+                      IsVisible="{Binding ShowTimelineTrimLane}"
+                      ColumnDefinitions="Auto,*,Auto">
+                    <Border Grid.Column="0" Margin="0,0,8,0"
+                            Width="{Binding #ScrubPlayControls.Bounds.Width}"/>
+                    <Grid Grid.Column="1">
+                        <Border Background="{DynamicResource Border1}"
+                                CornerRadius="5"
+                                Margin="0,3"
+                                Opacity="0.35"/>
+                        <ctrl:TrimLaneBar x:Name="TrimLane"
+                                          Span="{Binding TimelineTrimSpan}"
+                                          Cursor="SizeWestEast"/>
+                    </Grid>
+                    <Border Grid.Column="2" Margin="8,0,0,0"
+                            Width="{Binding #ScrubRightControls.Bounds.Width}"/>
+                </Grid>
+
+                <!-- Joint graph. Visible joints share one chart across the full timeline bar.
+                     Each line is scaled to that joint's own software stops.
+                     Drag the grip to resize. Scroll zooms, right-drag pans.
+                     Click the chart, then F focuses the whole graph. Home does the same while the pointer is on it. -->
+                <StackPanel x:Name="JointGraphHost" Spacing="2" Margin="0,2,0,0" IsVisible="{Binding ShowJointGraph}">
+                    <Grid ColumnDefinitions="*,Auto">
+                    <ItemsControl Grid.Column="0" ItemsSource="{Binding JointGraphChips}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="4"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:JointGraphChip">
+                                <Button Classes="ToolbarButton"
+                                        Padding="6,2"
+                                        IsVisible="{Binding Visible}"
+                                        Opacity="{Binding Opacity}"
+                                        Command="{Binding ToggleCommand}"
+                                        ToolTip.Tip="{Binding Tip}">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <Border Width="10" Height="3" CornerRadius="1"
+                                                Background="{Binding Swatch}"
+                                                VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Name}" FontSize="10"
+                                                   Foreground="{Binding Swatch}"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Readout}" FontSize="10"
+                                                   Classes="Readout" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Grid.Column="1"
+                               Text="Scroll zoom · right-drag pan · F focuses"
+                               FontSize="9"
+                               Classes="LabelMuted"
+                               VerticalAlignment="Center"
+                               Margin="8,0,4,0"
+                               IsVisible="{Binding HasJointGraphData}"
+                               ToolTip.Tip="Scroll zooms both axes around the cursor. Right-drag or middle-drag pans. Click the chart, then F restores the full timeline and the full joint range. Home does the same while the pointer is on the chart. The height stays where you dragged it. F still frames the 3D view until the chart is clicked."/>
+                    </Grid>
+                    <TextBlock Text="Joint lines appear after the reachability check finishes."
+                               FontSize="10"
+                               Classes="LabelMuted"
+                               Margin="4,2,0,0"
+                               IsVisible="{Binding ShowJointGraphEmpty}"/>
+                    <TextBlock Text="Reading joint solutions…"
+                               FontSize="10"
+                               Classes="LabelMuted"
+                               Margin="4,2,0,0"
+                               IsVisible="{Binding ShowJointGraphBuilding}"/>
+                    <Grid RowDefinitions="Auto,Auto" IsVisible="{Binding HasJointGraphData}">
+                        <Border x:Name="JointGraphResizeGrip"
+                                Grid.Row="0"
+                                Height="6"
+                                Margin="0,2,0,1"
+                                CornerRadius="3"
+                                Background="{DynamicResource Border1}"
+                                Cursor="SizeNorthSouth"
+                                ToolTip.Tip="Drag to resize the graph.">
+                            <Border Height="2" Width="36"
+                                    Background="{DynamicResource TextMuted}"
+                                    Opacity="0.45"
+                                    CornerRadius="5"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"/>
+                        </Border>
+                        <ctrl:JointGraphBar x:Name="JointGraphChart" Grid.Row="1"
+                                            Height="{Binding JointGraphHeight}"
+                                            Traces="{Binding JointGraphTraces}"
+                                            PlayheadX="{Binding JointGraphPlayheadX}"
+                                            Frame="{Binding JointGraphFrame}"
+                                            MoveCount="{Binding ToolpathScrubMax}"
+                                            Cursor="Hand"
+                                            ToolTip.Tip="Click or drag to move the playhead. The left axis is each joint's own stop range. The bottom axis is the move index. Scroll to zoom. Right-drag to pan. With the chart clicked, F focuses the whole graph. Home does the same."/>
+                    </Grid>
+                </StackPanel>
 
                 <!-- Selected key's own position offset. The toolhead Y/X/Z sliders are this key's angle. -->
                 <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,2,0,0"

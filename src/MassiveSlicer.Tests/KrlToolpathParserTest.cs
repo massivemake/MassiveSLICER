@@ -1,6 +1,7 @@
 using System.Numerics;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Slicing.Effects;
 
 namespace MassiveSlicer.Tests;
 
@@ -150,6 +151,90 @@ public class KrlToolpathParserTest
         var tp = KrlToolpathParser.Parse(krl, Vector3.Zero, out _);
         Assert.Equal(MoveKind.Mill, tp.Layers[0].Moves[0].Kind);
     }
+
+    [Fact]
+    public void Print_layer_height_splits_a_rising_path_so_adaptive_speed_can_vary()
+    {
+        // The approach sits 47 mm above the first bead. Anchoring the pitch there
+        // would keep every later bead in one layer, and the Speed tab would stay one colour.
+        const string krl = """
+            DEF P()
+            ; Mode print
+            ; Layer height 3.00 mm
+            T1 = 220
+            PTP {X 0.0, Y 0.0, Z 50.0, A 0, B 0, C 0}
+            LIN {X 0.0, Y 0.0, Z 3.0}
+            LIN {X 300.0, Y 0.0, Z 3.0}
+            LIN {X 300.0, Y 0.0, Z 6.0}
+            LIN {X 340.0, Y 0.0, Z 6.0}
+            LIN {X 340.0, Y 0.0, Z 9.0}
+            LIN {X 360.0, Y 0.0, Z 9.0}
+            END
+            """;
+        var tp = KrlToolpathParser.Parse(krl, Vector3.Zero, out _, KrlImportKind.Print);
+        Assert.Equal(3, tp.Layers.Count);
+        Assert.Equal(3f, tp.Layers[0].Z, 2);
+        Assert.Equal(6f, tp.Layers[1].Z, 2);
+        Assert.Equal(9f, tp.Layers[2].Z, 2);
+
+        LayerSpeedPostProcessor.ApplyInPlace(tp, new SliceSettings
+        {
+            LayerSpeedAdaptEnabled = true,
+            LayerSpeedBasis        = LayerSpeedBasis.CutLength,
+            PrintSpeedMps          = 0.1f,
+            LayerSpeedMinMmS       = 10f,
+            LayerSpeedMaxMmS       = 100f,
+        });
+
+        float slow = Scale(tp.Layers[2]);
+        float mid  = Scale(tp.Layers[1]);
+        float fast = Scale(tp.Layers[0]);
+        Assert.True(fast > mid && mid > slow, $"scales {fast:0.###} {mid:0.###} {slow:0.###}");
+        Assert.True(fast - slow > 0.5f, $"spread {fast - slow:0.###} is what the Speed tab draws");
+    }
+
+    [Fact]
+    public void Print_layer_height_splits_a_continuous_rise_with_no_z_jump()
+    {
+        const string krl = """
+            DEF RISE()
+            ; Mode print
+            ; Layer height 3.00 mm
+            T1 = 220
+            LIN {X 0.0, Y 0.0, Z 3.0}
+            LIN {X 10.0, Y 0.0, Z 4.0}
+            LIN {X 20.0, Y 0.0, Z 5.0}
+            LIN {X 30.0, Y 0.0, Z 6.0}
+            LIN {X 40.0, Y 0.0, Z 7.0}
+            LIN {X 50.0, Y 0.0, Z 8.0}
+            LIN {X 60.0, Y 0.0, Z 9.0}
+            END
+            """;
+        var tp = KrlToolpathParser.Parse(krl, Vector3.Zero, out _, KrlImportKind.Print);
+        Assert.Equal(3, tp.Layers.Count);
+        Assert.Equal(3f, tp.Layers[0].Z, 2);
+        Assert.Equal(6f, tp.Layers[1].Z, 2);
+        Assert.Equal(9f, tp.Layers[2].Z, 2);
+    }
+
+    [Fact]
+    public void Print_without_a_layer_height_header_stays_one_layer()
+    {
+        const string krl = """
+            DEF FLAT()
+            ; Mode print
+            T1 = 220
+            LIN {X 0.0, Y 0.0, Z 3.0}
+            LIN {X 10.0, Y 0.0, Z 6.0}
+            LIN {X 20.0, Y 0.0, Z 9.0}
+            END
+            """;
+        var tp = KrlToolpathParser.Parse(krl, Vector3.Zero, out _, KrlImportKind.Print);
+        Assert.Single(tp.Layers);
+    }
+
+    private static float Scale(ToolpathLayer layer)
+        => layer.Moves.First(m => m.Kind == MoveKind.Extrude).PrintSpeedScale;
 
     [Fact]
     public void Selected_T12_without_temps_is_mill()

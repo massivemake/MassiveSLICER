@@ -1,3 +1,6 @@
+using System.Numerics;
+using MassiveSlicer.Core.IO;
+
 namespace MassiveSlicer.Core.Models;
 
 /// <summary>
@@ -52,5 +55,29 @@ public static class PrintSurface
 
         var bed = cell.Bed;
         return new KrlExportFrame(bed.Origin, bed.BaseData, bed.Origin.Z);
+    }
+
+    /// <summary>
+    /// World point for KRL <c>{X 0, Y 0, Z 0}</c> on the selected base.
+    /// XY stays on the cell bed marker. On LFAM 3 that marker is what already
+    /// lines an imported program up over the heated plate. A heated base
+    /// replaces only Z with the plate height, so the path is not left up at
+    /// the rotary table.
+    /// </summary>
+    public static Float3 ImportOrigin(CellConfig cell, int krlBaseIndex)
+    {
+        var marker = cell.Bed.BaseMarkerWorld(cell.Robot.WorldPosition);
+        if (IsHeatedBase(cell, krlBaseIndex) && cell.HeatedBed is not null)
+        {
+            var frame = ForKrlBase(cell, krlBaseIndex);
+            var rp = cell.Robot.WorldPosition;
+            var world = KrlExporter.ImportWorldOffset(
+                new Vector3(rp.X, rp.Y, rp.Z),
+                new Vector3(frame.BaseData.X, frame.BaseData.Y, frame.BaseData.Z),
+                frame.SliceWorldZ);
+            return new Float3(marker.X, marker.Y, world.Z);
+        }
+
+        return marker;
     }
 }

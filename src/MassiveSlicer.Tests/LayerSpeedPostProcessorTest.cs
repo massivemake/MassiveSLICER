@@ -184,6 +184,23 @@ public class LayerSpeedPostProcessorTest
         Assert.Equal(ToolpathRpm.BasePercent(krl), ToolpathRpm.MovePercent(brim, krl), 2);
     }
 
+    [Fact]
+    public void ApplyInPlace_clears_a_stale_scale_on_the_same_toolpath_when_adapt_is_off()
+    {
+        var tp = new Toolpath();
+        var layer = MakeLayer(0, 100);
+        layer.Moves[0] = layer.Moves[0] with { PrintSpeedScale = 0.4f };
+        tp.Layers.Add(layer);
+
+        LayerSpeedPostProcessor.ApplyInPlace(tp, new SliceSettings
+        {
+            LayerSpeedAdaptEnabled = false,
+            PrintSpeedMps = 0.05f,
+        });
+
+        Assert.Equal(1f, tp.Layers[0].Moves[0].PrintSpeedScale, 3);
+    }
+
     private static float ObjectScale(Toolpath tp, int layerIndex)
         => tp.Layers[layerIndex].Moves.First(m => m.Kind == MoveKind.Extrude && !m.IsBrim).PrintSpeedScale;
 

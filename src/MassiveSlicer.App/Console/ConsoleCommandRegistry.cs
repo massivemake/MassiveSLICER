@@ -830,6 +830,181 @@ public sealed partial class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "toolorient",
+            Description = "Set toolhead global orientation Y X Z in degrees. Same numbers the toolhead rotation rings write. Does not add a keyframe.",
+            Usage = "toolorient <y> <x> <z>",
+            Execute = (ctx, args) =>
+            {
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 3
+                    || !float.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float y)
+                    || !float.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float x)
+                    || !float.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float z))
+                {
+                    ctx.LogError("[toolorient] y x z   (degrees, panel order)");
+                    return;
+                }
+
+                var vp = ctx.Main.Viewport;
+                if (vp.OnToolheadOrientationRequested is null)
+                {
+                    ctx.LogError("[toolorient] viewport is not ready");
+                    return;
+                }
+                vp.OnToolheadOrientationRequested(y, x, z);
+                ctx.Log($"[toolorient] Y={ToolheadOrientationDrag.Wrap(y):0.#} X={ToolheadOrientationDrag.Wrap(x):0.#} Z={ToolheadOrientationDrag.Wrap(z):0.#}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "trim",
+            Description = "Mark a playback-timeline section. Save and Send write that span when both flags are set, and the whole path when they are not. Points stay where they are in the full program.",
+            Usage = "trim start | trim end | trim clear | trim <start> <end> | trim export <folder>",
+            Execute = (ctx, args) =>
+            {
+                var vp = ctx.Main.Viewport;
+                var raw = args.Trim();
+                if (raw.Equals("start", StringComparison.OrdinalIgnoreCase))
+                {
+                    vp.SetTimelineTrimStart(vp.ToolpathScrubIndex);
+                    ctx.Log($"[trim] start at move {vp.TimelineTrimStart}");
+                    return;
+                }
+                if (raw.Equals("end", StringComparison.OrdinalIgnoreCase))
+                {
+                    vp.SetTimelineTrimEnd(vp.ToolpathScrubIndex);
+                    ctx.Log($"[trim] end at move {vp.TimelineTrimEnd}");
+                    return;
+                }
+                if (raw.Equals("clear", StringComparison.OrdinalIgnoreCase))
+                {
+                    vp.ClearTimelineTrim();
+                    ctx.Log("[trim] cleared");
+                    return;
+                }
+                if (raw.Equals("export", StringComparison.OrdinalIgnoreCase)
+                    || raw.StartsWith("export ", StringComparison.OrdinalIgnoreCase))
+                {
+                    var dir = raw.Length > "export".Length
+                        ? raw["export".Length..].Trim().Trim('"')
+                        : "";
+                    if (dir.Length == 0)
+                    {
+                        ctx.LogError("usage: trim export <folder>");
+                        return;
+                    }
+                    if (vp.TimelineTrimStart is not int start || vp.TimelineTrimEnd is not int end || end <= start)
+                    {
+                        ctx.LogError("[trim] set a section first: trim <start> <end>");
+                        return;
+                    }
+                    if (vp.ExportKrlToDirectory is not { } export)
+                    {
+                        ctx.LogError("[trim] viewport not ready");
+                        return;
+                    }
+                    _ = Run();
+
+                    async Task Run()
+                    {
+                        try
+                        {
+                            Directory.CreateDirectory(dir);
+                            var path = await export(dir, 1);
+                            if (path is null) ctx.LogError($"[trim] nothing written for moves {start}–{end}");
+                        }
+                        catch (Exception ex)
+                        {
+                            ctx.LogError($"[trim] failed: {ex.Message}");
+                        }
+                    }
+                    return;
+                }
+
+                var parts = raw.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 2
+                    && int.TryParse(parts[0], out int a)
+                    && int.TryParse(parts[1], out int b))
+                {
+                    vp.SetTimelineTrim(a, b);
+                    ctx.Log($"[trim] section {vp.TimelineTrimStart}–{vp.TimelineTrimEnd}");
+                    return;
+                }
+                ctx.LogError("[trim] start | end | clear | <start> <end> | export <folder>");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "jgraph",
+            Description = "Show or hide the timeline joint graph. Lines come from the reachability check already stored on the path. Does not start a solve.",
+            Usage = "jgraph | jgraph on | jgraph off | jgraph status | jgraph reset | jgraph height <px> | jgraph a1 | jgraph e1",
+            Execute = (ctx, args) =>
+            {
+                var vp = ctx.Main.Viewport;
+                var raw = args.Trim();
+                if (raw.Length == 0)
+                {
+                    vp.ToggleJointGraph();
+                    ctx.Log(vp.JointGraphStatus());
+                    return;
+                }
+                if (raw.Equals("on", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!vp.ShowJointGraph) vp.ToggleJointGraph();
+                    ctx.Log(vp.JointGraphStatus());
+                    return;
+                }
+                if (raw.Equals("off", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (vp.ShowJointGraph) vp.ToggleJointGraph();
+                    ctx.Log(vp.JointGraphStatus());
+                    return;
+                }
+                if (raw.Equals("status", StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Log(vp.JointGraphStatus());
+                    return;
+                }
+                if (raw.Equals("reset", StringComparison.OrdinalIgnoreCase)
+                    || raw.Equals("home", StringComparison.OrdinalIgnoreCase))
+                {
+                    vp.ResetJointGraphView();
+                    ctx.Log(vp.JointGraphStatus());
+                    return;
+                }
+                if (raw.StartsWith("height", StringComparison.OrdinalIgnoreCase))
+                {
+                    var rest = raw.Length > 6 ? raw[6..].Trim() : "";
+                    if (!double.TryParse(rest, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out double px))
+                    {
+                        ctx.LogError("[jgraph] height <pixels>");
+                        return;
+                    }
+                    vp.JointGraphHeight = px;
+                    ctx.Log(vp.JointGraphStatus());
+                    return;
+                }
+                if (raw.Equals("A1", StringComparison.OrdinalIgnoreCase)
+                    || raw.Equals("A2", StringComparison.OrdinalIgnoreCase)
+                    || raw.Equals("A3", StringComparison.OrdinalIgnoreCase)
+                    || raw.Equals("A4", StringComparison.OrdinalIgnoreCase)
+                    || raw.Equals("A5", StringComparison.OrdinalIgnoreCase)
+                    || raw.Equals("A6", StringComparison.OrdinalIgnoreCase)
+                    || raw.Equals("E1", StringComparison.OrdinalIgnoreCase))
+                {
+                    vp.ToggleJointAxis(raw);
+                    ctx.Log(vp.JointGraphStatus());
+                    return;
+                }
+                ctx.LogError("[jgraph] on | off | status | reset | height <px> | a1 | a2 | a3 | a4 | a5 | a6 | e1");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "simkey",
             Description = "Sim-timeline camera keyframes: add at current %, clear, or list",
             Usage = "simkey <add|clear|list>",
@@ -1796,8 +1971,19 @@ public sealed partial class ConsoleCommandRegistry
         {
             Name = "import-krl",
             Aliases = ["krl", "import krl"],
-            Description = "Import a KRL program",
-            Execute = (ctx, _) => ctx.RequestImportKrlPicker(),
+            Description = "Import a KRL program. A path imports that file; no path opens the picker.",
+            Usage = "import-krl [path.src]",
+            Execute = (ctx, args) =>
+            {
+                var path = args.Trim().Trim('"');
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    ctx.RequestImportKrlPicker();
+                    return;
+                }
+
+                ctx.Main.ImportKrlToolpath(path);
+            },
         });
 
         Register(new ConsoleCommandDefinition
@@ -3055,12 +3241,20 @@ public sealed partial class ConsoleCommandRegistry
                 var verb = (args ?? string.Empty).Trim();
                 int max  = vp.ToolpathScrubMax;
 
+                void LogRate()
+                {
+                    var rate = vp.ToolpathScrubSpeedRpmLabel;
+                    if (!string.IsNullOrEmpty(rate))
+                        ctx.Log($"[scrub] {rate}");
+                }
+
                 if (verb.Length == 0 || verb.Equals("show", StringComparison.OrdinalIgnoreCase))
                 {
                     if (max <= 0) { ctx.Log("[scrub] no toolpath on the timeline."); return; }
                     double pct = 100.0 * vp.ToolpathScrubIndex / max;
                     ctx.Log($"[scrub] {vp.ToolpathScrubIndex}/{max} moves drawn ({pct:0.#}% of the path). "
                           + $"{(pct > 99.5 ? "Whole path visible." : "The rest is hidden — the part will look unfinished.")}");
+                    LogRate();
                     return;
                 }
 
@@ -3089,6 +3283,7 @@ public sealed partial class ConsoleCommandRegistry
                 vp.ToolpathScrubIndex = Math.Clamp(target, 0, max);
                 ctx.Log($"[scrub] now {vp.ToolpathScrubIndex}/{max} moves drawn "
                       + $"({100.0 * vp.ToolpathScrubIndex / max:0.#}% of the path).");
+                LogRate();
             },
         });
 

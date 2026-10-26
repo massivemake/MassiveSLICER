@@ -2132,6 +2132,42 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             (float)BeadWidth, (float)LayerHeight, (float)(PrintSpeed / 1000.0), flow);
     }
 
+    /// <summary>
+    /// The RPM inputs export, the timeline, and the viewport highlight share.
+    /// A second copy of this record is how the on-screen number used to drift from the .src.
+    /// </summary>
+    /// <summary>
+    /// The adaptive-speed inputs <see cref="MassiveSlicer.Core.Slicing.Effects.LayerSpeedPostProcessor"/>
+    /// reads. Import uses this so a freshly parsed SRC is scaled before it is drawn.
+    /// </summary>
+    public SliceSettings ToLayerSpeedSettings()
+        => new()
+        {
+            LayerSpeedAdaptEnabled = LayerSpeedAdaptEnabled,
+            LayerSpeedBasis        = LayerSpeedBasis,
+            PrintSpeedMps          = (float)(PrintSpeed / 1000.0),
+            TravelSpeed            = (float)(TravelSpeed / 1000.0),
+            WipeSpeed              = (float)(WipeSpeed / 1000.0),
+            LayerSpeedMinMmS       = (float)LayerSpeedMinMmS,
+            LayerSpeedMaxMmS       = (float)LayerSpeedMaxMmS,
+            LayerSpeedNotes        = LayerSpeedNotes ?? "",
+        };
+
+    public KrlExportSettings ToRpmExportInputs()
+        => new()
+        {
+            ProgramName          = "rpm",
+            BeadWidthMm          = (float)BeadWidth,
+            LayerHeightMm        = (float)LayerHeight,
+            PrintSpeedMps        = (float)(PrintSpeed / 1000.0),
+            FlowRate             = (float)(SelectedPreset?.FlowRateFor(ActiveExtruderIsHf) ?? 0.463),
+            ExtrusionRpmPercent  = GetEffectiveExtrusionSpeedPercent(),
+            FirstLayerSpeedMps   = HasFirstLayerPrintSpeedAdjust
+                                       ? (float)(FirstLayerSpeedEffective / 1000.0) : 0f,
+            FirstLayerRpmPercent = HasFirstLayerRpmAdjust
+                                       ? (float)FirstLayerRpmEffective : 0f,
+        };
+
     /// <summary>Extrusion motor speed (%) written to KRL after applying <see cref="ExtrusionSpeedOffset"/>.</summary>
     public float GetEffectiveExtrusionSpeedPercent()
     {

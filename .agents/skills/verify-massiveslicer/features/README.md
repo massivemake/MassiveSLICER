@@ -18,6 +18,9 @@ Start with these five. Add a file when a new user-visible behavior ships.
 | TCP Adjust | `tcp-adjust.md` | `tcpadj` (list is read-only; `add` / `deflect` place a handle) |
 | Outliner group | `outliner-group.md` | `group` (show is read-only; `move` / `yaw` change the scene — undo) |
 | Toolhead keyframe | `tcp-keyframe-orient.md` | `tcpkey add` (needs a preview timeline; re-solves the open path) |
+| Timeline section | `timeline-trim.md` | `trim 100 200` (marks only; Save, Send, and `trim export` write that span) |
+| Timeline joint graph | `joint-graph.md` | `jgraph status` (read-only; `jgraph on` opens the panel, `jgraph reset` restores the chart window, and neither solves nor moves) |
+| Motion and extruder RPM | `motion-rpm.md` | `scrub` (read-only; the following line is the move's mm/s and RPM %. `addset PrintSpeed` writes the panel — put it back) |
 | Signed Distance | `signed-distance.md` | `sdf` (read-only; does not select the method) |
 | SDF bit side carve | `sdf-bit-side-carve.md` | `viewset SdfCarveBitSides` (read-only; `true` rebuilds the SDF view) |
 | Continuous Planar Field | `continuous-planar.md` | `cpf` (read-only; does not select the method) |

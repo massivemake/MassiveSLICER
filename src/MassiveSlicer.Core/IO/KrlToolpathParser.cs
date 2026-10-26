@@ -49,6 +49,12 @@ public static class KrlToolpathParser
         @";\s*Mode print\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // Export header. Imported programs have no ;layer change lines, so this pitch
+    // is what turns one rising bead into the layers Adaptive Speed scales.
+    private static readonly Regex LayerHeightRe = new(
+        @";\s*Layer height\s+(\d+(?:\.\d+)?)\s*mm",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     /// <summary>
     /// True when the SRC sets extruder zone temps (<c>T1</c>/<c>T2</c>/<c>T3</c>).
     /// That is a print program, not a mill path.
@@ -110,19 +116,80 @@ public static class KrlToolpathParser
         if (pts.Count < 2) return tp;
 
         var cut = kind == KrlImportKind.Print ? MoveKind.Extrude : MoveKind.Mill;
-        var layer = new ToolpathLayer(0, pts[0].P.Z);
+        // A print SRC is one continuous LIN list. The header pitch is the layer
+        // the exporter used. Each time the bead climbs by that pitch, the next
+        // moves are a new layer, so cut-length adaptive speed can vary and the
+        // Speed tab has a spread to draw. Mill programs and files with no pitch
+        // stay one layer. The approach above the part is not the pitch origin.
+        float pitch = kind == KrlImportKind.Print ? ReadLayerHeightMm(krl) : 0f;
+        bool split = pitch >= 0.2f;
+        ToolpathLayer? layer = null;
+        float openZ = 0f;
+        var held = split ? new List<ToolpathMove>() : null;
+
+        ToolpathLayer Open(float z)
+        {
+            var opened = new ToolpathLayer(tp.Layers.Count, z);
+            if (pitch > 0f) opened.Height = pitch;
+            openZ = z;
+            tp.Layers.Add(opened);
+            return opened;
+        }
+
         for (int i = 1; i < pts.Count; i++)
         {
-            layer.Moves.Add(new ToolpathMove(
+            bool lin = pts[i].IsLin;
+            var move = new ToolpathMove(
                 pts[i - 1].P, pts[i].P,
-                pts[i].IsLin ? cut : MoveKind.Travel)
+                lin ? cut : MoveKind.Travel)
             {
                 E1Mm = pts[i].E1,
-            });
+            };
             moveCount++;
+            bool cutMove = split && lin;
+            if (!split)
+            {
+                layer ??= Open(pts[0].P.Z);
+                layer.Moves.Add(move);
+                continue;
+            }
+            if (layer is null)
+            {
+                if (!cutMove)
+                {
+                    held!.Add(move);
+                    continue;
+                }
+                // First printed point, not the approach height it descended from.
+                layer = Open(MathF.Min(move.From.Z, move.To.Z));
+                if (held!.Count > 0)
+                {
+                    layer.Moves.AddRange(held);
+                    held.Clear();
+                }
+                layer.Moves.Add(move);
+                continue;
+            }
+            if (cutMove && move.To.Z >= openZ + pitch)
+                layer = Open(move.To.Z);
+            layer.Moves.Add(move);
         }
-        if (layer.Moves.Count > 0) tp.Layers.Add(layer);
+        if (layer is null && held is { Count: > 0 })
+        {
+            layer = Open(held[0].From.Z);
+            layer.Moves.AddRange(held);
+        }
         return tp;
+    }
+
+    /// <summary>Header <c>; Layer height 3.00 mm</c>, or 0 when the file does not say.</summary>
+    public static float ReadLayerHeightMm(string krl)
+    {
+        if (string.IsNullOrEmpty(krl)) return 0f;
+        var m = LayerHeightRe.Match(krl);
+        return m.Success
+            && float.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float h)
+            ? h : 0f;
     }
 
     /// <summary>True when any imported move carries a programmed rail E1.</summary>

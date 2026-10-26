@@ -2885,7 +2885,7 @@
                         <Border Classes="FlashTarget" Classes.flash="{Binding HighlightToolheadOrientation}">
                         <StackPanel>
                         <TextBlock Text="TOOLHEAD GLOBAL ORIENTATION" Classes="SectionHeader"
-                                   ToolTip.Tip="Global-axis rotations: R_global = Rz(Z) × Ry(Y) × Rx(X). Default 0,90,0 = nozzle vertical."/>
+                                   ToolTip.Tip="Global-axis rotations: R_global = Rz(Z) × Ry(Y) × Rx(X). Default 0,90,0 = nozzle vertical. Click the toolhead and drag a ring to turn these. R brings the rings back."/>
 
                         <!-- Y (global Y-axis rotation — Ry(90°) makes nozzle point down) -->
                         <Grid Margin="8,0,8,4">
@@ -3169,7 +3169,7 @@
                                 Content="Export Scan KRL"
                                 Classes="PrimaryButton"
                                 HorizontalAlignment="Stretch"
-                                ToolTip.Tip="Export scanner motion program (uses global home and orientation above)"
+                                ToolTip.Tip="{Binding $parent[Window].DataContext.Viewport.ExportActionTip}"
                                 Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
 
                         </StackPanel>
@@ -4581,7 +4581,7 @@
 
                                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,6,8,4"/>
                                         <TextBlock Text="TOOLHEAD GLOBAL ORIENTATION" Classes="SectionHeader"
-                                                   ToolTip.Tip="Same Y/X/Z sliders as print. Applied after mill ABC (T12 +Z into the surface). R = Rz(Z) × Ry(Y) × Rx(X)."/>
+                                                   ToolTip.Tip="Same Y/X/Z sliders as print. Applied after mill ABC (T12 +Z into the surface). R = Rz(Z) × Ry(Y) × Rx(X). Click the toolhead and drag a ring to turn these. R brings the rings back."/>
                                         <Grid Margin="8,0,8,4">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="28"/>
@@ -4679,7 +4679,7 @@
                                                 Content="Export Mill KRL"
                                                 Classes="PrimaryButton"
                                                 HorizontalAlignment="Stretch"
-                                                ToolTip.Tip="Export spindle finish program (uses global home and orientation above)"
+                                                ToolTip.Tip="{Binding $parent[Window].DataContext.Viewport.ExportActionTip}"
                                                 Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
 
                                         <ComboBox Margin="8,0,8,4"

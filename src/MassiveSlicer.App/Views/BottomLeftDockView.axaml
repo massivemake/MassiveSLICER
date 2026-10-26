@@ -145,15 +145,25 @@
                                        Classes="LabelMuted BuildLabel"
                                        Classes.Stale="{Binding StatusBar.IsBuildStale}"/>
                         </Border>
-                        <TextBlock Text="{Binding StatusBar.OperationFeedback}"
-                                   VerticalAlignment="Center"
-                                   HorizontalAlignment="Right"
-                                   Classes="LabelMuted"
-                                   Classes.ValidationAlert="{Binding Viewport.ValidationLineIsAlert}"
-                                   Cursor="Hand"
-                                   ToolTip.Tip="{Binding Viewport.ValidationTip}"
-                                   ToolTip.Placement="Top"
-                                   Tapped="OnValidationLineTapped"/>
+                        <StackPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Spacing="14">
+                            <TextBlock Text="{Binding StatusBar.OperationFeedback}"
+                                       VerticalAlignment="Center"
+                                       Classes="LabelMuted"
+                                       Classes.ValidationAlert="{Binding Viewport.ValidationLineIsAlert}"
+                                       Cursor="Hand"
+                                       ToolTip.Tip="{Binding Viewport.ValidationTip}"
+                                       ToolTip.Placement="Top"
+                                       Tapped="OnValidationLineTapped"/>
+                            <TextBlock Text="{Binding StatusBar.DriveJobText}"
+                                       IsVisible="{Binding StatusBar.HasDriveJob}"
+                                       VerticalAlignment="Center"
+                                       FontSize="12"
+                                       ToolTip.Tip="MassiveDRIVE job from the last upload"
+                                       ToolTip.Placement="Top"/>
+                        </StackPanel>
                     </Grid>
                 </StackPanel>
             </Border>

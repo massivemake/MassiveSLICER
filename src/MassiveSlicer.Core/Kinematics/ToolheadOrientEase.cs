@@ -2,12 +2,11 @@ namespace MassiveSlicer.Core.Kinematics;
 
 /// <summary>
 /// Toolhead global orientation along a timeline. Y/X/Z on the panel are KUKA B/C/A.
-/// Each key keeps its own angle inside its influence window. Another key does not
-/// rewrite that window. The blank gap between two windows eases from one saved
-/// angle to the next. Where the windows overlap, those two angles blend.
-/// Before the first key the angle eases from the non-keyed orientation at the
-/// start of the path up to that key. After the last key it eases from that key
-/// back to the non-keyed orientation at the end of the path.
+/// Each key falls off to the baseline inside its own influence window, and the
+/// tail is the baseline again. A move that no window covers stays on the baseline.
+/// Where two windows overlap, those keys blend, and that blend still fades to the
+/// baseline by the combined weight so the tails meet it. A move on a key uses
+/// that key only.
 /// A half-turn from a negative angle to a positive one, within 181° across 0,
 /// passes through 0. A shorter step across ±180, such as 170° to −170°, still
 /// takes that short step.
@@ -20,76 +19,46 @@ public static class ToolheadOrientEase
     public readonly record struct Key(
         int Index, float A, float B, float C, int InfluenceLeft, int InfluenceRight);
 
-    /// <param name="pathEnd">Last move index. The ease after the final key runs to here.</param>
+    /// <param name="pathEnd">Kept so callers compile. The falloff no longer runs out to the path end.</param>
     public static Degrees At(double moveIndex, Degrees baseline, IReadOnlyList<Key> keys, int pathEnd = -1)
     {
+        _ = pathEnd;
         if (keys is null || keys.Count == 0) return baseline;
 
-        Key? prev = null;
-        Key? next = null;
+        Key? onKey = null;
+        double onDist = 0.5;
         foreach (var k in keys)
         {
-            if (k.Index <= moveIndex && (prev is null || k.Index >= prev.Value.Index))
-                prev = k;
-            if (k.Index > moveIndex && (next is null || k.Index < next.Value.Index))
-                next = k;
+            double ad = Math.Abs(moveIndex - k.Index);
+            if (ad >= 0.5) continue;
+            if (onKey is null || ad < onDist || (ad == onDist && k.Index >= onKey.Value.Index))
+            {
+                onKey = k;
+                onDist = ad;
+            }
         }
+        if (onKey is { } hit) return Of(hit);
 
-        if (prev is { } p && next is { } n && n.Index != p.Index)
-            return Between(moveIndex, p, n);
-
-        if (prev is { } tail)
+        double wsum = 0;
+        Degrees acc = baseline;
+        bool any = false;
+        foreach (var k in keys)
         {
-            if (Math.Abs(moveIndex - tail.Index) < 0.5) return Of(tail);
-            double end = pathEnd > tail.Index
-                ? pathEnd
-                : tail.Index + Math.Max(tail.InfluenceRight, 1);
-            double span = end - tail.Index;
-            if (span <= 1e-6) return Of(tail);
-            double t = (moveIndex - tail.Index) / span;
-            if (t >= 1.0) return baseline;
-            return Lerp(Of(tail), baseline, Smooth(t));
+            double w = WindowWeight(moveIndex, k);
+            if (w <= 1e-9) continue;
+            if (!any)
+            {
+                acc = Of(k);
+                wsum = w;
+                any = true;
+                continue;
+            }
+            double next = wsum + w;
+            acc = Lerp(acc, Of(k), w / next);
+            wsum = next;
         }
-
-        if (next is { } head)
-        {
-            if (head.Index <= 0) return Of(head);
-            double t = moveIndex / head.Index;
-            return Lerp(baseline, Of(head), Smooth(t));
-        }
-
-        return baseline;
-    }
-
-    /// <summary>
-    /// The key's own angle inside its window. The other key's angle stays on the other
-    /// window. The open gap between the windows eases from one to the next.
-    /// </summary>
-    static Degrees Between(double moveIndex, Key p, Key n)
-    {
-        if (Math.Abs(moveIndex - p.Index) < 0.5) return Of(p);
-        if (Math.Abs(moveIndex - n.Index) < 0.5) return Of(n);
-
-        double aEnd = p.Index + Math.Max(p.InfluenceRight, 1);
-        double bStart = n.Index - Math.Max(n.InfluenceLeft, 1);
-        bool inA = moveIndex >= p.Index && moveIndex <= aEnd;
-        bool inB = moveIndex >= bStart && moveIndex <= n.Index;
-        if (inA && inB)
-        {
-            double wa = WindowWeight(moveIndex, p);
-            double wb = WindowWeight(moveIndex, n);
-            double sum = wa + wb;
-            if (sum <= 1e-9) return Of(p);
-            return Lerp(Of(p), Of(n), wb / sum);
-        }
-        if (inA) return Of(p);
-        if (inB) return Of(n);
-
-        double span = bStart - aEnd;
-        double t = span > 1e-6
-            ? (moveIndex - aEnd) / span
-            : (moveIndex - p.Index) / (n.Index - p.Index);
-        return Lerp(Of(p), Of(n), Smooth(t));
+        if (!any || wsum <= 1e-9) return baseline;
+        return Lerp(baseline, acc, Math.Min(wsum, 1.0));
     }
 
     static double WindowWeight(double moveIndex, Key k)
@@ -103,12 +72,6 @@ public static class ToolheadOrientEase
     }
 
     static Degrees Of(Key k) => new(k.A, k.B, k.C);
-
-    static double Smooth(double t)
-    {
-        t = Math.Clamp(t, 0.0, 1.0);
-        return t * t * (3.0 - 2.0 * t);
-    }
 
     /// <summary>
     /// Step from <paramref name="from"/> to <paramref name="to"/>.
