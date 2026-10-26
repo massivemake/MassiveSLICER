@@ -37,8 +37,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 cat > "$APP/Contents/MacOS/MassiveSlicer" <<LAUNCHER
 #!/bin/bash
-export PATH="/usr/local/share/dotnet:/opt/homebrew/bin:\$HOME/.dotnet:/usr/bin:/bin:\$PATH"
-export DOTNET_ROOT="/usr/local/share/dotnet"
+# Apps opened from Finder or a browser link get a bare PATH, not your shell's, so find
+# dotnet ourselves. The x64 folder is where the Intel installer lands on Apple Silicon.
+for d in /usr/local/share/dotnet /usr/local/share/dotnet/x64 "\$HOME/.dotnet" /opt/homebrew/share/dotnet /opt/homebrew/bin; do
+  if [ -x "\$d/dotnet" ]; then export DOTNET_ROOT="\${DOTNET_ROOT:-\$d}"; export PATH="\$d:\$PATH"; break; fi
+done
+export PATH="\$PATH:/usr/bin:/bin"
 export DOTNET_ROLL_FORWARD="\${DOTNET_ROLL_FORWARD:-Major}"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 REPO="$REPO"
