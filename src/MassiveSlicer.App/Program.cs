@@ -97,10 +97,23 @@ class Program
     /// </summary>
     static bool TryHandoffToRunningInstance(string[] args)
     {
-        string? path = MassiveSlicer.Core.IO.ProtocolUri.ResolveLocalWorkspacePath(
-            args, MassiveSlicer.Core.IO.UnasPaths.LocalShareRoots(), File.Exists);
-        if (string.IsNullOrEmpty(path)) return false;
-        string json = System.Text.Json.JsonSerializer.Serialize(new { path });
+        // A link goes over whole (the running app maps it and may need saveTo/project/element);
+        // a double-clicked .mass goes as a path.
+        string? link = args.Select(a => a?.Trim().Trim('"'))
+            .FirstOrDefault(a => MassiveSlicer.Core.IO.ProtocolUri.IsProtocol(a));
+        string json;
+        if (link is not null)
+        {
+            if (MassiveSlicer.Core.IO.OpenLink.Parse(link) is null) return false;
+            json = System.Text.Json.JsonSerializer.Serialize(new { link });
+        }
+        else
+        {
+            string? path = MassiveSlicer.Core.IO.ProtocolUri.ResolveLocalWorkspacePath(
+                args, MassiveSlicer.Core.IO.UnasPaths.LocalShareRoots(), File.Exists);
+            if (string.IsNullOrEmpty(path)) return false;
+            json = System.Text.Json.JsonSerializer.Serialize(new { path });
+        }
         for (int port = 8723; port <= 8728; port++)
         {
             try

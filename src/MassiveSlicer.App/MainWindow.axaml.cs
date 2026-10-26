@@ -116,7 +116,7 @@ public partial class MainWindow : Window
         // When opening a .mass at startup, let OpenWorkspace load the saved cell first.
         // Otherwise prefer AppPreferences.DefaultCellName (machine-local prefs.json),
         // then LFAM 2, then the first discovered cell.
-        if (App.StartupWorkspacePath is null && cells.Count > 0)
+        if (!StartupOpensProject(App.StartupLink) && cells.Count > 0)
             vm.LeftPanel.SelectedCellIndex = ResolveDefaultCellIndex(cells, vm.AppPreferences.DefaultCellName);
 
         // -- Model loading -----------------------------------------------------
@@ -287,8 +287,101 @@ public partial class MainWindow : Window
             await Viewport.ExportPolylineAsync();
         };
 
-        if (App.StartupWorkspacePath is { } startupWorkspace)
-            vm.OpenWorkspace(startupWorkspace);
+        vm.OpenLinkRequested = HandleOpenLinkAsync;
+        if (App.StartupLink is { } startupLink)
+            _ = HandleOpenLinkAsync(startupLink);
+    }
+
+    /// <summary>True when the launch request opens an existing .mass, which brings its own cell.</summary>
+    static bool StartupOpensProject(OpenLink? link)
+        => link is not null && (!link.IsModel || File.Exists(link.SaveTo));
+
+    /// <summary>
+    /// One place for every "Open in MassiveSLICER" request — launch argv, macOS link/Finder
+    /// events, the second-instance handoff and bridge /open. A link is one click in a browser,
+    /// so it must never silently throw away unsaved work.
+    /// </summary>
+    async Task HandleOpenLinkAsync(OpenLink link)
+    {
+        if (DataContext is not MainWindowViewModel vm) return;
+        Activate();
+
+        // A model link whose .mass already exists opens that .mass — never re-imports over work.
+        string target = link.IsModel && File.Exists(link.SaveTo) ? link.SaveTo! : link.Path;
+        bool startsFromModel = link.IsModel && target == link.Path;
+        string name = Path.GetFileName(startsFromModel ? link.SaveTo! : target);
+
+        // Clicking the button for what is already open (saved or not) just brings the window up.
+        string current = vm.CurrentWorkspacePath ?? "";
+        string wanted = startsFromModel ? link.SaveTo! : target;
+        if (current.Length > 0 && SamePath(current, wanted))
+        {
+            vm.Console.Log($"[open] {name} is already open.");
+            return;
+        }
+
+        if (!File.Exists(target))
+        {
+            vm.Console.LogError($"[open] Not found: {target} — is MassiveFILES connected?");
+            return;
+        }
+
+        if (vm.StatusBar.IsWorkspaceDirty && !await ConfirmDiscardForLinkAsync(vm.StatusBar.FileStatus, name))
+        {
+            vm.Console.Log($"[open] Kept your unsaved changes; {name} was not opened.");
+            return;
+        }
+
+        if (startsFromModel)
+            vm.StartProjectFromModel(link.Path, link.SaveTo!, link.Project, link.Element);
+        else
+            vm.OpenWorkspace(target);
+    }
+
+    static bool SamePath(string a, string b)
+    {
+        try { return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+        catch { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
+    }
+
+    async Task<bool> ConfirmDiscardForLinkAsync(string currentName, string incomingName)
+    {
+        var dlg = new Window
+        {
+            Title = "Unsaved changes",
+            Width = 440, SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+            ShowInTaskbar = false,
+        };
+        var msg = new TextBlock
+        {
+            Text = $"\u201C{currentName}\u201D has unsaved changes.\n\n" +
+                   $"Opening \u201C{incomingName}\u201D will discard them. " +
+                   "To keep them, choose Cancel, save, then click the link again.",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Margin = new Avalonia.Thickness(20, 18, 20, 12),
+        };
+        var cancelBtn  = new Button { Content = "Cancel", Padding = new Avalonia.Thickness(14, 6, 14, 6) };
+        var discardBtn = new Button { Content = "Discard changes and open", Padding = new Avalonia.Thickness(14, 6, 14, 6) };
+        cancelBtn.Click  += (_, _) => dlg.Close(false);
+        discardBtn.Click += (_, _) => dlg.Close(true);
+        dlg.Content = new StackPanel
+        {
+            Children =
+            {
+                msg,
+                new StackPanel
+                {
+                    Orientation = Avalonia.Layout.Orientation.Horizontal,
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                    Spacing = 8,
+                    Margin = new Avalonia.Thickness(20, 0, 20, 16),
+                    Children = { discardBtn, cancelBtn },
+                },
+            },
+        };
+        return await dlg.ShowDialog<bool?>(this) == true;
     }
 
     /// <summary>

@@ -324,8 +324,12 @@ upload. Everyone is on the NAS (shop or VPN), so Lab only needs to point at the 
 slicer maps it to `Z:\` / `/Volumes/MassiveFILES` and Save writes straight back.
 Desktop side built on `feature/erp-review-launch` (macOS + share-relative paths,
 verified on a Mac 2026-10-22); Lab prompt `docs/ERP-OpenInSlicer-Replit-Prompt.md`.
+STL/model links (`path=<model>&saveTo=<.mass>&project&element`) start a project whose
+first Save creates the .mass where Lab chose; built on `feature/stl-open-link` (stacked
+on the branch above), verified on a Mac 2026-10-26. Links ask before discarding unsaved work.
 **Remaining:** Windows shop-PC check; "file changed on the NAS since you opened it"
-warning on Save (two people on one .mass today = last save wins).
+warning on Save (two people on one .mass today = last save wins); File → Open / New
+still discard unsaved work without asking (links now ask).
 **Size:** small.
 
 ### 10. Preset & settings recommendation engine

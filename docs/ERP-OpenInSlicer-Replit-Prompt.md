@@ -67,11 +67,13 @@ Desktop status: macOS support for these links is on branch `feature/erp-review-l
 on a Mac (cold start, already-open, save-back). Windows has handled `massiveslicer://open` since
 August; share-relative paths are new on the same branch.
 
-## Part 2 — STL → new MASS in the Production folder (PROPOSED — desktop not built yet)
+## Part 2 — STL → new MASS in the Production folder
 
-> **Status (2026-10-26):** agreed design, not yet in any MassiveSLICER build. You can build the
-> LAB side against this spec now. Today's builds ignore these links (the app opens with no
-> file), so nothing breaks — but don't announce the button until we confirm the desktop build.
+> **Status (2026-10-26):** built on desktop branch `feature/stl-open-link`, verified on macOS
+> (new project from STL, first Save creates the .mass in the chosen folder with your project/
+> element ids, re-click opens the existing .mass). Not yet on `main` or tested on Windows.
+> Older builds ignore these links (the app opens with no file), so nothing breaks — but don't
+> announce the button until we confirm the desktop build is out.
 
 **Goal:** a model file in LAB (STL etc.) gets an **Open in MassiveSLICER** button. The click
 starts a MassiveSLICER project from that model, and Save writes the `.mass` straight into the
@@ -116,6 +118,11 @@ massiveslicer://open?path=<model, share-relative>&saveTo=<new .mass, share-relat
    when linked). That record is LAB's signal that the MASS now exists — show it with its own
    Open button from then on.
 5. The model file itself is never modified.
+6. **Unsaved work is protected.** If the user has unsaved changes in another project, MassiveSLICER
+   asks before discarding them (Cancel keeps them). Clicking the button for the project that is
+   already open just brings the window forward.
+7. Bad links (model without `saveTo`, `saveTo` not `.mass`, a parameter given twice, either path
+   off the NAS) are ignored — nothing opens. Unknown extra parameters are ignored.
 
 ### Questions for you (answer when you build)
 

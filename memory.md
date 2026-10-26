@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-10-22** (Open in MassiveSLICER links work on macOS + share-relative paths)
+Last updated: **2026-10-26** (STL links from Lab start a project that saves to Lab's chosen .mass)
 
 ---
 
@@ -521,6 +521,17 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-10-26 — STL link from Lab → new project, first Save creates the .mass (branch `feature/stl-open-link`, stacked on `feature/erp-review-launch`)
+
+- Goal: Lab's "Open in MassiveSLICER" on an STL opens it and saves a .mass to the project's Production folder with no dialogs. Spec: `docs/ERP-OpenInSlicer-Replit-Prompt.md` Part 2.
+- Link: `massiveslicer://open?path=<model>&saveTo=<.mass>&project=<id>&element=<id>` (share-relative paths). `Core/IO/OpenLink.cs` parses + NAS-maps both paths; refuses a model without a .mass saveTo, repeated params, off-share paths.
+- Behavior: saveTo exists → open it (never re-import). Else `StartProjectFromModel`: New → import → `LastWorkspacePath = saveTo` → attach Lab ids (Type/Id/ElementId only; **no project Number on purpose** — a Number routes Save to the ERP docs-folder default in `TrySaveCurrentWorkspace` instead of Lab's saveTo). Nothing is written until Save.
+- New: links never silently discard unsaved work — `MainWindow.HandleOpenLinkAsync` asks (Cancel / Discard and open). Already-open target → just focus. `CurrentWorkspacePath` (session-only) added because `LastWorkspacePath` persists across launches and made a fresh start look "already open". File → Open / New still discard without asking (pre-existing).
+- One handler for all entry points: launch argv, macOS activation, Windows second-instance handoff (now sends the whole `link`), bridge `/open` (path or `link`; queued and answered at once so the 500 ms handoff never times out into a second app).
+- Verified on this Mac with a stand-in NAS (prefs backed up + restored): cold-start STL link imported the model, nothing written; `save` created `06-Production Documents/bracket.mass` (folder auto-created), `.mass` carries Erp {Id 4242, ElementId 9999}, save record `unasPath` = saveTo with the ids; same link while open → "already open"; after restart → opened the existing .mass, file untouched; dirty project + another link → nothing opened, no log (waiting on the prompt) — the dialog itself was not seen (no screen-capture permission).
+- Tests: `OpenLinkTest` (24). Full suite 48 failures = main's 46 + `FuselageRealCheck` (runs only with the NAS mounted; **fails identically on clean main**: 185.7 mm missing at z=−19.7 — pre-existing slicing regression) + `HeatedBedGlbTest` (passes alone; order-dependent).
+- Files: `Core/IO/OpenLink.cs`, `App/App.axaml.cs`, `App/MainWindow.axaml.cs`, `App/ViewModels/MainWindowViewModel.cs`, `App/Console/LocalControlBridge.cs`, `App/Program.cs`, `Tests/OpenLinkTest.cs`.
 
 ### 2026-10-22 — "Open in MassiveSLICER" links: macOS + one link for both OSes (branch `feature/erp-review-launch`)
 

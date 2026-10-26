@@ -3561,6 +3561,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             Viewport.Erp.ClearAttachment();
             UndoRedo.Clear();
             AppPreferences.LastWorkspacePath = null;
+            CurrentWorkspacePath = null;
             PreferencesLoader.Save(AppPreferences);
             StatusBar.FileStatus = "Untitled";
             ClearWorkspaceDirty();
@@ -3578,6 +3579,45 @@ public sealed class MainWindowViewModel : ViewModelBase
             LeftPanel.OnCellSelected?.Invoke(LeftPanel.DiscoveredCellPaths[0]);
 
         Console.Log("[workspace] New workspace — scene cleared, cell reloaded.");
+    }
+
+    /// <summary>
+    /// Handles an "Open in MassiveSLICER" request (link, Finder event, bridge /open). Set by
+    /// MainWindow, which owns the unsaved-work prompt.
+    /// </summary>
+    public Func<MassiveSlicer.Core.IO.OpenLink, Task>? OpenLinkRequested { get; set; }
+
+    /// <summary>
+    /// The project open in this session (opened, saved, or started from a model link), or
+    /// null for a new/untitled scene. Unlike <see cref="AppPreferences.LastWorkspacePath"/>
+    /// it is not remembered across launches, so a fresh start never looks "already open".
+    /// </summary>
+    public string? CurrentWorkspacePath { get; private set; }
+
+    /// <summary>
+    /// Lab link for a model file: fresh project, import the model, and make
+    /// <paramref name="saveTo"/> the Save target so the first Save creates the .mass there
+    /// with no dialog. Nothing is written until the user saves. <paramref name="project"/> /
+    /// <paramref name="element"/> attach the Lab ids so saves report against that element.
+    /// No project number is set on purpose: that would route Save to the
+    /// ERP docs-folder default (<see cref="TrySaveCurrentWorkspace"/>) instead of Lab's choice.
+    /// </summary>
+    public void StartProjectFromModel(string modelPath, string saveTo, string? project, string? element)
+    {
+        NewWorkspace();
+        if (!ImportModelFromPath(modelPath)) return;
+
+        AppPreferences.LastWorkspacePath = saveTo;
+        CurrentWorkspacePath = saveTo;
+        PreferencesLoader.Save(AppPreferences);
+        StatusBar.FileStatus = Path.GetFileName(saveTo) + " (not saved yet)";
+        if (project is not null || element is not null)
+            Viewport.Erp.RestoreAttachment(new ErpAttachment
+            {
+                Type = "project", Id = project ?? "", ElementId = element,
+            });
+        MarkWorkspaceDirty();
+        Console.Log($"[open] New project from {Path.GetFileName(modelPath)} — Save writes {saveTo}");
     }
 
     /// <summary>
@@ -4147,6 +4187,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             await Task.Run(() => WorkspaceService.FinalizeAndSave(capture, path));
 
             AppPreferences.LastWorkspacePath = path;
+            CurrentWorkspacePath = path;
             RecordRecentWorkspace(path);
             Viewport.Erp.RefreshWorkspaceCandidates();
             PreferencesLoader.Save(AppPreferences);
@@ -4281,6 +4322,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             Viewport.RequestApplyPendingUiSession?.Invoke();
 
         AppPreferences.LastWorkspacePath = workspacePath;
+        CurrentWorkspacePath = workspacePath;
         RecordRecentWorkspace(workspacePath);
         StatusBar.FileStatus = Path.GetFileName(workspacePath);
         SyncKrlFrameIndicesToActiveTab();

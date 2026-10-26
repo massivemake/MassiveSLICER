@@ -227,7 +227,9 @@ public sealed class LocalControlBridge : IDisposable
             return RevealPath(method == "GET" ? QueryValue(query, "path") : ParsePathBody(body));
 
         if ((method == "GET" || method == "POST") && path == "/open")
-            return await OpenWorkspacePathAsync(method == "GET" ? QueryValue(query, "path") : ParsePathBody(body));
+            return OpenRequest(
+                method == "GET" ? QueryValue(query, "path") : ParsePathBody(body),
+                method == "GET" ? QueryValue(query, "link") : ParseJsonString(body, "link"));
 
         if (method == "GET" && (path == "/ping" || path == "/"))
             return JsonSerializer.Serialize(new { ok = true, app = "MassiveSlicer", port = Port }, Json);
@@ -410,30 +412,56 @@ public sealed class LocalControlBridge : IDisposable
         }
     }
 
-    private async Task<string> OpenWorkspacePathAsync(string raw)
+    /// <summary>
+    /// <c>/open</c>: a NAS .mass path (MassiveBOARD), or a whole <c>massiveslicer:</c> link
+    /// (<c>link</c> field, or as the path) from the second-instance handoff. Queued to
+    /// MainWindow's link handler and answered at once — the handler may show an
+    /// unsaved-changes prompt, and the handoff only waits 500 ms before starting a second app.
+    /// </summary>
+    private string OpenRequest(string rawPath, string rawLink)
     {
-        string requested = MassiveSlicer.Core.IO.ProtocolUri.ResolveWorkspacePath(raw) ?? (raw ?? "").Trim().Trim('"');
-        if (requested.Length == 0)
-            return JsonSerializer.Serialize(new { ok = false, error = "path required" });
-        if (!requested.EndsWith(".mass", StringComparison.OrdinalIgnoreCase))
-            return JsonSerializer.Serialize(new { ok = false, error = "not a .mass file" });
+        var roots = MassiveSlicer.Core.IO.UnasPaths.LocalShareRoots(_main.AppPreferences.UnasProjectsRoot);
+        string requested = (rawPath ?? "").Trim().Trim('"');
+        MassiveSlicer.Core.IO.OpenLink? link;
 
-        // Share-relative (Projects/…) or either OS's mount form → this machine's mount.
-        string? local = MassiveSlicer.Core.IO.UnasPaths.ToLocalPath(requested,
-            MassiveSlicer.Core.IO.UnasPaths.LocalShareRoots(_main.AppPreferences.UnasProjectsRoot),
-            File.Exists);
-        if (local is null)
-            return JsonSerializer.Serialize(new { ok = false, error = "path not on MassiveFILES" });
+        if ((rawLink ?? "").Trim().Length > 0 || MassiveSlicer.Core.IO.ProtocolUri.IsProtocol(requested))
+        {
+            link = MassiveSlicer.Core.IO.OpenLink.Parse(rawLink is { Length: > 0 } ? rawLink : requested)
+                ?.ToLocal(roots, File.Exists);
+            if (link is null)
+                return JsonSerializer.Serialize(new { ok = false, error = "not a .mass or model link on MassiveFILES" });
+        }
+        else
+        {
+            if (requested.Length == 0)
+                return JsonSerializer.Serialize(new { ok = false, error = "path required" });
+            if (!requested.EndsWith(".mass", StringComparison.OrdinalIgnoreCase))
+                return JsonSerializer.Serialize(new { ok = false, error = "not a .mass file" });
+            // Share-relative (Projects/…) or either OS's mount form → this machine's mount.
+            string? local = MassiveSlicer.Core.IO.UnasPaths.ToLocalPath(requested, roots, File.Exists);
+            if (local is null)
+                return JsonSerializer.Serialize(new { ok = false, error = "path not on MassiveFILES" });
+            link = new MassiveSlicer.Core.IO.OpenLink(local);
+        }
 
+        if (_main.OpenLinkRequested is not { } open)
+            return JsonSerializer.Serialize(new { ok = false, error = "MassiveSLICER is still starting" });
+        Dispatcher.UIThread.Post(() => _ = open(link));
+        return JsonSerializer.Serialize(new { ok = true, requested = link.Path, saveTo = link.SaveTo });
+    }
+
+    private static string ParseJsonString(string body, string key)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return "";
         try
         {
-            await Dispatcher.UIThread.InvokeAsync(() => _main.OpenWorkspace(local));
-            return JsonSerializer.Serialize(new { ok = true, opened = local });
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                doc.RootElement.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String)
+                return v.GetString() ?? "";
         }
-        catch (Exception ex)
-        {
-            return JsonSerializer.Serialize(new { ok = false, error = ex.Message, path = local });
-        }
+        catch { /* not JSON */ }
+        return "";
     }
 
     private static string ToLocalOsPath(string p)

@@ -12,8 +12,9 @@ namespace MassiveSlicer.App;
 
 public partial class App : Application
 {
-    /// <summary>Workspace path from a double-clicked <c>.mass</c> file or drag onto the exe.</summary>
-    internal static string? StartupWorkspacePath { get; private set; }
+    /// <summary>What to open at launch: a double-clicked <c>.mass</c>, a drag onto the exe, or an
+    /// "Open in MassiveSLICER" link (a .mass, or a model + saveTo). MainWindow handles it.</summary>
+    internal static MassiveSlicer.Core.IO.OpenLink? StartupLink { get; private set; }
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
@@ -42,7 +43,7 @@ public partial class App : Application
             NumericFieldUx.Install();
             LengthFieldUx.Install();
             MacDockIcon.TrySet("macos-app-icon.png");
-            StartupWorkspacePath = ResolveStartupWorkspacePath(desktop.Args);
+            StartupLink = ResolveStartupLink(desktop.Args);
             // macOS delivers massiveslicer:// links and Finder double-clicks as events after
             // launch, never as argv — on cold start and when the app is already open.
             if (this.TryGetFeature<IActivatableLifetime>() is { } activatable)
@@ -64,35 +65,38 @@ public partial class App : Application
         };
         if (raw is null) return;
 
-        var path = ResolveStartupWorkspacePath([raw]);
-        if (path is null)
+        var link = ResolveStartupLink([raw]);
+        if (link is null)
         {
             // macOS also reports the app's own .dll as an opened file at launch — not worth a line.
             if (e is ProtocolActivatedEventArgs)
-                global::System.Console.Error.WriteLine($"[open] Ignored link (not a .mass on MassiveFILES): {raw}");
+                global::System.Console.Error.WriteLine($"[open] Ignored link (not a .mass/model on MassiveFILES): {raw}");
             return;
         }
 
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             var desktop = ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
-            if (desktop?.MainWindow?.DataContext is MassiveSlicer.ViewModels.MainWindowViewModel vm)
-            {
-                vm.OpenWorkspace(path);
-                desktop.MainWindow.Activate();
-            }
+            if (desktop?.MainWindow?.DataContext is MassiveSlicer.ViewModels.MainWindowViewModel { OpenLinkRequested: { } open })
+                _ = open(link);
             else
-            {
-                // Window not built yet — MainWindow opens StartupWorkspacePath when it is.
-                StartupWorkspacePath = path;
-            }
+                StartupLink = link; // window not built yet — MainWindow handles StartupLink when it is
         });
     }
 
-    internal static string? ResolveStartupWorkspacePath(string[]? args)
+    internal static MassiveSlicer.Core.IO.OpenLink? ResolveStartupLink(string[]? args)
     {
-        var resolved = MassiveSlicer.Core.IO.ProtocolUri.ResolveLocalWorkspacePath(
+        var link = MassiveSlicer.Core.IO.OpenLink.FromArgs(
             args, MassiveSlicer.Core.IO.UnasPaths.LocalShareRoots(), File.Exists);
+        if (link is null || link.SaveTo is not null) return link;
+        return NormalizeMassPath(link.Path) is { } full ? link with { Path = full } : null;
+    }
+
+    internal static string? ResolveStartupWorkspacePath(string[]? args)
+        => ResolveStartupLink(args) is { IsModel: false } link ? link.Path : null;
+
+    static string? NormalizeMassPath(string resolved)
+    {
         if (string.IsNullOrEmpty(resolved)) return null;
         try
         {
