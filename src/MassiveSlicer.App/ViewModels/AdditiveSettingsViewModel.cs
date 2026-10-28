@@ -2513,6 +2513,24 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _endRetractDistanceMm, Math.Clamp(value, 0.0, 2000.0));
     }
 
+    private bool _endWipeEnabled;
+
+    /// <summary>Stop extruding this far before the end and keep following the path.</summary>
+    public bool EndWipeEnabled
+    {
+        get => _endWipeEnabled;
+        set => SetField(ref _endWipeEnabled, value);
+    }
+
+    private double _endWipeDistanceMm = 50;
+
+    /// <summary>Distance before the end where the extruder is off, in mm.</summary>
+    public double EndWipeDistanceMm
+    {
+        get => _endWipeDistanceMm;
+        set => SetField(ref _endWipeDistanceMm, Math.Clamp(value, 0.0, 2000.0));
+    }
+
     public string[] WipeModeOptions { get; } = ["Off", "Retrace", "Same-Direction", "90-Degree"];
 
     public const string ShopWipeMode = "Same-Direction";

@@ -86,6 +86,48 @@ public sealed class AdaMillPlannerTest
     }
 
     [Fact]
+    public void PlanarFacing_stays_on_the_top_face()
+    {
+        // Top slabs at z=30, a gap with a near-vertical crack, and a skirt down the end.
+        // The crack and the skirt used to be the highest triangle in those columns, so
+        // the raster milled down them.
+        var pos = new List<Vector3>
+        {
+            new(0, 0, 30), new(18, 0, 30), new(0, 20, 30), new(18, 20, 30),
+            new(22, 0, 30), new(40, 0, 30), new(22, 20, 30), new(40, 20, 30),
+            new(18, 0, 30), new(22, 10, 0), new(18, 20, 30),
+            new(40, 0, 30), new(55, 0, 0), new(40, 20, 30), new(55, 20, 0),
+        };
+        var nrm = new List<Vector3>();
+        for (int i = 0; i < 8; i++) nrm.Add(Vector3.UnitZ);
+        nrm.Add(Vector3.UnitX); nrm.Add(Vector3.UnitX); nrm.Add(Vector3.UnitX);
+        nrm.Add(Vector3.UnitX); nrm.Add(Vector3.UnitX); nrm.Add(Vector3.UnitX); nrm.Add(Vector3.UnitX);
+        var idx = new List<int>
+        {
+            0, 1, 2,  2, 1, 3,
+            4, 5, 6,  6, 5, 7,
+            8, 9, 10,
+            11, 12, 13,  13, 12, 14,
+        };
+
+        var tp = AdaMillPlanner.Generate(new AdaMillRequest
+        {
+            Settings = Base(MillOperationKind.PlanarFacing),
+            Positions = pos,
+            Normals = nrm,
+            Indices = idx,
+        });
+
+        var cuts = tp.Layers.SelectMany(l => l.Moves).Where(m => m.Kind == MoveKind.Mill).ToList();
+        Assert.True(cuts.Count > 0, "the top slabs should still be milled");
+        Assert.All(cuts, m =>
+        {
+            float low = MathF.Min(m.From.Z, m.To.Z);
+            Assert.True(low > 20f, $"cut dropped to z={low:0.#} ({m.From} -> {m.To})");
+        });
+    }
+
+    [Fact]
     public void MultiAxisFinishing_covers_the_box()
     {
         var info = MillOperationInfo.Find(MillOperationKind.MultiAxisFinishing);

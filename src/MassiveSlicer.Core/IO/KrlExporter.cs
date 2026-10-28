@@ -794,20 +794,29 @@ public static class KrlExporter
                         float wipeE2 = 0f;
                         if (!inWipeSequence)
                         {
-                            sb.AppendLine(";wipe");
+                            // End wipe is the dry tail of the print. No suck-back flag and no
+                            // temperature dip — the screw is simply already off.
+                            sb.AppendLine(move.IsEndWipe ? ";end wipe" : ";wipe");
                             if (!s.UseTravelStartStop)
                             {
-                                sb.AppendLine(FormatExtruderOff(s, "extruder off (wipe)"));
-                                an1Dipped = WriteAn1WipeDip(sb, s) || an1Dipped;
+                                sb.AppendLine(FormatExtruderOff(s,
+                                    move.IsEndWipe ? "extruder off (end wipe)" : "extruder off (wipe)"));
+                                if (!move.IsEndWipe)
+                                    an1Dipped = WriteAn1WipeDip(sb, s) || an1Dipped;
                             }
                             inWipeSequence = true;
-                            wipeE2 = 1f;
+                            if (!move.IsEndWipe)
+                                wipeE2 = 1f;
                         }
                         if (move.ResumeWaitSec is { } ww)
                             pendingResumeWaitSec = ww;
-                        WriteVelIfChanged(sb, s.WipeSpeedMps, ref lastVelText);
+                        float wipeSpeed = move.IsEndWipe
+                            ? EffectivePrintSpeedMps(move, layerS)
+                            : s.WipeSpeedMps;
+                        WriteVelIfChanged(sb, wipeSpeed, ref lastVelText);
                         // Smash (WipeRpmScale 0) is an exact-stop −Z dip so reverse/wipe start on the bead.
-                        if (move.WipeRpmScale < 0.05f)
+                        // An end wipe keeps the blended LIN so the dry tail does not stutter.
+                        if (!move.IsEndWipe && move.WipeRpmScale < 0.05f)
                             sb.AppendLine(FormatLinExact(to, ma, mb, mc, E1ForMove(move, to, s, ref lastE1), wipeE2));
                         else
                             sb.AppendLine(FormatLin(to, ma, mb, mc, E1ForMove(move, to, s, ref lastE1), wipeE2));

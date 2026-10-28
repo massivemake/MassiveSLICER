@@ -1,4 +1,5 @@
 using MassiveSlicer.App.Views;
+using MassiveSlicer.Core.Models;
 using Xunit;
 
 namespace MassiveSlicer.Tests;
@@ -52,5 +53,41 @@ public class ViewportPointerPolicyTest
             areaToolArmed: true, millStepActive: true, sliceEditOpen: true));
         Assert.True(ViewportPointerPolicy.MillPaintCapturesPointer(
             areaToolArmed: true, millStepActive: true, sliceEditOpen: false));
+    }
+
+    [Fact]
+    public void Rhino_middle_drag_pans_and_right_drag_orbits()
+    {
+        Assert.True(ViewportPointerPolicy.IsPanGesture(
+            NavigationPresetId.Rhino, ViewportNavButton.Middle, shift: false, alt: false));
+        Assert.False(ViewportPointerPolicy.IsOrbitGesture(
+            NavigationPresetId.Rhino, ViewportNavButton.Middle, shift: false, alt: false));
+
+        Assert.True(ViewportPointerPolicy.IsOrbitGesture(
+            NavigationPresetId.Rhino, ViewportNavButton.Right, shift: false, alt: false));
+        Assert.False(ViewportPointerPolicy.IsPanGesture(
+            NavigationPresetId.Rhino, ViewportNavButton.Right, shift: false, alt: false));
+
+        Assert.True(ViewportPointerPolicy.IsPanGesture(
+            NavigationPresetId.Rhino, ViewportNavButton.Right, shift: true, alt: false));
+        Assert.False(ViewportPointerPolicy.IsOrbitGesture(
+            NavigationPresetId.Rhino, ViewportNavButton.Right, shift: true, alt: false));
+    }
+
+    [Fact]
+    public void Other_presets_keep_their_pan_button()
+    {
+        Assert.True(ViewportPointerPolicy.IsPanGesture(
+            NavigationPresetId.Blender, ViewportNavButton.Middle, shift: true, alt: false));
+        Assert.False(ViewportPointerPolicy.IsPanGesture(
+            NavigationPresetId.Blender, ViewportNavButton.Middle, shift: false, alt: false));
+        Assert.True(ViewportPointerPolicy.IsOrbitGesture(
+            NavigationPresetId.Mol3D, ViewportNavButton.Left, shift: false, alt: false));
+        Assert.True(ViewportPointerPolicy.IsPanGesture(
+            NavigationPresetId.Mol3D, ViewportNavButton.Middle, shift: false, alt: false));
+        Assert.True(ViewportPointerPolicy.IsPanGesture(
+            NavigationPresetId.Maya, ViewportNavButton.Middle, shift: false, alt: true));
+        Assert.False(ViewportPointerPolicy.IsPanGesture(
+            NavigationPresetId.Maya, ViewportNavButton.Middle, shift: false, alt: false));
     }
 }

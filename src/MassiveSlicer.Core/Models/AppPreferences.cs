@@ -177,6 +177,12 @@ public sealed class AppPreferences
 
     // ── Toolpath colors (AARRGGBB hex) ────────────────────────────────────
 
+    /// <summary>
+    /// Bead overhang heatmap ramp. False is white to red. True is blue
+    /// (supported) through green to red (unsupported). App-wide, not per file.
+    /// </summary>
+    public bool BeadOverhangSpectrum { get; set; }
+
     public string ToolpathExtrudeColor    { get; set; } = "#FFFFFFFF";
     public string ToolpathBeadColor       { get; set; } = "#FFF2F2F2";
     public string ToolpathTravelColor     { get; set; } = "#FFD92E2E";
@@ -455,6 +461,15 @@ public sealed class AppPreferences
 
     /// <summary>World +Z distance of the end-of-print retract, in mm.</summary>
     public double EndRetractDistanceMm { get; set; } = 50;
+
+    /// <summary>
+    /// Stop extruding this far before the end and keep following the path.
+    /// The lift from <see cref="EndRetractEnabled"/> happens after this dry tail.
+    /// </summary>
+    public bool EndWipeEnabled { get; set; }
+
+    /// <summary>Distance before the end where extrusion is off, in mm.</summary>
+    public double EndWipeDistanceMm { get; set; } = 50;
 
     /// <summary>Wipe mode display: Off, Retrace, Same-Direction, 90-Degree.</summary>
     public string WipeModeDisplay { get; set; } = "Same-Direction";

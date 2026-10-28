@@ -70,6 +70,23 @@ internal static class ImportHelper
     }
 
     /// <summary>
+    /// Puts the pivot on this part's own bounds centre. Ungroup leaves a child sitting on the
+    /// group's origin; the geometry must not move.
+    /// </summary>
+    internal static void RecenterPivot(SceneNode node)
+    {
+        if (NodeBounds.LocalCenter(node) is not { } center) return;
+        if (node.Placement is { } existing)
+        {
+            var t = existing;
+            t.SetOrigin(center);
+            node.SetPlacement(t);
+            return;
+        }
+        node.EnsurePlacement(center);
+    }
+
+    /// <summary>
     /// STL/OBJ carry no units and the slicer treats values as millimetres, but CAD/Blender often
     /// export in metres. If the loaded model's largest dimension is implausibly small
     /// (&lt; <see cref="TinyImportMaxDimMm"/> mm), scale it ×1000 (m→mm) so it isn't an invisible

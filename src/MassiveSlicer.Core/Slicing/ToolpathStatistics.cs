@@ -41,7 +41,7 @@ public static class ToolpathStatistics
                 layerTime += MoveTimeSeconds(move, rates, dist);
                 if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                     cutLen += dist;
-                if (move.Kind == MoveKind.Extrude)
+                if (move.Kind == MoveKind.Extrude && !move.IsEndWipe)
                     volMm3 += dist * beadWidthMm * layerHeightMm;
             }
 
@@ -76,7 +76,7 @@ public static class ToolpathStatistics
         ToolpathMove move, ToolpathMotionRates rates, double distanceMm,
         bool ignorePrintSpeedScale = false)
     {
-        if (move.IsWipe)
+        if (move.IsWipe && !move.IsEndWipe)
             return distanceMm / rates.WipeMmS;
         if (move.Kind == MoveKind.Extrude || move.Kind == MoveKind.Mill)
         {

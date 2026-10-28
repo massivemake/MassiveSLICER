@@ -94,9 +94,144 @@ public static class DrillFeatureFinder
 
         Take(Walk(BoundaryEdges(verts, tris)));
         Take(FeatureChains(verts, tris));
+        AddSemicircleNotches(edges, holes, positions);
         DedupeMouths(holes);
         MergeInnerHoles(holes);
         return new DrillSurvey { Holes = holes, Edges = edges };
+    }
+
+    /// <summary>
+    /// The hole whose rim is one side of <paramref name="wall"/>. A square cutout's
+    /// side is a tall rectangle; clicking that wall should drill the opening, not a slot.
+    /// </summary>
+    public static DrillSite? OpeningForWall(IReadOnlyList<Vector3> wall, IReadOnlyList<DrillSite> holes)
+    {
+        if (wall.Count < 2) return null;
+        foreach (var hole in holes)
+        {
+            var rim = hole.Rim;
+            if (rim is null || rim.Count < 2) continue;
+            for (int i = 0; i < wall.Count - 1; i++)
+            {
+                if (RimHasSegment(rim, wall[i], wall[i + 1]))
+                    return hole;
+            }
+        }
+        return null;
+    }
+
+    static bool RimHasSegment(IReadOnlyList<Vector3> rim, Vector3 a, Vector3 b)
+    {
+        const float tol = 0.35f;
+        for (int i = 0; i < rim.Count - 1; i++)
+        {
+            bool forward = Vector3.Distance(rim[i], a) <= tol && Vector3.Distance(rim[i + 1], b) <= tol;
+            bool back = Vector3.Distance(rim[i], b) <= tol && Vector3.Distance(rim[i + 1], a) <= tol;
+            if (forward || back) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// A half-round notch in the outer edge is not its own polygon. It is the run of
+    /// the outline between two corners. A drill centered on that chord cuts the notch.
+    /// </summary>
+    static void AddSemicircleNotches(
+        List<IReadOnlyList<Vector3>> edges, List<DrillSite> holes, IReadOnlyList<Vector3> positions)
+    {
+        foreach (var edge in edges)
+        {
+            var poly = new List<Vector3>(edge.Count);
+            foreach (var p in edge) poly.Add(p);
+            if (poly.Count >= 2 && Vector3.Distance(poly[0], poly[^1]) <= 0.2f)
+                poly.RemoveAt(poly.Count - 1);
+            int n = poly.Count;
+            if (n < 8) continue;
+            var corners = new List<int>();
+            for (int i = 0; i < n; i++)
+            {
+                var prev = poly[i] - poly[(i + n - 1) % n];
+                var next = poly[(i + 1) % n] - poly[i];
+                if (prev.LengthSquared() < 1e-6f || next.LengthSquared() < 1e-6f) continue;
+                float dot = Math.Clamp(Vector3.Dot(Vector3.Normalize(prev), Vector3.Normalize(next)), -1f, 1f);
+                if (MathF.Acos(dot) > 45f * MathF.PI / 180f)
+                    corners.Add(i);
+            }
+            if (corners.Count < 2) continue;
+            for (int c = 0; c < corners.Count; c++)
+            {
+                int from = corners[c];
+                int to = corners[(c + 1) % corners.Count];
+                var run = new List<Vector3>();
+                for (int i = from; run.Count <= n; i = (i + 1) % n)
+                {
+                    run.Add(poly[i]);
+                    if (i == to) break;
+                }
+                if (TrySemicircle(run, positions, out var site))
+                    holes.Add(site);
+            }
+        }
+    }
+
+    static bool TrySemicircle(List<Vector3> run, IReadOnlyList<Vector3> positions, out DrillSite site)
+    {
+        site = null!;
+        if (run.Count < 5) return false;
+        var a = run[0];
+        var b = run[^1];
+        float chord = Vector3.Distance(a, b);
+        if (chord < MinHoleDiameterMm) return false;
+        var center = (a + b) * 0.5f;
+        float radius = chord * 0.5f;
+        float tol = MathF.Max(0.35f, radius * 0.08f);
+        float bulge = 0f;
+        foreach (var p in run)
+        {
+            if (MathF.Abs(Vector3.Distance(p, center) - radius) > tol) return false;
+            float fromChord = DistToSegment(p, a, b);
+            if (fromChord > bulge) bulge = fromChord;
+        }
+        // A half-circle stands about one radius off its chord. A fillet does not fit this circle.
+        if (bulge < radius * 0.75f || bulge > radius * 1.15f) return false;
+
+        var newell = Newell(run);
+        var axis = newell.LengthSquared() > 1e-8f ? Vector3.Normalize(newell) : Vector3.UnitZ;
+        if (axis.Z < -0.5f) axis = -axis;
+
+        var mouth = center;
+        float span = 0f;
+        if (Extent(positions, center, axis, radius, out float minT, out float maxT))
+        {
+            mouth = center + axis * maxT;
+            span = MathF.Max(0f, maxT - minT);
+        }
+
+        var rim = new List<Vector3>(run.Count + 1);
+        rim.AddRange(run);
+        rim.Add(run[0]);
+        site = new DrillSite
+        {
+            Kind = DrillSiteKind.Hole,
+            Position = mouth,
+            Axis = axis,
+            DetectedDiameterMm = chord,
+            SpanMm = span,
+            Included = false,
+            Rim = rim,
+            Cut = DrillCutKind.Round,
+            ShapeName = "Hole",
+        };
+        return true;
+    }
+
+    static float DistToSegment(Vector3 p, Vector3 a, Vector3 b)
+    {
+        var ab = b - a;
+        float len2 = ab.LengthSquared();
+        if (len2 < 1e-8f) return Vector3.Distance(p, a);
+        float t = Math.Clamp(Vector3.Dot(p - a, ab) / len2, 0f, 1f);
+        return Vector3.Distance(p, a + ab * t);
     }
 
     /// <summary>

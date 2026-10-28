@@ -293,6 +293,42 @@ public sealed class DrillFeatureFinderTest
     }
 
     [Fact]
+    public void A_square_wall_belongs_to_the_square_cutout()
+    {
+        SquareHole(out var pos, out var idx);
+        var survey = DrillFeatureFinder.Find(pos, idx);
+        var square = Assert.Single(survey.Holes, h => h.ShapeName == "Square");
+        Assert.DoesNotContain(survey.Holes, h => h.ShapeName == "Slot");
+        var walls = survey.Edges.Where(e => DrillFeatureFinder.OpeningForWall(e, survey.Holes) == square).ToList();
+        Assert.NotEmpty(walls);
+        Assert.All(walls, wall => Assert.Equal("Square", DrillFeatureFinder.OpeningForWall(wall, survey.Holes)!.ShapeName));
+    }
+
+    [Fact]
+    public void A_half_round_notch_on_the_outer_edge_is_a_hole()
+    {
+        PlateWithNotch(out var pos, out var idx);
+        var survey = DrillFeatureFinder.Find(pos, idx);
+        var notch = Assert.Single(survey.Holes, h => h.Cut == DrillCutKind.Round && h.DetectedDiameterMm > 6f);
+        Assert.InRange(notch.DetectedDiameterMm, 7.5f, 8.5f);
+        Assert.InRange(notch.Position.X, 39f, 41f);
+        Assert.InRange(notch.Position.Y, 9f, 11f);
+        Assert.DoesNotContain(survey.Holes, h => h.ShapeName == "Slot");
+    }
+
+    [Fact]
+    public void A_plain_rectangle_outline_is_not_a_semicircle()
+    {
+        var pos = new[]
+        {
+            new Vector3(0, 0, 5), new Vector3(40, 0, 5), new Vector3(40, 20, 5), new Vector3(0, 20, 5),
+        };
+        var idx = new[] { 0, 1, 2, 0, 2, 3 };
+        var survey = DrillFeatureFinder.Find(pos, idx);
+        Assert.Empty(survey.Holes);
+    }
+
+    [Fact]
     public void A_hexagon_is_a_polygon_not_a_round_bore()
     {
         ClosedPlate(6, 40f, 10f, 12f, out var pos, out var idx);
@@ -561,6 +597,32 @@ public sealed class DrillFeatureFinderTest
             Tri(top, bot, bot1);
             Tri(top, bot1, top1);
         }
+        idx = tris.ToArray();
+    }
+
+    static void PlateWithNotch(out Vector3[] pos, out int[] idx)
+    {
+        var outline = new List<Vector3>
+        {
+            new(0, 0, 10), new(0, 20, 10), new(40, 20, 10),
+        };
+        for (int i = 0; i <= 8; i++)
+        {
+            float ang = MathF.PI / 2f + MathF.PI * i / 8f;
+            outline.Add(new Vector3(40f + MathF.Cos(ang) * 4f, 10f + MathF.Sin(ang) * 4f, 10f));
+        }
+        outline.Add(new Vector3(40, 0, 10));
+        var verts = new List<Vector3> { new(20, 10, 10) };
+        verts.AddRange(outline);
+        var tris = new List<int>();
+        for (int i = 0; i < outline.Count; i++)
+        {
+            int i1 = i == outline.Count - 1 ? 1 : i + 2;
+            tris.Add(0);
+            tris.Add(i + 1);
+            tris.Add(i1);
+        }
+        pos = verts.ToArray();
         idx = tris.ToArray();
     }
 

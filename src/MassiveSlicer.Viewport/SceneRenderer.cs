@@ -739,6 +739,19 @@ public sealed class SceneRenderer : IDisposable
     public Action? SdfCarveReady { get; set; }
     public bool ShowBeadOverhang        { get; set; } = false;
     public bool ShowOrientationPreview  { get; set; } = false;
+    private bool _beadOverhangSpectrum;
+
+    /// <summary>
+    /// Switches the overhang ramp on toolpaths already uploaded.
+    /// Must be called on the GL thread. A matching value does nothing.
+    /// </summary>
+    public void ApplyBeadOverhangSpectrum(bool spectrum)
+    {
+        if (_beadOverhangSpectrum == spectrum) return;
+        _beadOverhangSpectrum = spectrum;
+        foreach (var entry in _toolpaths.Values)
+            entry.Renderer.SetBeadOverhangSpectrum(spectrum);
+    }
 
     /// <summary>
     /// Scrubber move index applied to the active scrub toolpath renderer.
@@ -1003,7 +1016,10 @@ public sealed class SceneRenderer : IDisposable
     public void UpdateToolpathBeadOverhang(SceneNode node, float[] overhangPerFlatMove)
     {
         if (_toolpaths.TryGetValue(node, out var entry))
+        {
+            entry.Renderer.SetBeadOverhangSpectrum(_beadOverhangSpectrum);
             entry.Renderer.UpdateBeadOverhang(overhangPerFlatMove);
+        }
     }
 
     public void UpdateToolpathBeadOrientation(SceneNode node, float[] orientationRatePerFlatMove)

@@ -96,7 +96,8 @@ public static class AdaMillPlanner
             var millI = MillAtOffset(s, extra);
             var pass = SurfaceFollowMillGenerator.Generate(
                 req.Positions, req.Normals, req.Indices, millI,
-                approachAxis: approach, lockToolToApproach: lockAxis);
+                approachAxis: approach, lockToolToApproach: lockAxis,
+                facingMin: SurfaceFollowMillGenerator.TopFaceMin, occludeRejected: true);
             Append(tp, pass, i);
         }
         ApplyEngagement(tp, s);

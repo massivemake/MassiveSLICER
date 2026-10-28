@@ -3719,6 +3719,8 @@ public sealed class MainWindowViewModel : ViewModelBase
                 ZHopMm = (float)add.ZHopMm,
                 EndRetractEnabled = add.EndRetractEnabled,
                 EndRetractDistanceMm = (float)add.EndRetractDistanceMm,
+                EndWipeEnabled = add.EndWipeEnabled,
+                EndWipeDistanceMm = (float)add.EndWipeDistanceMm,
                 BedZ = off.Z,
                 WipeMode = add.WipeModeDisplay switch
                 {
@@ -3775,6 +3777,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             ZHopMm = (float)add.ZHopMm,
             EndRetractEnabled = add.EndRetractEnabled,
             EndRetractDistanceMm = (float)add.EndRetractDistanceMm,
+            EndWipeEnabled = add.EndWipeEnabled,
+            EndWipeDistanceMm = (float)add.EndWipeDistanceMm,
             BedZ = bedZ,
             WipeMode = add.WipeModeDisplay switch
             {
@@ -4663,6 +4667,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ZHopMm                  = copy.ZHopMm;
         live.EndRetractEnabled       = copy.EndRetractEnabled;
         live.EndRetractDistanceMm    = copy.EndRetractDistanceMm;
+        live.EndWipeEnabled          = copy.EndWipeEnabled;
+        live.EndWipeDistanceMm       = copy.EndWipeDistanceMm;
         live.WipeModeDisplay         = MigrateWipeModeDisplay(copy.WipeModeDisplay);
         live.WipeLengthMm            = copy.WipeLengthMm;
         live.WipeRampMm              = copy.WipeRampMm;
@@ -4877,6 +4883,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         var add  = RightPanel.Additive;
 
         // Viewport visibility & navigation
+        vp.AttachBeadOverhangPreference(p);
         vp.ShowGrid            = p.ShowGrid;
         vp.ShowContactShadows       = p.ShadowCatcherEnabled;
         vp.ContactShadowSize        = p.ContactShadowSize;
@@ -5090,6 +5097,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.ZHopMm                  = p.ZHopMm;
         add.EndRetractEnabled       = p.EndRetractEnabled;
         add.EndRetractDistanceMm    = p.EndRetractDistanceMm;
+        add.EndWipeEnabled          = p.EndWipeEnabled;
+        add.EndWipeDistanceMm       = p.EndWipeDistanceMm;
         add.WipeModeDisplay         = MigrateWipeModeDisplay(p.WipeModeDisplay);
         add.WipeLengthMm            = p.WipeLengthMm;
         add.WipeRampMm              = p.WipeRampMm;
@@ -5427,6 +5436,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ZHopMm                  = add.ZHopMm;
         p.EndRetractEnabled       = add.EndRetractEnabled;
         p.EndRetractDistanceMm    = add.EndRetractDistanceMm;
+        p.EndWipeEnabled          = add.EndWipeEnabled;
+        p.EndWipeDistanceMm       = add.EndWipeDistanceMm;
         p.WipeModeDisplay         = add.WipeModeDisplay;
         p.WipeLengthMm            = add.WipeLengthMm;
         p.WipeRampMm              = add.WipeRampMm;

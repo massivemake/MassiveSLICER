@@ -413,6 +413,7 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.ShowSeam)               or
                     nameof(ViewportViewModel.ShowBead)               or
                     nameof(ViewportViewModel.ShowBeadOverhang)       or
+                    nameof(ViewportViewModel.BeadOverhangSpectrum)   or
                     nameof(ViewportViewModel.ShowOrientationPreview) or
                     nameof(ViewportViewModel.ShowT1TcpEnvelope))
                 {
@@ -1860,6 +1861,7 @@ public partial class ViewportView : UserControl
             _renderer.SdfCarveReady ??= () =>
                 Avalonia.Threading.Dispatcher.UIThread.Post(() => GlCanvas?.RequestNextFrameRendering());
             _renderer.ShowBeadOverhang       = vm.ShowBeadOverhang;
+            _renderer.ApplyBeadOverhangSpectrum(vm.BeadOverhangSpectrum);
             _renderer.ShowOrientationPreview = vm.ShowOrientationPreview;
             // Scrub hides not-yet-printed moves whenever a scrub session is live
             // (selection or sticky timeline), matching what the user can see.
@@ -4135,28 +4137,21 @@ public partial class ViewportView : UserControl
         _ => null,
     };
 
-    private bool IsOrbitButton(AvaBtn btn, KeyModifiers mods) => ActivePreset switch
-    {
-        NavigationPresetId.Rhino        => btn == AvaBtn.Right && !mods.HasFlag(KeyModifiers.Shift),
-        NavigationPresetId.Plasticity  => btn == AvaBtn.Right,
-        NavigationPresetId.Blender    => btn == AvaBtn.Middle && !mods.HasFlag(KeyModifiers.Shift),
-        NavigationPresetId.Maya       => btn == AvaBtn.Left   && mods.HasFlag(KeyModifiers.Alt),
-        NavigationPresetId.Mol3D      => btn == AvaBtn.Left,
-        NavigationPresetId.Max3ds     => btn == AvaBtn.Middle && mods.HasFlag(KeyModifiers.Alt),
-        NavigationPresetId.Fusion360  => btn == AvaBtn.Middle && mods.HasFlag(KeyModifiers.Shift),
-        _                             => btn == AvaBtn.Right,
-    };
+    private bool IsOrbitButton(AvaBtn btn, KeyModifiers mods)
+        => ViewportPointerPolicy.IsOrbitGesture(
+            ActivePreset, ToNav(btn),
+            mods.HasFlag(KeyModifiers.Shift), mods.HasFlag(KeyModifiers.Alt));
 
-    private bool IsPanButton(AvaBtn btn, KeyModifiers mods) => ActivePreset switch
+    private bool IsPanButton(AvaBtn btn, KeyModifiers mods)
+        => ViewportPointerPolicy.IsPanGesture(
+            ActivePreset, ToNav(btn),
+            mods.HasFlag(KeyModifiers.Shift), mods.HasFlag(KeyModifiers.Alt));
+
+    private static ViewportNavButton ToNav(AvaBtn btn) => btn switch
     {
-        NavigationPresetId.Rhino        => btn == AvaBtn.Right && mods.HasFlag(KeyModifiers.Shift),
-        NavigationPresetId.Plasticity or
-        NavigationPresetId.Mol3D      => btn == AvaBtn.Middle,
-        NavigationPresetId.Blender    => btn == AvaBtn.Middle && mods.HasFlag(KeyModifiers.Shift),
-        NavigationPresetId.Maya       => btn == AvaBtn.Middle && mods.HasFlag(KeyModifiers.Alt),
-        NavigationPresetId.Max3ds     => btn == AvaBtn.Middle && !mods.HasFlag(KeyModifiers.Alt),
-        NavigationPresetId.Fusion360  => btn == AvaBtn.Middle && !mods.HasFlag(KeyModifiers.Shift),
-        _                             => btn == AvaBtn.Middle,
+        AvaBtn.Left  => ViewportNavButton.Left,
+        AvaBtn.Right => ViewportNavButton.Right,
+        _            => ViewportNavButton.Middle,
     };
 
     /// <summary>Space + left drag pans in every preset (handy in 2D slice / edit mode).</summary>
@@ -5948,6 +5943,8 @@ public partial class ViewportView : UserControl
             ZHopMm          = (float)s.ZHopMm,
             EndRetractEnabled = s.EndRetractEnabled,
             EndRetractDistanceMm = (float)s.EndRetractDistanceMm,
+            EndWipeEnabled = s.EndWipeEnabled,
+            EndWipeDistanceMm = (float)s.EndWipeDistanceMm,
             BedZ            = bedZ,
             WipeMode        = s.WipeModeDisplay switch
             {
@@ -7809,6 +7806,8 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.ZHopMm),
         nameof(AdditiveSettingsViewModel.EndRetractEnabled),
         nameof(AdditiveSettingsViewModel.EndRetractDistanceMm),
+        nameof(AdditiveSettingsViewModel.EndWipeEnabled),
+        nameof(AdditiveSettingsViewModel.EndWipeDistanceMm),
         nameof(AdditiveSettingsViewModel.WipeModeDisplay),
         nameof(AdditiveSettingsViewModel.WipeLengthMm),
         nameof(AdditiveSettingsViewModel.WipeRampMm),
@@ -8710,6 +8709,10 @@ public partial class ViewportView : UserControl
             promoted.Insert(0, meshNode);
         }
 
+        // The group's origin is not a part. Sit each gizmo on that part's own centre.
+        foreach (var part in promoted)
+            ImportHelper.RecenterPivot(part);
+
         if (promoted.Count == 0 || outlinerItem is null) return;
 
         vm.OutlinerItems.Remove(outlinerItem);
@@ -8774,6 +8777,9 @@ public partial class ViewportView : UserControl
         }
 
         if (newNodes.Count <= 1 || outlinerItem is null) return;
+
+        foreach (var part in newNodes)
+            ImportHelper.RecenterPivot(part);
 
         vm.OutlinerItems.Remove(outlinerItem);
         foreach (var child in outlinerItem.Children)
@@ -9164,19 +9170,9 @@ public partial class ViewportView : UserControl
                 firstNode ??= node;
                 vm.PendingNodes.Enqueue(node);
 
-                var pieceItem = vm.CreateOutlinerItem(node, it =>
-                {
-                    // The toolpath is only an OUTLINER child of the piece, not a real scene child
-                    // (same convention as any other model — see the toolpath-positioning research
-                    // this session) — so deleting the piece must explicitly also remove its
-                    // toolpath's own node, or it's orphaned: gone from the outliner, still rendered,
-                    // still pickable. Mirrors the existing (untouched) Cut Tool's delete flow.
-                    foreach (var child in it.Children)
-                        vm.PendingRemoveNodes.Enqueue(child.Node);
-                    outputGroup.RemoveChild(it);
-                    vm.PendingRemoveNodes.Enqueue(it.Node);
-                    vm.NotifyRenderNeeded();
-                }, displayName: node.Name, canDelete: true, modelFileOps: true);
+                // The toolpath is only an outliner child of the piece, not a scene child.
+                var pieceItem = vm.CreateOutlinerItem(node, vm.DeleteListedUserItem,
+                    displayName: node.Name, canDelete: true, modelFileOps: true);
                 outputGroup.AddChild(pieceItem);
 
                 created.Add((piece, node, pieceItem));
@@ -15120,6 +15116,12 @@ public partial class ViewportView : UserControl
     {
         if (_vm is not { } vm) return;
 
+        // A toolpath can stay drawn after its owner row was removed. Put the row back
+        // so the outliner trash (and Delete) can reach it.
+        if (_toolpathByNode.Count > 0
+            && vm.AdoptUnlistedToolpaths(_toolpathByNode.Keys) > 0)
+            _lastOutlinerSyncedNode = null;
+
         var selected = _renderer.SelectedNode;
         if (!ReferenceEquals(selected, _lastOutlinerSyncedNode) && vm.SelectedScanCount < 2)
         {
@@ -16080,6 +16082,8 @@ public partial class ViewportView : UserControl
 
         bool isToolpath = _renderer.IsToolpathNode(selected);
         var  node       = selected;
+        if (isToolpath && vm.FindOutlinerItem(node) is null)
+            vm.AdoptUnlistedToolpaths(_toolpathByNode.Keys);
         if (!isToolpath)
         {
             // Only user imports — never the robot/toolhead/bed/dev objects; effectors

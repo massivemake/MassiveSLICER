@@ -172,6 +172,8 @@ public sealed class PrintPresetSample
     public bool? WipeSkipShortTravels { get; init; }
     public bool? EndRetractEnabled { get; init; }
     public double? EndRetractDistanceMm { get; init; }
+    public bool? EndWipeEnabled { get; init; }
+    public double? EndWipeDistanceMm { get; init; }
     public bool? ResumeRampEnabled { get; init; }
     public double? ResumeRampStartSpeed { get; init; }
     public double? ResumeRampStartRpmPercent { get; init; }
@@ -418,6 +420,8 @@ public sealed class PrintPresetSample
                 B(s, "Wipe skip short travels", WipeSkipShortTravels);
                 B(s, "End retract", EndRetractEnabled);
                 D(s, "End retract distance", EndRetractDistanceMm, " mm");
+                B(s, "End wipe", EndWipeEnabled);
+                D(s, "End wipe distance", EndWipeDistanceMm, " mm");
                 B(s, "Resume ramp enabled", ResumeRampEnabled);
                 D(s, "Resume ramp start speed", ResumeRampStartSpeed);
                 D(s, "Resume ramp start RPM", ResumeRampStartRpmPercent, "%");
@@ -905,6 +909,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
             ZHopMm = d.ZHopMm, WipeModeDisplay = d.WipeModeDisplay, WipeLengthMm = d.WipeLengthMm,
             WipeRampMm = d.WipeRampMm, WipeSpeed = d.WipeSpeed, WipeSkipShortTravels = d.WipeSkipShortTravels,
             EndRetractEnabled = d.EndRetractEnabled, EndRetractDistanceMm = d.EndRetractDistanceMm,
+            EndWipeEnabled = d.EndWipeEnabled, EndWipeDistanceMm = d.EndWipeDistanceMm,
             ResumeRampEnabled = d.ResumeRampEnabled, ResumeRampStartSpeed = d.ResumeRampStartSpeed,
             ResumeRampStartRpmPercent = d.ResumeRampStartRpmPercent, ResumeRampDistanceMm = d.ResumeRampDistanceMm,
             ResumeRampSteps = d.ResumeRampSteps,
@@ -1229,6 +1234,8 @@ public sealed class PresetsCardViewModel : ViewModelBase
         if (p.WipeSkipShortTravels is { } wipeSkipShortTravels) _additive.WipeSkipShortTravels = wipeSkipShortTravels;
         if (p.EndRetractEnabled is { } endRetractEnabled) _additive.EndRetractEnabled = endRetractEnabled;
         if (p.EndRetractDistanceMm is { } endRetractDistanceMm) _additive.EndRetractDistanceMm = endRetractDistanceMm;
+        if (p.EndWipeEnabled is { } endWipeEnabled) _additive.EndWipeEnabled = endWipeEnabled;
+        if (p.EndWipeDistanceMm is { } endWipeDistanceMm) _additive.EndWipeDistanceMm = endWipeDistanceMm;
         if (p.ResumeRampEnabled is { } resumeRampEnabled) _additive.ResumeRampEnabled = resumeRampEnabled;
         if (p.ResumeRampStartSpeed is { } resumeRampStartSpeed) _additive.ResumeRampStartSpeed = resumeRampStartSpeed;
         if (p.ResumeRampStartRpmPercent is { } resumeRampStartRpmPercent) _additive.ResumeRampStartRpmPercent = resumeRampStartRpmPercent;
@@ -1493,6 +1500,8 @@ public sealed class PresetsCardViewModel : ViewModelBase
             WipeSkipShortTravels = movement ? a.WipeSkipShortTravels : null,
             EndRetractEnabled = movement ? a.EndRetractEnabled : null,
             EndRetractDistanceMm = movement ? a.EndRetractDistanceMm : null,
+            EndWipeEnabled = movement ? a.EndWipeEnabled : null,
+            EndWipeDistanceMm = movement ? a.EndWipeDistanceMm : null,
             ResumeRampEnabled = movement ? a.ResumeRampEnabled : null,
             ResumeRampStartSpeed = movement ? a.ResumeRampStartSpeed : null,
             ResumeRampStartRpmPercent = movement ? a.ResumeRampStartRpmPercent : null,
@@ -1659,6 +1668,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         ZHopMm = p.ZHopMm, WipeModeDisplay = p.WipeModeDisplay, WipeLengthMm = p.WipeLengthMm,
         WipeRampMm = p.WipeRampMm, WipeSpeed = p.WipeSpeed, WipeSkipShortTravels = p.WipeSkipShortTravels,
         EndRetractEnabled = p.EndRetractEnabled, EndRetractDistanceMm = p.EndRetractDistanceMm,
+        EndWipeEnabled = p.EndWipeEnabled, EndWipeDistanceMm = p.EndWipeDistanceMm,
         ResumeRampEnabled = p.ResumeRampEnabled, ResumeRampStartSpeed = p.ResumeRampStartSpeed,
         ResumeRampStartRpmPercent = p.ResumeRampStartRpmPercent, ResumeRampDistanceMm = p.ResumeRampDistanceMm,
         ResumeRampSteps = p.ResumeRampSteps,
@@ -1740,6 +1750,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         ZHopMm = r.ZHopMm, WipeModeDisplay = r.WipeModeDisplay, WipeLengthMm = r.WipeLengthMm,
         WipeRampMm = r.WipeRampMm, WipeSpeed = r.WipeSpeed, WipeSkipShortTravels = r.WipeSkipShortTravels,
         EndRetractEnabled = r.EndRetractEnabled, EndRetractDistanceMm = r.EndRetractDistanceMm,
+        EndWipeEnabled = r.EndWipeEnabled, EndWipeDistanceMm = r.EndWipeDistanceMm,
         ResumeRampEnabled = r.ResumeRampEnabled, ResumeRampStartSpeed = r.ResumeRampStartSpeed,
         ResumeRampStartRpmPercent = r.ResumeRampStartRpmPercent, ResumeRampDistanceMm = r.ResumeRampDistanceMm,
         ResumeRampSteps = r.ResumeRampSteps,

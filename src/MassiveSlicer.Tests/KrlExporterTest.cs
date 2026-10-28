@@ -809,6 +809,63 @@ public sealed class KrlExporterTest
     }
 
     [Fact]
+    public void Export_end_wipe_stops_the_extruder_and_keeps_print_speed()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(60, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(60, 0, 10), new Vector3(80, 0, 10), MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+            IsWipe = true,
+            IsEndWipe = true,
+            WipeRpmScale = 0f,
+        });
+        layer.Moves.Add(new ToolpathMove(new Vector3(80, 0, 10), new Vector3(100, 0, 10), MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+            IsWipe = true,
+            IsEndWipe = true,
+            WipeRpmScale = 0f,
+        });
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(100, 0, 35), MoveKind.Travel)
+            { IsZHop = true });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName = "end_wipe",
+            ExtrusionRpmPercent = 40f,
+            PrintSpeedMps = 0.05f,
+            WipeSpeedMps = 0.6f,
+        });
+
+        int end = krl.IndexOf(";end wipe", StringComparison.Ordinal);
+        int hop = krl.IndexOf(";z-hop", StringComparison.Ordinal);
+        Assert.True(end >= 0);
+        Assert.True(hop > end);
+        Assert.Equal(1, CountOf(krl, ";end wipe"));
+        var tail = krl.Substring(end, hop - end);
+        Assert.Contains("$ANOUT[4] = 0.000 ; extruder off (end wipe)", tail);
+        Assert.Contains("$VEL.CP = 0.050000", krl.Substring(0, end));
+        Assert.DoesNotContain("$VEL.CP", tail);
+        Assert.DoesNotContain("E2 1.000", tail);
+    }
+
+    private static int CountOf(string text, string token)
+    {
+        int count = 0;
+        int at = 0;
+        while ((at = text.IndexOf(token, at, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            at += token.Length;
+        }
+        return count;
+    }
+
+    [Fact]
     public void Export_collapses_wipe_comments_and_same_vel_cp()
     {
         var tp = new Toolpath();

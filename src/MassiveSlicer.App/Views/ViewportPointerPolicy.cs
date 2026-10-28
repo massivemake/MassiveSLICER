@@ -1,3 +1,5 @@
+using MassiveSlicer.Core.Models;
+
 namespace MassiveSlicer.App.Views;
 
 /// <summary>
@@ -38,4 +40,46 @@ public static class ViewportPointerPolicy
     public static bool MillPaintCapturesPointer(
         bool areaToolArmed, bool millStepActive, bool sliceEditOpen)
         => areaToolArmed && millStepActive && !sliceEditOpen;
+
+    /// <summary>
+    /// Orbit binding for a navigation preset. Matches the labels in
+    /// <see cref="NavigationPreset.All"/>.
+    /// </summary>
+    public static bool IsOrbitGesture(
+        NavigationPresetId preset, ViewportNavButton button, bool shift, bool alt)
+        => preset switch
+        {
+            NavigationPresetId.Rhino       => button == ViewportNavButton.Right && !shift,
+            NavigationPresetId.Plasticity  => button == ViewportNavButton.Right,
+            NavigationPresetId.Blender     => button == ViewportNavButton.Middle && !shift,
+            NavigationPresetId.Maya        => button == ViewportNavButton.Left && alt,
+            NavigationPresetId.Mol3D       => button == ViewportNavButton.Left,
+            NavigationPresetId.Max3ds      => button == ViewportNavButton.Middle && alt,
+            NavigationPresetId.Fusion360   => button == ViewportNavButton.Middle && shift,
+            _                              => button == ViewportNavButton.Right,
+        };
+
+    /// <summary>
+    /// Pan binding for a navigation preset. Rhino's card says middle-drag.
+    /// Shift+right still pans, which is the gesture the handler used before
+    /// and the one Rhino itself also accepts.
+    /// </summary>
+    public static bool IsPanGesture(
+        NavigationPresetId preset, ViewportNavButton button, bool shift, bool alt)
+        => preset switch
+        {
+            NavigationPresetId.Rhino =>
+                button == ViewportNavButton.Middle
+                || (button == ViewportNavButton.Right && shift),
+            NavigationPresetId.Plasticity or NavigationPresetId.Mol3D =>
+                button == ViewportNavButton.Middle,
+            NavigationPresetId.Blender   => button == ViewportNavButton.Middle && shift,
+            NavigationPresetId.Maya      => button == ViewportNavButton.Middle && alt,
+            NavigationPresetId.Max3ds    => button == ViewportNavButton.Middle && !alt,
+            NavigationPresetId.Fusion360 => button == ViewportNavButton.Middle && !shift,
+            _                            => button == ViewportNavButton.Middle,
+        };
 }
+
+/// <summary>Mouse button for navigation policy. Kept off Avalonia so tests can call it.</summary>
+public enum ViewportNavButton { Left, Right, Middle }

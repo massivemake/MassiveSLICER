@@ -1670,6 +1670,19 @@
                                 <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.EndRetractDistanceMm}"/>
                             </Grid>
 
+                            <CheckBox Margin="8,6,8,2" Content="End wipe" FontSize="11"
+                                      IsChecked="{Binding Additive.EndWipeEnabled, Mode=TwoWay}"
+                                      ToolTip.Tip="For this distance before the end, keep moving along the path with the extruder off. The screw stops early so the last of the bead does not blob. If End retract is also on, the lift happens after this wipe."/>
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="End wipe (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="How far before the end extrusion stops. The nozzle stays on the path at print speed."/>
+                                <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.EndWipeDistanceMm}"/>
+                            </Grid>
+
                             <!-- First layer speed / RPM overrides (KRL export) -->
                             <CheckBox Margin="8,6,8,0" IsChecked="{Binding Additive.FirstLayerAdjustmentsEnabled, Mode=TwoWay}"
                                       ToolTip.Tip="Enable first-layer speed/RPM adjustments. When off, the first layer prints at the normal speed/RPM and the export ignores these fields.">

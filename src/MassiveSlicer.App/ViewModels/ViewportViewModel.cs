@@ -463,6 +463,36 @@ public sealed partial class ViewportViewModel : ViewModelBase
         }
     }
 
+    private AppPreferences? _beadOverhangPrefs;
+    private bool _beadOverhangSpectrum;
+
+    /// <summary>
+    /// Overhang heatmap ramp. False is white to red. True is blue to green to red.
+    /// Stored in app preferences so it survives a restart.
+    /// </summary>
+    public bool BeadOverhangSpectrum
+    {
+        get => _beadOverhangSpectrum;
+        set
+        {
+            if (!SetField(ref _beadOverhangSpectrum, value)) return;
+            if (_beadOverhangPrefs is { } prefs && prefs.BeadOverhangSpectrum != value)
+            {
+                prefs.BeadOverhangSpectrum = value;
+                PreferencesLoader.Save(prefs);
+            }
+        }
+    }
+
+    /// <summary>Copies the saved ramp in without writing prefs back.</summary>
+    internal void AttachBeadOverhangPreference(AppPreferences prefs)
+    {
+        _beadOverhangPrefs = prefs;
+        if (_beadOverhangSpectrum == prefs.BeadOverhangSpectrum) return;
+        _beadOverhangSpectrum = prefs.BeadOverhangSpectrum;
+        OnPropertyChanged(nameof(BeadOverhangSpectrum));
+    }
+
     private bool _showOrientationPreview = false;
     public bool ShowOrientationPreview
     {
@@ -7763,12 +7793,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         var parentObject = _rotaryGroupItem;
         EnqueueRotarySceneNode(node);
 
-        var item = CreateOutlinerItem(node, child =>
-        {
-            parentObject?.RemoveChild(child);
-            PendingRemoveNodes.Enqueue(child.Node);
-            NotifyRenderNeeded();
-        }, () => OnNodeHidden?.Invoke(node), modelFileOps: true);
+        var item = CreateOutlinerItem(node, DeleteListedUserItem, () => OnNodeHidden?.Invoke(node), modelFileOps: true);
 
         if (parentObject is not null)
             parentObject.AddChild(item);
@@ -7885,12 +7910,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             return;
         }
 
-        var item = CreateOutlinerItem(node, child =>
-        {
-            _rotaryGroupItem?.RemoveChild(child);
-            PendingRemoveNodes.Enqueue(child.Node);
-            NotifyRenderNeeded();
-        }, () => OnNodeHidden?.Invoke(node), modelFileOps: true);
+        var item = CreateOutlinerItem(node, DeleteListedUserItem, () => OnNodeHidden?.Invoke(node), modelFileOps: true);
         AttachVisibilityCascade(item);
         _rotaryGroupItem.AddChild(item);
         AdoptToolpaths(adoptToolpathsFrom, item);
@@ -8544,13 +8564,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal void RegisterToolpathInOutliner(
         SceneNode toolpathNode, OutlinerItemViewModel? parentItem, OutlinerToolpathKind kind)
     {
-        var item = CreateOutlinerItem(toolpathNode, child =>
-        {
-            parentItem?.RemoveChild(child);
-            if (parentItem is null) OutlinerItems.Remove(child);
-            PendingRemoveNodes.Enqueue(child.Node);
-            NotifyRenderNeeded();
-        }, () => OnNodeHidden?.Invoke(toolpathNode), modelFileOps: true);
+        var item = CreateOutlinerItem(toolpathNode, DeleteListedUserItem,
+            () => OnNodeHidden?.Invoke(toolpathNode), modelFileOps: true);
         item.IsToolpath = true;
         item.ToolpathKind = kind;
 
@@ -8560,6 +8575,27 @@ public sealed partial class ViewportViewModel : ViewModelBase
             OutlinerItems.Add(item);
 
         NotifyRenderNeeded();
+    }
+
+    /// <summary>
+    /// Gives a drawn toolpath a deletable outliner row when that row is gone.
+    /// Parked under the rotary bed, same as a KRL import with no parent model.
+    /// A node already queued for removal is left alone so a delete cannot re-list it.
+    /// </summary>
+    internal int AdoptUnlistedToolpaths(IEnumerable<SceneNode> liveNodes)
+    {
+        HashSet<SceneNode>? pending = null;
+        int added = 0;
+        foreach (var node in liveNodes)
+        {
+            if (node is null) continue;
+            if (FindOutlinerItem(node) is not null) continue;
+            pending ??= new HashSet<SceneNode>(PendingRemoveNodes);
+            if (pending.Contains(node)) continue;
+            RegisterToolpathInOutliner(node, _rotaryGroupItem, OutlinerToolpathKinds.Infer(node.Name, null));
+            added++;
+        }
+        return added;
     }
 
     /// <summary>
@@ -8620,16 +8656,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         var groupNode = new SceneNode { Name = "Modifiers", Selectable = true, PickIgnore = true, IsAuthoringOverlay = true };
         ownerItem.Node.AddChild(groupNode);
 
-        var groupItem = CreateOutlinerItem(groupNode, it =>
-        {
-            foreach (var child in it.Children.ToList())
-                if (FindModifierForNode(child.Node) is { } cut)
-                    RemoveModifierGizmoNode(cut);
-            ownerItem.RemoveChild(it);
-            PendingRemoveNodes.Enqueue(it.Node);
-            _modifiersGroupItems.Remove(groupNode);
-            NotifyRenderNeeded();
-        }, canDelete: true);
+        var groupItem = CreateOutlinerItem(groupNode, DeleteListedUserItem, canDelete: true);
         groupItem.IsModifiersGroup = true;
         _modifiersGroupItems[groupNode] = groupItem;
         ownerItem.AddChild(groupItem);
@@ -8667,21 +8694,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal OutlinerItemViewModel CreateAppliedPiecesGroupNamed(string name)
     {
         var groupNode = new SceneNode { Name = name, Selectable = false, PickIgnore = true };
-        var groupItem = CreateOutlinerItem(groupNode, it =>
-        {
-            // Deleting the whole batch at once: cascade through every piece AND each piece's
-            // own toolpath child — none of these are real scene children of this group (or of
-            // each other), so nothing gets cleaned up unless explicitly walked and enqueued here.
-            foreach (var pieceItem in it.Children)
-            {
-                foreach (var tpItem in pieceItem.Children)
-                    PendingRemoveNodes.Enqueue(tpItem.Node);
-                PendingRemoveNodes.Enqueue(pieceItem.Node);
-            }
-            OutlinerItems.Remove(it);
-            PendingRemoveNodes.Enqueue(it.Node);
-            NotifyRenderNeeded();
-        }, displayName: name, canDelete: true);
+        // Pieces and their toolpaths are not scene children of this group, so the walk
+        // has to enqueue each of them or the lines stay drawn with no row.
+        var groupItem = CreateOutlinerItem(groupNode, DeleteListedUserItem, displayName: name, canDelete: true);
         groupItem.IsPiecesGroup = true;
         groupItem.PropertyChanged += (_, e) =>
         {
@@ -8706,20 +8721,13 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// SceneNode the same way any import is (GPU upload, rotary-bed awareness via
     /// EnqueueRotarySceneNode), but parents its outliner row under <paramref name="groupItem"/>
     /// (an Applied-Pieces group recreated via <see cref="CreateAppliedPiecesGroupNamed"/>)
-    /// instead of at the outliner root, with a delete callback that mirrors the live Apply flow
-    /// (removes from the group, not the root — <see cref="RemoveUserNode"/> would no-op here
-    /// since the item was never added to the top-level OutlinerItems).</summary>
+    /// instead of at the outliner root. Delete takes the piece off the group and enqueues
+    /// its toolpath, which is not a scene child of the piece.</summary>
     internal OutlinerItemViewModel AddRestoredPieceToGroup(SceneNode node, OutlinerItemViewModel groupItem)
     {
         EnqueueRotarySceneNode(node);
-        var pieceItem = CreateOutlinerItem(node, it =>
-        {
-            foreach (var child in it.Children)
-                PendingRemoveNodes.Enqueue(child.Node);
-            groupItem.RemoveChild(it);
-            PendingRemoveNodes.Enqueue(it.Node);
-            NotifyRenderNeeded();
-        }, displayName: node.Name, canDelete: true, modelFileOps: true);
+        var pieceItem = CreateOutlinerItem(node, DeleteListedUserItem,
+            displayName: node.Name, canDelete: true, modelFileOps: true);
         groupItem.AddChild(pieceItem);
         OnModelGeometryChanged?.Invoke();
         return pieceItem;
@@ -9103,14 +9111,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
             PendingModelRefresh.Enqueue(markerNode);
 
             var groupItem = ownerItem.Children.First(c => c.IsModifiersGroup);
-            var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, it =>
-            {
-                (FindParentOutlinerItem(it) as OutlinerItemViewModel)?.RemoveChild(it);
-                PendingRemoveNodes.Enqueue(it.Node);
-                _modifierGizmoNodes.Remove(cut);
-                _modifierOutlinerItems.Remove(cut);
-                NotifyRenderNeeded();
-            }, displayName: cut.Name, canDelete: true)
+            var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, DeleteListedUserItem,
+                displayName: cut.Name, canDelete: true)
             { IsModifier = true };
             item.PropertyChanged += (_, e) =>
             {
@@ -9349,37 +9351,45 @@ public sealed partial class ViewportViewModel : ViewModelBase
         }
 
         if (FindOutlinerItem(node) is not { } item) return;
+        DeleteListedUserItem(item);
+    }
+
+    /// <summary>
+    /// Drops this outliner row and every created row under it. Toolpaths and applied
+    /// pieces are not scene children of the owner, so removing only the owner node
+    /// leaves them drawn with no row to delete.
+    /// </summary>
+    internal void DeleteListedUserItem(OutlinerItemViewModel item)
+    {
         if (item == _rotaryGroupItem || item == _robotGroupItem) return;
 
-        if (FindParentOutlinerItem(item) is { } parent)
-        {
+        var parent = FindParentOutlinerItem(item);
+        if (parent is not null)
             parent.RemoveChild(item);
-            QueueOutlinerSubtreeForRemoval(item);
-            ClearArmatureScanMeshIfRemoved(item.Node);
-            NotifyRenderNeeded();
-            return;
-        }
+        else
+            OutlinerItems.Remove(item);
 
-        RemoveUserNode(item);
+        QueueOutlinerSubtreeForRemoval(item);
+        ClearArmatureScanMeshIfRemoved(item.Node);
+        SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
     }
 
     private void QueueOutlinerSubtreeForRemoval(OutlinerItemViewModel item)
     {
         foreach (var child in item.Children)
             QueueOutlinerSubtreeForRemoval(child);
+        if (item.IsModifier && FindModifierForNode(item.Node) is { } cut)
+        {
+            _modifierGizmoNodes.Remove(cut);
+            _modifierOutlinerItems.Remove(cut);
+        }
+        if (item.IsModifiersGroup)
+            _modifiersGroupItems.Remove(item.Node);
         PendingRemoveNodes.Enqueue(item.Node);
     }
 
-    private void RemoveUserNode(OutlinerItemViewModel item)
-    {
-        OutlinerItems.Remove(item);
-        ClearArmatureScanMeshIfRemoved(item.Node);
-        foreach (var child in item.Children.ToList())
-            QueueOutlinerSubtreeForRemoval(child);
-        PendingRemoveNodes.Enqueue(item.Node);
-        SliceCommand.RaiseCanExecuteChanged();
-        NotifyRenderNeeded();
-    }
+    private void RemoveUserNode(OutlinerItemViewModel item) => DeleteListedUserItem(item);
 
     /// <summary>Removes all user outliner entries and queues their nodes for GL disposal.</summary>
     public void ClearUserScene()

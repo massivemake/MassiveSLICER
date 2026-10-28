@@ -24,6 +24,12 @@ public static class SurfaceFollowMillGenerator
 {
     private readonly record struct Hit(Vector3 Point, Vector3 Normal);
 
+    /// <summary>
+    /// A face counts as the top when its normal's component along the approach is at least this.
+    /// About 78° from the approach: rolling terrain stays, a vertical wall does not.
+    /// </summary>
+    public const float TopFaceMin = 0.2f;
+
     /// <summary>Default drive directions: top plus the four side walls (outward = where the tool comes from).</summary>
     public static readonly IReadOnlyList<Vector3> DefaultViewDirs =
     [
@@ -45,7 +51,9 @@ public static class SurfaceFollowMillGenerator
         MillSettings mill,
         float? sampleSpacingMm = null,
         Vector3? approachAxis = null,
-        bool lockToolToApproach = false)
+        bool lockToolToApproach = false,
+        float facingMin = -1f,
+        bool occludeRejected = false)
     {
         var tp = new Toolpath();
         if (positions.Count == 0 || indices.Count < 3) return tp;
@@ -57,7 +65,8 @@ public static class SurfaceFollowMillGenerator
         if (IsUnitZ(approach))
         {
             var layer = new ToolpathLayer(0, TopZ(positions)) { PlaneNormal = Vector3.UnitZ };
-            layer.Moves.AddRange(RasterView(positions, normals, indices, mill, sampleSpacingMm, Vector3.UnitZ, -1f));
+            layer.Moves.AddRange(RasterView(
+                positions, normals, indices, mill, sampleSpacingMm, Vector3.UnitZ, facingMin, occludeRejected: occludeRejected));
             if (lockToolToApproach)
                 LockNormals(layer.Moves, Vector3.UnitZ);
             if (layer.Moves.Count > 0) tp.Layers.Add(layer);
@@ -75,7 +84,8 @@ public static class SurfaceFollowMillGenerator
         }
 
         var viewLayer = new ToolpathLayer(0, TopZ(vp)) { PlaneNormal = Vector3.UnitZ };
-        viewLayer.Moves.AddRange(RasterView(vp, vn, indices, mill, sampleSpacingMm, Vector3.UnitZ, -1f));
+        viewLayer.Moves.AddRange(RasterView(
+            vp, vn, indices, mill, sampleSpacingMm, Vector3.UnitZ, facingMin, occludeRejected: occludeRejected));
 
         var world = new ToolpathLayer(0, TopZ(positions)) { PlaneNormal = approach };
         foreach (var m in viewLayer.Moves)
@@ -170,7 +180,7 @@ public static class SurfaceFollowMillGenerator
     private static List<ToolpathMove> RasterView(
         IReadOnlyList<Vector3> positions, IReadOnlyList<Vector3> normals, IReadOnlyList<int> indices,
         MillSettings mill, float? sampleSpacingMm, Vector3 up, float facingMin,
-        Func<Vector3, bool>? claim = null)
+        Func<Vector3, bool>? claim = null, bool occludeRejected = false)
     {
         float stepover = MathF.Max(0.1f, mill.StepoverMm);
         float sample   = MathF.Max(0.05f, sampleSpacingMm ?? stepover);
@@ -184,7 +194,8 @@ public static class SurfaceFollowMillGenerator
         }
         float safeZ = maxZ + MathF.Max(1f, mill.RapidZMm);
 
-        var grid = new XyTriangleGrid(positions, normals, indices, minX, minY, maxX, maxY, stepover, facingMin);
+        var grid = new XyTriangleGrid(
+            positions, normals, indices, minX, minY, maxX, maxY, stepover, facingMin, occludeRejected);
 
         var moves = new List<ToolpathMove>();
         Vector3? cursor = null;
@@ -280,13 +291,16 @@ public static class SurfaceFollowMillGenerator
         private readonly IReadOnlyList<Vector3> _nrm;
         private readonly IReadOnlyList<int> _idx;
         private readonly float _minX, _minY, _cell, _facingMin;
+        private readonly bool _occludeRejected;
         private readonly int _w, _h;
         private readonly List<int>[] _cells;
 
         public XyTriangleGrid(IReadOnlyList<Vector3> pos, IReadOnlyList<Vector3> nrm, IReadOnlyList<int> idx,
-                              float minX, float minY, float maxX, float maxY, float cell, float facingMin)
+                              float minX, float minY, float maxX, float maxY, float cell, float facingMin,
+                              bool occludeRejected = false)
         {
             _pos = pos; _nrm = nrm; _idx = idx; _minX = minX; _minY = minY; _facingMin = facingMin;
+            _occludeRejected = occludeRejected;
             _cell = MathF.Max(cell, 1e-3f);
             _w = Math.Max(1, (int)MathF.Ceiling((maxX - minX) / _cell));
             _h = Math.Max(1, (int)MathF.Ceiling((maxY - minY) / _cell));
@@ -335,13 +349,33 @@ public static class SurfaceFollowMillGenerator
                 Vector3 nrm = u * na + v * nb + w * nc;
                 if (nrm.LengthSquared() < 1e-12f) nrm = Vector3.UnitZ;
                 nrm = Vector3.Normalize(nrm);
-                if (_facingMin >= 0f && nrm.Z < _facingMin) continue;   // face must point toward the view
+                if (!FacesApproach(a, b, c, nrm))
+                {
+                    // A wall in front of a lower shelf is a miss. Falling through it
+                    // is what drops the path down a side or into a crack.
+                    if (_occludeRejected) bestZ = z;
+                    continue;
+                }
 
                 bestZ = z;
                 hit = new Hit(new Vector3(x, y, z), nrm);
                 found = true;
             }
             return found;
+        }
+
+        /// <summary>
+        /// True when this hit is a top face. The triangle's own normal decides:
+        /// a shaded normal borrowed from the top face must not keep a wall.
+        /// </summary>
+        bool FacesApproach(Vector3 a, Vector3 b, Vector3 c, Vector3 shaded)
+        {
+            if (_facingMin < 0f) return true;
+            var face = Vector3.Cross(b - a, c - a);
+            float faceLen2 = face.LengthSquared();
+            if (faceLen2 > 1e-12f && MathF.Abs(face.Z) / MathF.Sqrt(faceLen2) < _facingMin)
+                return false;
+            return shaded.Z >= _facingMin;
         }
     }
 }

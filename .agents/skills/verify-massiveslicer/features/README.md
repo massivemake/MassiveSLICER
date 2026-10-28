@@ -26,5 +26,7 @@ Start with these five. Add a file when a new user-visible behavior ships.
 | Signed Distance | `signed-distance.md` | `sdf` (read-only; does not select the method) |
 | SDF bit side carve | `sdf-bit-side-carve.md` | `viewset SdfCarveBitSides` (read-only; `true` rebuilds the SDF view) |
 | Continuous Planar Field | `continuous-planar.md` | `cpf` (read-only; does not select the method) |
+| Bead overhang colors | `bead-overhang-colors.md` | `viewset BeadOverhangSpectrum` (read-only; `true` writes the app preference) |
+| End wipe | `end-wipe.md` | `addset EndWipeEnabled` (read-only; a value reslices) |
 
 Proof standards: real user path, action + resulting state, side effects on disk/console. Unit tests are extra, not a substitute.

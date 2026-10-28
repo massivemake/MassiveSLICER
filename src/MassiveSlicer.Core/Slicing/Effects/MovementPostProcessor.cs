@@ -14,8 +14,9 @@ public static class MovementPostProcessor
     {
         bool doZHop = settings.ZHopMm > 0f;
         bool doWipe = settings.WipeMode != WipeMode.None && settings.WipeLengthMm > 0f;
+        bool doEndWipe = settings.EndWipeEnabled && settings.EndWipeDistanceMm > 0.05f;
         bool doEnd = settings.EndRetractEnabled && settings.EndRetractDistanceMm > 0.05f;
-        if (!doZHop && !doWipe && !doEnd) return toolpath;
+        if (!doZHop && !doWipe && !doEndWipe && !doEnd) return toolpath;
 
         var result = new Toolpath { BeadWidthMm = toolpath.BeadWidthMm };
         // Keep the last real bead across layers so a layer-change travel
@@ -76,11 +77,57 @@ public static class MovementPostProcessor
             result.Layers.Add(newLayer);
         }
 
+        if (doEndWipe)
+            ApplyEndWipe(result, settings.EndWipeDistanceMm);
         if (doEnd)
             AppendEndRetract(result, settings.EndRetractDistanceMm);
 
         return result;
     }
+
+    /// <summary>
+    /// Turns the last <paramref name="distance"/> mm of extrusion into a dry tail.
+    /// The nozzle stays on the path. Travels already on the path are left alone and
+    /// do not use up the distance. The end retract, when on, is added after this.
+    /// </summary>
+    private static void ApplyEndWipe(Toolpath result, float distance)
+    {
+        float remaining = distance;
+        for (int li = result.Layers.Count - 1; li >= 0 && remaining > 0.05f; li--)
+        {
+            var moves = result.Layers[li].Moves;
+            for (int mi = moves.Count - 1; mi >= 0 && remaining > 0.05f; mi--)
+            {
+                var move = moves[mi];
+                if (move.Kind != MoveKind.Extrude || move.IsWipe || move.IsEndWipe)
+                    continue;
+
+                float len = Vector3.Distance(move.From, move.To);
+                if (len < 1e-4f) continue;
+
+                if (len <= remaining + 0.05f)
+                {
+                    moves[mi] = AsEndWipe(move);
+                    remaining -= len;
+                    continue;
+                }
+
+                float keep = len - remaining;
+                var dir = Vector3.Normalize(move.To - move.From);
+                var split = move.From + dir * keep;
+                moves[mi] = move with { To = split };
+                moves.Insert(mi + 1, AsEndWipe(move with { From = split }));
+                remaining = 0f;
+            }
+        }
+    }
+
+    private static ToolpathMove AsEndWipe(ToolpathMove move) => move with
+    {
+        IsWipe = true,
+        IsEndWipe = true,
+        WipeRpmScale = 0f,
+    };
 
     /// <summary>
     /// One travel straight up in world Z from whatever point the print finished on.

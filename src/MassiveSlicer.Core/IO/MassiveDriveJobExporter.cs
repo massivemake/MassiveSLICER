@@ -123,7 +123,9 @@ public static class MassiveDriveJobExporter
                     printMmS = s.FirstLayerSpeedMmS;
 
                 float speed;
-                if (move.IsWipe)
+                if (move.IsEndWipe)
+                    speed = printMmS * Math.Max(0.05f, move.PrintSpeedScale);
+                else if (move.IsWipe)
                 {
                     // WIPE card mm/s (shop 600). Not print / first-layer, not WipeRpmScale.
                     float wipeMmS = s.WipeSpeedMmS > 0.05f ? s.WipeSpeedMmS : s.TravelSpeedMmS;
@@ -154,6 +156,8 @@ public static class MassiveDriveJobExporter
                     comment = TravelMarkerPostProcessor.PreTravelStartComment;
                 else if (move.IsPostTravelEnd)
                     comment = TravelMarkerPostProcessor.PostTravelStartComment;
+                else if (move.IsEndWipe)
+                    comment = "end wipe";
 
                 int rpmPct = 0;
                 if (kind == "print" && !move.IsWipe && layerS is not null)
@@ -172,7 +176,8 @@ public static class MassiveDriveJobExporter
                     To = to,
                     SpeedMmS = Math.Round(speed, 3),
                     FlowScale = Math.Round(
-                        (double)(move.IsWipe ? move.WipeRpmScale
+                        (double)(move.IsEndWipe ? 0f
+                            : move.IsWipe ? move.WipeRpmScale
                             : move.IsResumeRamp ? move.ResumeRpmScale
                             : move.PrintSpeedScale * Math.Max(0.05f, move.HeightScale)),
                         4),

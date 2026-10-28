@@ -244,6 +244,13 @@ public sealed partial class ViewportViewModel
             return;
         }
         if (!TryEdge(hit, out var chain, out var center)) return;
+        var owner = DrillFeatureFinder.OpeningForWall(chain, _drillSites);
+        if (owner is not null)
+        {
+            owner.Included = true;
+            _activeDrillId = owner.Id;
+            return;
+        }
         var existing = SiteForRim(chain);
         if (existing is not null)
         {
@@ -450,6 +457,14 @@ public sealed partial class ViewportViewModel
             float radial = (d - axis * Vector3.Dot(d, axis)).Length();
             float limit = site.DetectedDiameterMm * 0.5f + 4f;
             float axialLimit = MathF.Max(8f, site.SpanMm + 2f);
+            // A click on the rim, including a corner the center test misses, is this opening.
+            if (site.Rim is { Count: >= 2 } rim &&
+                DrillFeatureFinder.TryClosestOnChain(rim, hit, out _, out float rimD) &&
+                rimD <= 6f)
+            {
+                radial = MathF.Min(radial, rimD);
+                limit = MathF.Max(limit, 6f);
+            }
             if (axial > axialLimit || radial > limit) continue;
             if (radial < bestRadial)
             {

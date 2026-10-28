@@ -28,6 +28,12 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     public bool  IsWipe { get; init; }
 
     /// <summary>
+    /// Tail of the print where the nozzle keeps the path and the extruder is already off.
+    /// Also <see cref="IsWipe"/> so preview and export treat it as a dry move.
+    /// </summary>
+    public bool IsEndWipe { get; init; }
+
+    /// <summary>
     /// Print move that starts at the Drive lookahead vertex
     /// (<c>;Pre-Travel Start</c>, 100 mm before the next wipe/travel).
     /// </summary>

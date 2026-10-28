@@ -51,6 +51,8 @@ public sealed class ToolpathRenderer : IDisposable
     /// <summary>Camera or gizmo is moving. Draw the coarse bead and skip the carve march.</summary>
     public bool InteractionPreview { get; set; }
     private int  _beadOverhangVao, _beadOverhangVbo, _beadOverhangCount;
+    private float[]? _beadOverhangScores;
+    private bool _beadOverhangSpectrum;
     private int  _orientationVao, _orientationVbo, _orientationCount;
     private int  _singularityPtVao, _singularityPtVbo, _singularityPointCount;
     private int[] _singularityVertexCumulative = [];
@@ -1345,16 +1347,40 @@ void main() {
     }
 
     /// <summary>
-    /// Builds or rebuilds the bead-overhang VAO. Each segment is coloured white→red
-    /// by its overhang value (0 = fully supported, 1 = fully unsupported).
-    /// Must be called on the GL thread.
+    /// Builds or rebuilds the bead-overhang VAO. Each segment is coloured by its
+    /// overhang (0 = fully supported, 1 = fully unsupported). The ramp is white
+    /// to red, or blue to green to red when <see cref="SetBeadOverhangSpectrum"/>
+    /// is on. Must be called on the GL thread.
     /// </summary>
     public void UpdateBeadOverhang(float[] scoresPerFlatMove)
     {
+        _beadOverhangScores = scoresPerFlatMove;
+        RebuildBeadOverhang();
+    }
+
+    /// <summary>
+    /// Switches the overhang ramp and recolours the map already uploaded.
+    /// Does not reslice. Must be called on the GL thread.
+    /// </summary>
+    public void SetBeadOverhangSpectrum(bool spectrum)
+    {
+        if (_beadOverhangSpectrum == spectrum) return;
+        _beadOverhangSpectrum = spectrum;
+        if (_beadOverhangScores is not null)
+            RebuildBeadOverhang();
+    }
+
+    private void RebuildBeadOverhang()
+    {
         if (_beadOverhangVao != 0) { GL.DeleteVertexArray(_beadOverhangVao); GL.DeleteBuffer(_beadOverhangVbo); }
         _beadOverhangVao = _beadOverhangVbo = _beadOverhangCount = 0;
-        if (_beadEbo == 0) return;
-        var data = BuildBeadColoredData(scoresPerFlatMove, t => new NVec3(1f, 1f - t, 1f - t));
+        if (_beadEbo == 0 || _beadOverhangScores is null) return;
+        bool spectrum = _beadOverhangSpectrum;
+        var data = BuildBeadColoredData(_beadOverhangScores, t =>
+        {
+            var c = BeadOverhangPalette.Color(t, spectrum);
+            return new NVec3(c.X, c.Y, c.Z);
+        });
         if (data.Length > 0)
         {
             (_beadOverhangVao, _beadOverhangVbo) = BuildVao(data);

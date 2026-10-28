@@ -46,6 +46,7 @@ public static class ToolpathClone
                 IsLayerChange     = move.IsLayerChange,
                 IsLayerStitch     = move.IsLayerStitch,
                 IsWipe            = move.IsWipe,
+                IsEndWipe         = move.IsEndWipe,
                 IsPreTravelStart  = move.IsPreTravelStart,
                 IsPostTravelEnd   = move.IsPostTravelEnd,
                 WipeRpmScale      = move.WipeRpmScale,

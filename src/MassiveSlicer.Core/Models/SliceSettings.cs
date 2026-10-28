@@ -42,6 +42,15 @@ public sealed class SliceSettings
     /// <summary>World +Z distance of that end retract, in mm.</summary>
     public float EndRetractDistanceMm { get; init; } = 50f;
 
+    /// <summary>
+    /// For this distance before the end of the print, follow the path with the extruder off.
+    /// Off unless the movement checkbox is on. When end retract is also on, the lift comes after.
+    /// </summary>
+    public bool EndWipeEnabled { get; init; }
+
+    /// <summary>How far before the end extrusion stops, in mm.</summary>
+    public float EndWipeDistanceMm { get; init; } = 50f;
+
     /// <summary>Pre-travel wipe mode. None = disabled.</summary>
     public WipeMode WipeMode { get; init; } = WipeMode.None;
 

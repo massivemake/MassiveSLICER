@@ -543,6 +543,9 @@ public sealed class WorkspaceToolpathMoveData
     public bool IsLayerChange { get; set; }
     public bool IsLayerStitch { get; set; }
     public bool IsWipe { get; set; }
+
+    /// <summary>Dry tail at the end of the print. Absent in older files, which stay extruding.</summary>
+    public bool IsEndWipe { get; set; }
     public float WipeRpmScale { get; set; } = 1f;
     public bool IsResumeRamp { get; set; }
     public float ResumeSpeedScale { get; set; } = 1f;

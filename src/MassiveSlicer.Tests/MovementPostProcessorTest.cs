@@ -409,6 +409,84 @@ public class MovementPostProcessorTest
         Assert.Equal(54f, lift.To.Z, 0.01f);
     }
 
+    [Fact]
+    public void End_wipe_dries_the_tail_and_retract_lifts_after_it()
+    {
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(100, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+
+        var off = MovementPostProcessor.Apply(tp, new SliceSettings { EndWipeDistanceMm = 40f });
+        Assert.Same(tp, off);
+
+        var wiped = MovementPostProcessor.Apply(tp, new SliceSettings
+        {
+            EndWipeEnabled = true,
+            EndWipeDistanceMm = 40f,
+        });
+        Assert.Equal(2, wiped.Layers[0].Moves.Count);
+        var bead = wiped.Layers[0].Moves[0];
+        var dry = wiped.Layers[0].Moves[1];
+        Assert.False(bead.IsEndWipe);
+        Assert.False(bead.IsWipe);
+        Assert.Equal(0f, bead.From.X, 0.01f);
+        Assert.Equal(60f, bead.To.X, 0.01f);
+        Assert.True(dry.IsEndWipe);
+        Assert.True(dry.IsWipe);
+        Assert.Equal(0f, dry.WipeRpmScale);
+        Assert.Equal(60f, dry.From.X, 0.01f);
+        Assert.Equal(100f, dry.To.X, 0.01f);
+        Assert.Equal(10f, dry.From.Z, 0.01f);
+        Assert.Equal(10f, dry.To.Z, 0.01f);
+
+        var both = MovementPostProcessor.Apply(tp, new SliceSettings
+        {
+            EndWipeEnabled = true,
+            EndWipeDistanceMm = 40f,
+            EndRetractEnabled = true,
+            EndRetractDistanceMm = 25f,
+        });
+        var moves = both.Layers[0].Moves;
+        Assert.Equal(3, moves.Count);
+        Assert.True(moves[1].IsEndWipe);
+        Assert.Equal(MoveKind.Travel, moves[2].Kind);
+        Assert.True(moves[2].IsZHop);
+        Assert.Equal(100f, moves[2].From.X, 0.01f);
+        Assert.Equal(10f, moves[2].From.Z, 0.01f);
+        Assert.Equal(35f, moves[2].To.Z, 0.01f);
+    }
+
+    [Fact]
+    public void End_wipe_crosses_segments_and_skips_travels()
+    {
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(Extrude(0, 0, 30, 0));
+        layer.Moves.Add(Travel(30, 0, 35, 0));
+        layer.Moves.Add(Extrude(35, 0, 65, 0));
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+
+        var result = MovementPostProcessor.Apply(tp, new SliceSettings
+        {
+            EndWipeEnabled = true,
+            EndWipeDistanceMm = 40f,
+        });
+        var moves = result.Layers[0].Moves;
+        Assert.Equal(4, moves.Count);
+        Assert.False(moves[0].IsEndWipe);
+        Assert.Equal(20f, moves[0].To.X, 0.01f);
+        Assert.True(moves[1].IsEndWipe);
+        Assert.Equal(20f, moves[1].From.X, 0.01f);
+        Assert.Equal(30f, moves[1].To.X, 0.01f);
+        Assert.Equal(MoveKind.Travel, moves[2].Kind);
+        Assert.False(moves[2].IsEndWipe);
+        Assert.True(moves[3].IsEndWipe);
+        Assert.Equal(35f, moves[3].From.X, 0.01f);
+        Assert.Equal(65f, moves[3].To.X, 0.01f);
+    }
+
     private static ToolpathMove Extrude(float x0, float y0, float x1, float y1) =>
         new(new Vector3(x0, y0, 10), new Vector3(x1, y1, 10), MoveKind.Extrude) { Normal = Vector3.UnitZ };
 
