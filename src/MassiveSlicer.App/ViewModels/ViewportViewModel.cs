@@ -7846,7 +7846,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// </summary>
     internal void SyncLayerPreviewFlags(bool enabled)
     {
-        foreach (var item in OutlinerItems)
+        foreach (var item in OutlinerListSnapshot.Copy(OutlinerItems))
             ClearLayerPreviewOnOutlinerItem(item);
 
         if (enabled && ResolveActivePrintObjectItem() is { } target)
@@ -7856,7 +7856,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
     private static void ClearLayerPreviewOnOutlinerItem(OutlinerItemViewModel item)
     {
         item.Node.LayerPreview = false;
-        foreach (var child in item.Children)
+        foreach (var child in OutlinerListSnapshot.Copy(item.Children))
             ClearLayerPreviewOnOutlinerItem(child);
     }
 
@@ -7951,11 +7951,11 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// <summary>Yields outliner entries for user-imported print models (excludes scans).</summary>
     internal IEnumerable<OutlinerItemViewModel> EnumerateUserModelItems()
     {
-        foreach (var item in OutlinerItems)
+        foreach (var item in OutlinerListSnapshot.Copy(OutlinerItems))
         {
             if (item == _rotaryGroupItem)
             {
-                foreach (var child in item.Children)
+                foreach (var child in OutlinerListSnapshot.Copy(item.Children))
                 {
                     if (!OutlinerModelOps.IsScanItem(child) && !child.IsEffector && !child.IsTcpAttractor
                         && !child.IsModifier && !child.IsModifiersGroup && !child.IsPiecesGroup)
@@ -7975,7 +7975,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 // The group itself is just a label (see CreateAppliedPiecesGroup) — the pieces
                 // inside are real, independent models and must be slicable/exportable/arrangeable
                 // like any other, so surface THEM, not the group.
-                foreach (var piece in item.Children)
+                foreach (var piece in OutlinerListSnapshot.Copy(item.Children))
                     yield return piece;
                 continue;
             }
@@ -7994,7 +7994,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         {
             if (model.IsToolpath)
                 yield return model;
-            foreach (var child in model.Children)
+            foreach (var child in OutlinerListSnapshot.Copy(model.Children))
             {
                 if (child.IsToolpath)
                     yield return child;
@@ -8023,7 +8023,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     IEnumerable<OutlinerItemViewModel> EnumerateAllContentItems()
     {
-        foreach (var item in OutlinerItems)
+        foreach (var item in OutlinerListSnapshot.Copy(OutlinerItems))
         {
             if (item == _robotGroupItem) continue;
             if (item == _toolheadGroupItem) continue;
@@ -8042,7 +8042,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     static IEnumerable<OutlinerItemViewModel> EnumerateOutlinerDescendants(OutlinerItemViewModel item)
     {
-        foreach (var child in item.Children)
+        foreach (var child in OutlinerListSnapshot.Copy(item.Children))
         {
             yield return child;
             foreach (var desc in EnumerateOutlinerDescendants(child))

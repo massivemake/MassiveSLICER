@@ -12,7 +12,7 @@ namespace MassiveSlicer.ViewModels;
 /// clearing, contouring, swarf, drilling, multi-axis finishing, morph). Cutting data comes
 /// from mill bit presets. Spindle on/RPM lives in the KRL templates.
 /// </summary>
-public sealed class SubtractiveSettingsViewModel : ViewModelBase
+public sealed partial class SubtractiveSettingsViewModel : ViewModelBase
 {
     public SubtractiveSettingsViewModel()
     {
@@ -43,6 +43,7 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
 
         CapturePlanarFromCameraCommand = new RelayCommand(() => CapturePlanarFromCamera?.Invoke());
         CapturePlanarFromPaintCommand = new RelayCommand(() => CapturePlanarFromPaint?.Invoke());
+        InitCurveCommands();
 
         ReloadBitLibrary();
     }
@@ -801,6 +802,9 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         ProjectionNormalInfluence   = (float)ProjectionNormalInfluence,
         // Cutter-radius compensation left the mill panel. Attractors aim the tool instead.
         ToolCompensation            = AdaToolCompensation.Off,
+        CurveSideOffsetMm           = (float)CurveSideOffsetMm,
+        CurveSide                   = CurveSide,
+        CurveIncludeToolRadius      = CurveIncludeToolRadius,
     };
 
     Core.Models.ProjectionShape _projectionShape = Core.Models.ProjectionShape.Cylinder;
@@ -1026,6 +1030,10 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
             ToolCompensation = ToolCompensation.ToString(),
             TopHeightMm = TopHeightMm,
             BottomHeightMm = BottomHeightMm,
+            CurveSideOffsetMm = CurveSideOffsetMm,
+            CurveSide = CurveSide.ToString(),
+            CurveIncludeToolRadius = CurveIncludeToolRadius,
+            Curves = CaptureCurves(),
         };
     }
 
@@ -1143,6 +1151,15 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
             ToolCompensation = comp;
         TopHeightMm = s.TopHeightMm;
         BottomHeightMm = s.BottomHeightMm;
+        CurveSideOffsetMm = s.CurveSideOffsetMm;
+        CurveIncludeToolRadius = s.CurveIncludeToolRadius;
+        CurveSideDisplay = s.CurveSide switch
+        {
+            nameof(CurveOffsetSide.Inside) => "Inside",
+            nameof(CurveOffsetSide.OnLine) => "On the line",
+            _ => "Outside",
+        };
+        ReplaceCurves(s.Curves);
     }
 
     /// <summary>
@@ -1191,6 +1208,11 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         nameof(AreaSelectTool),
         nameof(AreaSelectStatus),
         nameof(PlanarAxisStatus),
+        nameof(CurveStatusText),
+        nameof(CurveStatusIsError),
+        nameof(HasSelectedCurve),
+        nameof(SelectedCurveLabel),
+        nameof(HasCurves),
         nameof(IsPlanarAxisCustom),
         nameof(IsProjectionCylinder),
         nameof(IsProjectionSphere),

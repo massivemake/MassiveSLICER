@@ -113,6 +113,11 @@ public sealed class AdaMachiningSettings
     public Vector3 ProjectionAxisZ { get; set; } = Vector3.UnitZ;
     public AdaToolCompensation ToolCompensation { get; set; } = AdaToolCompensation.Off;
 
+    /// <summary>Tool-center distance off an outline. Outside is away from a closed loop.</summary>
+    public float CurveSideOffsetMm { get; set; }
+    public CurveOffsetSide CurveSide { get; set; } = CurveOffsetSide.Outside;
+    public bool CurveIncludeToolRadius { get; set; }
+
     public MillSettings ToMillSettings() => new()
     {
         ToolDiameterMm    = ToolDiameterMm,
@@ -138,6 +143,13 @@ public sealed class AdaMillRequest
     public required IReadOnlyList<int> Indices { get; init; }
     public Vector3? ApproachAxis { get; init; }
     public IReadOnlyList<Vector3>? DrillHoles { get; init; }
+    /// <summary>
+    /// Chosen drill points. An empty list drills nothing. Null keeps the old
+    /// single hole at the mesh centre.
+    /// </summary>
+    public IReadOnlyList<DrillPoint>? DrillPoints { get; init; }
+    /// <summary>Imported or picked polylines. Included chains replace waterline and cutout outlines, and drilling follows them.</summary>
+    public IReadOnlyList<MillCurve>? Curves { get; init; }
     /// <summary>0–100 while a long mill, such as projection, is running.</summary>
     public Action<float>? ReportProgress { get; init; }
 }

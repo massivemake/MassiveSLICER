@@ -167,6 +167,8 @@ public sealed class PrintPresetRecord
     public double? WipeRampMm { get; set; }
     public double? WipeSpeed { get; set; }
     public bool? WipeSkipShortTravels { get; set; }
+    public bool? EndRetractEnabled { get; set; }
+    public double? EndRetractDistanceMm { get; set; }
     public bool? ResumeRampEnabled { get; set; }
     public double? ResumeRampStartSpeed { get; set; }
     public double? ResumeRampStartRpmPercent { get; set; }

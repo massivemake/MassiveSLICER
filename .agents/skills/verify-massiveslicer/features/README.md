@@ -7,6 +7,7 @@ Start with these five. Add a file when a new user-visible behavior ships.
 | Feature | File | Cheap read-only probe |
 |---|---|---|
 | Mill generate | `mill-generate.md` | `mill status` |
+| Drill holes | `drill-holes.md` | `mill drill` |
 | T12 overlay | `t12-overlay.md` | `/status` tool + screenshot |
 | T1 TCP outer | `t1-tcp-envelope.md` | `viewset ShowT1TcpEnvelope` |
 | KRL post header | `krl-export-header.md` | `krlpost` |
@@ -15,6 +16,7 @@ Start with these five. Add a file when a new user-visible behavior ships.
 | Export polyline | `export-polyline.md` | `export-polyline /tmp/slicer-polyline.obj` |
 | Angled walls | `angled-walls.md` | `addset WallCount` (read only; a value reslices) |
 | Wipe 90-Degree | `wipe-90.md` | `addset WipeModeDisplay` (read only; a value reslices) |
+| End retract | `end-retract.md` | `addset EndRetractEnabled` (read only; a value reslices) |
 | TCP Adjust | `tcp-adjust.md` | `tcpadj` (list is read-only; `add` / `deflect` place a handle) |
 | Outliner group | `outliner-group.md` | `group` (show is read-only; `move` / `yaw` change the scene — undo) |
 | Toolhead keyframe | `tcp-keyframe-orient.md` | `tcpkey add` (needs a preview timeline; re-solves the open path) |

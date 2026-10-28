@@ -1135,6 +1135,10 @@ public sealed class SceneRenderer : IDisposable
     }
 
     private SpineRenderer? _cylinderPreview;
+    private SpineRenderer? _drillOverlay;
+    private int _drillOverlayCount;
+    private SpineRenderer? _curveOverlay;
+    private int _curveOverlayCount;
     private int _cylinderPreviewCount;
     private bool _cylinderPreviewSelected;
 
@@ -1183,6 +1187,38 @@ public sealed class SceneRenderer : IDisposable
         _cylinderPreviewCount = pts.Count;
         _cylinderPreview ??= new SpineRenderer();
         _cylinderPreview.UpdateSegments(pts);
+    }
+
+    /// <summary>Hole circles, edge chains, and plunge ticks. Pass null or fewer than two points to hide.</summary>
+    public void SetDrillOverlay(IReadOnlyList<(System.Numerics.Vector3 Pos, System.Numerics.Vector3 Color)>? segments)
+    {
+        if (segments is null || segments.Count < 2)
+        {
+            _drillOverlayCount = 0;
+            return;
+        }
+        var pts = new List<(Vector3, Vector3)>(segments.Count);
+        foreach (var (p, c) in segments)
+            pts.Add((new Vector3(p.X, p.Y, p.Z), new Vector3(c.X, c.Y, c.Z)));
+        _drillOverlayCount = pts.Count;
+        _drillOverlay ??= new SpineRenderer();
+        _drillOverlay.UpdateSegments(pts);
+    }
+
+    /// <summary>Imported curves and the shifted line the tool will follow. Pass null to hide.</summary>
+    public void SetCurveOverlay(IReadOnlyList<(System.Numerics.Vector3 Pos, System.Numerics.Vector3 Color)>? segments)
+    {
+        if (segments is null || segments.Count < 2)
+        {
+            _curveOverlayCount = 0;
+            return;
+        }
+        var pts = new List<(Vector3, Vector3)>(segments.Count);
+        foreach (var (p, c) in segments)
+            pts.Add((new Vector3(p.X, p.Y, p.Z), new Vector3(c.X, c.Y, c.Z)));
+        _curveOverlayCount = pts.Count;
+        _curveOverlay ??= new SpineRenderer();
+        _curveOverlay.UpdateSegments(pts);
     }
 
     // ── Multi-Planar guide planes + distortion spine ─────────────────────────
@@ -1694,6 +1730,20 @@ public sealed class SceneRenderer : IDisposable
         {
             GL.Disable(EnableCap.DepthTest);
             _cylinderPreview.Draw(mvp);
+            GL.Enable(EnableCap.DepthTest);
+        }
+
+        if (_drillOverlayCount >= 2 && _drillOverlay is not null)
+        {
+            GL.Disable(EnableCap.DepthTest);
+            _drillOverlay.Draw(mvp);
+            GL.Enable(EnableCap.DepthTest);
+        }
+
+        if (_curveOverlayCount >= 2 && _curveOverlay is not null)
+        {
+            GL.Disable(EnableCap.DepthTest);
+            _curveOverlay.Draw(mvp);
             GL.Enable(EnableCap.DepthTest);
         }
 
@@ -2611,6 +2661,8 @@ public sealed class SceneRenderer : IDisposable
         _backdrop?.Dispose();
         _planePreview?.Dispose();
         _cylinderPreview?.Dispose();
+        _drillOverlay?.Dispose();
+        _curveOverlay?.Dispose();
         foreach (var gp in _guidePlanes) gp.Dispose();
         _spine?.Dispose();
         _guideGizmo?.Dispose();

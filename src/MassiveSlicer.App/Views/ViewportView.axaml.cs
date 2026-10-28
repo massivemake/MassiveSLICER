@@ -452,6 +452,7 @@ public partial class ViewportView : UserControl
             vm.OnPreviewDisplacedRequested = () => RunPreviewDisplacedAsync(vm);
             vm.OnGenerateMultiAxisRequested = () => RunMultiAxisMillAsync(vm);
             vm.OnGenerateMillFromSettingsRequested = () => RunMillFromMeshAsync(vm);
+            vm.OnFindDrillFeaturesRequested = () => FindDrillFeatures(vm);
             vm.OnUpdateSliceRequested = () => RunUpdateSliceAsync(vm);
             vm.CanUpdateSlice         = () => FindResliceSource(vm) is not null
                 && (_activeScrubNode is null || !_mergedByNode.ContainsKey(_activeScrubNode));
@@ -1141,6 +1142,8 @@ public partial class ViewportView : UserControl
 
             additive.OnOpenCurvedBoundaryEditorRequested = () => OpenCurvedBoundaryEditor(vm, additive);
             additive.OnImportCurvedBoundariesRequested  = () => ImportCurvedBoundariesAsync(vm, additive);
+            if (vm.SubtractiveSettings is { } curveMill)
+                curveMill.ImportCurvesRequested += (_, _) => _ = ImportMillCurvesAsync(vm, curveMill);
             additive.OnHomePositionSelected = angles => vm.Robot?.ApplyViewportJoints(angles);
 
             additive.PropertyChanged += (_, pe) =>
@@ -1571,6 +1574,47 @@ public partial class ViewportView : UserControl
 
         vm.BeginBoundaryEditor(low, high);
         UpdateBoundaryMarkers(vm);
+    }
+
+    private async Task ImportMillCurvesAsync(ViewportViewModel vm, SubtractiveSettingsViewModel sub)
+    {
+        if (TopLevel.GetTopLevel(this) is not Window window) return;
+        var files = await window.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Import mill curves",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Curves") { Patterns = ["*.obj", "*.dxf", "*.svg"] },
+                new FilePickerFileType("OBJ polyline") { Patterns = ["*.obj"] },
+                new FilePickerFileType("DXF") { Patterns = ["*.dxf"] },
+                new FilePickerFileType("SVG") { Patterns = ["*.svg"] },
+                new FilePickerFileType("All files") { Patterns = ["*.*"] },
+            ],
+        });
+        if (files.Count == 0) return;
+        var path = files[0].TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        float? top = null;
+        var sourceItem = vm.OwningModelItem(
+                             vm.FindUserMeshOutlinerItem(_renderer.SelectedNode)
+                             ?? vm.ResolveActivePrintObjectItem())
+                         ?? vm.EnumerateUserModelItems().FirstOrDefault();
+        if (sourceItem is not null && vm.IsProjectionGuideNode(sourceItem.Node))
+            sourceItem = vm.EnumerateUserModelItems().FirstOrDefault(i => !vm.IsProjectionGuideNode(i.Node));
+        if (sourceItem is not null
+            && TryCollectMillSurface(sourceItem, restrictToPaint: false, out var positions, out _, out _)
+            && positions.Length > 0)
+        {
+            float z = float.MinValue;
+            foreach (var p in positions)
+                if (p.Z > z) z = p.Z;
+            if (z > float.MinValue / 2f) top = z;
+        }
+        sub.ImportCurveFile(path, top);
+        SetSliceStatus(vm, sub.CurveStatusText, isError: sub.CurveStatusIsError);
+        GlCanvas.RequestNextFrameRendering();
     }
 
     private async Task ImportCurvedBoundariesAsync(ViewportViewModel vm, AdditiveSettingsViewModel additive)
@@ -2348,6 +2392,8 @@ public partial class ViewportView : UserControl
                 UpdateAnglePlanePreview(vm);
             UpdatePaintOverlay(vm);
             UpdateMillAreaOverlay(vm);
+            UpdateDrillOverlay(vm);
+            UpdateCurveOverlay(vm);
 
             if (_fkController is not null && vm.Robot is { } fkRobot)
             {
@@ -4292,6 +4338,29 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // Drilling: Ctrl marks an edge as a hole, Alt takes it off the list,
+        // Shift places a hole on a face, Shift-Alt removes that face hole.
+        if (DataContext is ViewportViewModel drillPtrVm
+            && drillPtrVm.SubtractiveSettings?.IsDrilling == true
+            && !_spaceHeld
+            && kind == PointerUpdateKind.LeftButtonPressed
+            && (mods.HasFlag(KeyModifiers.Control)
+                || mods.HasFlag(KeyModifiers.Alt)
+                || mods.HasFlag(KeyModifiers.Shift)))
+        {
+            bool shift = mods.HasFlag(KeyModifiers.Shift);
+            bool alt = mods.HasFlag(KeyModifiers.Alt);
+            var drillClick = shift && alt ? DrillClickKind.RemoveFace
+                : shift ? DrillClickKind.AddFace
+                : alt ? DrillClickKind.RemoveListed
+                : DrillClickKind.MarkEdge;
+            if (TryPlaceDrillPoint(drillPtrVm, pos, drillClick))
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
         // Mill SELECT AREA — Face / Brush / Box / Lasso on workpiece meshes only
         // (imports & scans). Robot, bed, and cell environment never receive hits.
         if (DataContext is ViewportViewModel millPtrVm
@@ -5877,6 +5946,8 @@ public partial class ViewportView : UserControl
             LightningPreferInteriorMouths  = s.LightningPreferInteriorMouths,
             LightningTargetSupportSelections = s.LightningTargetSupportSelections,
             ZHopMm          = (float)s.ZHopMm,
+            EndRetractEnabled = s.EndRetractEnabled,
+            EndRetractDistanceMm = (float)s.EndRetractDistanceMm,
             BedZ            = bedZ,
             WipeMode        = s.WipeModeDisplay switch
             {
@@ -7195,7 +7266,8 @@ public partial class ViewportView : UserControl
 
         bool areaArmed = vm.IsMillAreaSelectActive;
         bool hasPaint  = MillPaint.HasPaint || vm.MillPaintedVertices > 0;
-        if (areaArmed && !hasPaint)
+        bool drilling = sub.IsDrilling;
+        if (areaArmed && !hasPaint && !drilling)
         {
             SetSliceStatus(vm,
                 "Paint a mill area first (Box / Lasso / Brush / Face), or switch SELECT AREA to Whole model.",
@@ -7208,15 +7280,27 @@ public partial class ViewportView : UserControl
         NVec3? rotaryCenterAtGenerate = null;
         if (rotaryWorldAtGenerate is { } rw)
             rotaryCenterAtGenerate = new NVec3(rw.Row3.X, rw.Row3.Y, rw.Row3.Z);
-        if (!TryCollectMillSurface(sourceItem, restrictToPaint: hasPaint,
+        if (!TryCollectMillSurface(sourceItem, restrictToPaint: hasPaint && !drilling,
                 out var positions, out var normals, out var indices))
         {
             SetSliceStatus(vm,
-                hasPaint
+                hasPaint && !drilling
                     ? "Mill failed: painted area has no mesh triangles."
                     : "Mill failed: mesh has no geometry.",
                 isError: true);
             return;
+        }
+        IReadOnlyList<DrillPoint>? drillPoints = null;
+        var curvePaths = sub.CollectIncludedCurves();
+        if (drilling)
+        {
+            vm.RememberDrillMesh(positions);
+            drillPoints = vm.CollectDrillPoints();
+            if (drillPoints.Count == 0 && curvePaths.Count == 0)
+            {
+                SetSliceStatus(vm, "Ctrl-click an edge to drill it, Shift-click a face to place a hole, or include a curve.", isError: true);
+                return;
+            }
         }
 
         var cancel = BeginSliceCancellation();
@@ -7262,6 +7346,8 @@ public partial class ViewportView : UserControl
                 Normals      = normals,
                 Indices      = indices,
                 ApproachAxis = approach,
+                DrillPoints  = drillPoints,
+                Curves       = curvePaths.Count > 0 ? curvePaths : null,
                 ReportProgress = p => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = Math.Clamp(p, 0, 100)),
             };
             var attractors = vm.CaptureTcpAdjustments();
@@ -7721,6 +7807,8 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.WaveAmplitude),
         nameof(AdditiveSettingsViewModel.WaveWavelength),
         nameof(AdditiveSettingsViewModel.ZHopMm),
+        nameof(AdditiveSettingsViewModel.EndRetractEnabled),
+        nameof(AdditiveSettingsViewModel.EndRetractDistanceMm),
         nameof(AdditiveSettingsViewModel.WipeModeDisplay),
         nameof(AdditiveSettingsViewModel.WipeLengthMm),
         nameof(AdditiveSettingsViewModel.WipeRampMm),
@@ -7744,6 +7832,12 @@ public partial class ViewportView : UserControl
         if (vm.SubtractiveSettings is { } subRt)
             subRt.PropertyChanged += (_, e) =>
             {
+                if (e.PropertyName is nameof(SubtractiveSettingsViewModel.CurveSideOffsetMm)
+                    or nameof(SubtractiveSettingsViewModel.CurveSideDisplay)
+                    or nameof(SubtractiveSettingsViewModel.CurveIncludeToolRadius)
+                    or nameof(SubtractiveSettingsViewModel.CurveRevision)
+                    or nameof(SubtractiveSettingsViewModel.FinishAllowanceMm))
+                    GlCanvas.RequestNextFrameRendering();
                 // A mill toolpath plus Realtime rebuilds from milling-tab edits.
                 // Mill phase with no path yet still cuts the first one.
                 if (!SubtractiveSettingsViewModel.AffectsMillToolpath(e.PropertyName))
@@ -8592,8 +8686,9 @@ public partial class ViewportView : UserControl
 
         foreach (var child in root.Children.ToList())
         {
-            root.RemoveChild(child);
-            child.LocalTransform  = child.WorldTransform;
+            // Read the world pose before unparenting. A GLB root holds the ×1000
+            // millimetre scale, and WorldTransform after RemoveChild drops it.
+            child.DetachKeepingWorld();
             child.SourceFilePath ??= root.SourceFilePath;
             promoted.Add(child);
         }
@@ -10429,6 +10524,77 @@ public partial class ViewportView : UserControl
     /// Ray-pick a face exclusively on millable user workpieces (imports / scans).
     /// Robot, bed, toolheads, and other cell environment never qualify.
     /// </summary>
+    void FindDrillFeatures(ViewportViewModel vm)
+    {
+        var sub = vm.SubtractiveSettings;
+        if (sub is null)
+        {
+            SetSliceStatus(vm, "Mill failed: no milling settings.", isError: true);
+            return;
+        }
+        var sourceItem = vm.OwningModelItem(
+                             vm.FindUserMeshOutlinerItem(_renderer.SelectedNode)
+                             ?? vm.ResolveActivePrintObjectItem())
+                         ?? vm.EnumerateUserModelItems().FirstOrDefault();
+        if (sourceItem is not null && vm.IsProjectionGuideNode(sourceItem.Node))
+            sourceItem = vm.EnumerateUserModelItems().FirstOrDefault(i => !vm.IsProjectionGuideNode(i.Node));
+        if (sourceItem is null)
+        {
+            SetSliceStatus(vm, "Select a model before finding holes.", isError: true);
+            return;
+        }
+        if (!TryCollectMillSurface(sourceItem, restrictToPaint: false,
+                out var positions, out _, out var indices))
+        {
+            SetSliceStatus(vm, "That model has no mesh to search.", isError: true);
+            return;
+        }
+        var survey = DrillFeatureFinder.Find(positions, indices);
+        vm.SetDrillSurvey(survey, positions);
+        if (sub.IsDrilling)
+            SetSliceStatus(vm, vm.DrillStatusText);
+        else
+            SetSliceStatus(vm, $"Found {survey.Holes.Count} holes and {survey.Edges.Count} edges. Add them in CURVES.");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    bool TryPlaceDrillPoint(ViewportViewModel vm, Avalonia.Point pos, DrillClickKind kind)
+    {
+        var hit = PickMillableFace(vm, pos);
+        if (hit is null) return false;
+        var sourceItem = vm.OwningModelItem(vm.FindUserMeshOutlinerItem(hit.Value.SelectableRoot) ?? vm.FindUserMeshOutlinerItem(hit.Value.MeshNode));
+        if (sourceItem is not null
+            && TryCollectMillSurface(sourceItem, restrictToPaint: false, out var positions, out _, out _))
+            vm.RememberDrillMesh(positions);
+        float tool = (float)(vm.SubtractiveSettings?.ToolDiameterMm ?? 6);
+        var hitPt = hit.Value.WorldHit;
+        var hitN = hit.Value.WorldNormal;
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        var ray = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
+        vm.ApplyDrillClick(
+            new NVec3(hitPt.X, hitPt.Y, hitPt.Z),
+            new NVec3(hitN.X, hitN.Y, hitN.Z),
+            new NVec3(ray.Direction.X, ray.Direction.Y, ray.Direction.Z),
+            kind, tool);
+        SetSliceStatus(vm, vm.DrillStatusText);
+        GlCanvas.RequestNextFrameRendering();
+        return true;
+    }
+
+    void UpdateDrillOverlay(ViewportViewModel vm)
+    {
+        if (vm.SubtractiveSettings?.IsDrilling == true)
+            _renderer.SetDrillOverlay(vm.DrillMarkerSegments());
+        else
+            _renderer.SetDrillOverlay(null);
+    }
+
+    void UpdateCurveOverlay(ViewportViewModel vm)
+    {
+        _renderer.SetCurveOverlay(vm.SubtractiveSettings?.CurveMarkerSegments());
+    }
+
     Picker.FaceHit? PickMillableFace(ViewportViewModel vm, Avalonia.Point pos)
     {
         float vpW = (float)GlCanvas.Bounds.Width;

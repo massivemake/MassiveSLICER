@@ -14,7 +14,8 @@ public static class MovementPostProcessor
     {
         bool doZHop = settings.ZHopMm > 0f;
         bool doWipe = settings.WipeMode != WipeMode.None && settings.WipeLengthMm > 0f;
-        if (!doZHop && !doWipe) return toolpath;
+        bool doEnd = settings.EndRetractEnabled && settings.EndRetractDistanceMm > 0.05f;
+        if (!doZHop && !doWipe && !doEnd) return toolpath;
 
         var result = new Toolpath { BeadWidthMm = toolpath.BeadWidthMm };
         // Keep the last real bead across layers so a layer-change travel
@@ -75,7 +76,31 @@ public static class MovementPostProcessor
             result.Layers.Add(newLayer);
         }
 
+        if (doEnd)
+            AppendEndRetract(result, settings.EndRetractDistanceMm);
+
         return result;
+    }
+
+    /// <summary>
+    /// One travel straight up in world Z from whatever point the print finished on.
+    /// The lift is not along the last bead or the layer normal.
+    /// </summary>
+    private static void AppendEndRetract(Toolpath result, float distance)
+    {
+        for (int i = result.Layers.Count - 1; i >= 0; i--)
+        {
+            var layer = result.Layers[i];
+            if (layer.Moves.Count == 0) continue;
+            var last = layer.Moves[^1];
+            var up = last.To + new Vector3(0f, 0f, distance);
+            layer.Moves.Add(new ToolpathMove(last.To, up, MoveKind.Travel)
+            {
+                IsZHop = true,
+                Normal = last.Normal,
+            });
+            return;
+        }
     }
 
     /// <summary>

@@ -33,6 +33,15 @@ public sealed class SliceSettings
     /// <summary>Lift height (mm) inserted on travel moves. 0 = disabled.</summary>
     public float ZHopMm { get; init; }
 
+    /// <summary>
+    /// After the last move of the print, travel straight up in world Z.
+    /// Off unless the movement checkbox is on.
+    /// </summary>
+    public bool EndRetractEnabled { get; init; }
+
+    /// <summary>World +Z distance of that end retract, in mm.</summary>
+    public float EndRetractDistanceMm { get; init; } = 50f;
+
     /// <summary>Pre-travel wipe mode. None = disabled.</summary>
     public WipeMode WipeMode { get; init; } = WipeMode.None;
 

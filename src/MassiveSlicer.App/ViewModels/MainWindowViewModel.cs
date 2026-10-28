@@ -3717,6 +3717,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             {
                 LayerHeight = result.LayerHeightMm,
                 ZHopMm = (float)add.ZHopMm,
+                EndRetractEnabled = add.EndRetractEnabled,
+                EndRetractDistanceMm = (float)add.EndRetractDistanceMm,
                 BedZ = off.Z,
                 WipeMode = add.WipeModeDisplay switch
                 {
@@ -3771,6 +3773,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             LayerHeight = (float)add.LayerHeight,
             ZHopMm = (float)add.ZHopMm,
+            EndRetractEnabled = add.EndRetractEnabled,
+            EndRetractDistanceMm = (float)add.EndRetractDistanceMm,
             BedZ = bedZ,
             WipeMode = add.WipeModeDisplay switch
             {
@@ -4657,6 +4661,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ToolpathWipeColor       = copy.ToolpathWipeColor;
         live.ToolpathRetractionColor = copy.ToolpathRetractionColor;
         live.ZHopMm                  = copy.ZHopMm;
+        live.EndRetractEnabled       = copy.EndRetractEnabled;
+        live.EndRetractDistanceMm    = copy.EndRetractDistanceMm;
         live.WipeModeDisplay         = MigrateWipeModeDisplay(copy.WipeModeDisplay);
         live.WipeLengthMm            = copy.WipeLengthMm;
         live.WipeRampMm              = copy.WipeRampMm;
@@ -5082,6 +5088,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.Acceleration  = p.Acceleration;
         add.ApproachZ     = p.ApproachZ;
         add.ZHopMm                  = p.ZHopMm;
+        add.EndRetractEnabled       = p.EndRetractEnabled;
+        add.EndRetractDistanceMm    = p.EndRetractDistanceMm;
         add.WipeModeDisplay         = MigrateWipeModeDisplay(p.WipeModeDisplay);
         add.WipeLengthMm            = p.WipeLengthMm;
         add.WipeRampMm              = p.WipeRampMm;
@@ -5417,6 +5425,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.Acceleration     = add.Acceleration;
         p.ApproachZ        = add.ApproachZ;
         p.ZHopMm                  = add.ZHopMm;
+        p.EndRetractEnabled       = add.EndRetractEnabled;
+        p.EndRetractDistanceMm    = add.EndRetractDistanceMm;
         p.WipeModeDisplay         = add.WipeModeDisplay;
         p.WipeLengthMm            = add.WipeLengthMm;
         p.WipeRampMm              = add.WipeRampMm;

@@ -2495,6 +2495,24 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _zHopMm, Math.Max(0.0, value));
     }
 
+    private bool _endRetractEnabled;
+
+    /// <summary>After the last print move, travel straight up in world Z.</summary>
+    public bool EndRetractEnabled
+    {
+        get => _endRetractEnabled;
+        set => SetField(ref _endRetractEnabled, value);
+    }
+
+    private double _endRetractDistanceMm = 50;
+
+    /// <summary>World +Z distance of the end-of-print retract, in mm.</summary>
+    public double EndRetractDistanceMm
+    {
+        get => _endRetractDistanceMm;
+        set => SetField(ref _endRetractDistanceMm, Math.Clamp(value, 0.0, 2000.0));
+    }
+
     public string[] WipeModeOptions { get; } = ["Off", "Retrace", "Same-Direction", "90-Degree"];
 
     public const string ShopWipeMode = "Same-Direction";

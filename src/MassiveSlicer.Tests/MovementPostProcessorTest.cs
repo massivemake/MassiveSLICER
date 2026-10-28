@@ -381,6 +381,34 @@ public class MovementPostProcessorTest
         Assert.True(wipe.From.Z >= 130f);
     }
 
+    [Fact]
+    public void End_retract_lifts_straight_up_from_the_last_point()
+    {
+        var layer = new ToolpathLayer(0, 12f) { PlaneNormal = new Vector3(0f, 0.6f, 0.8f) };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(8, 3, 14), MoveKind.Extrude)
+            { Normal = new Vector3(0f, 0.6f, 0.8f) });
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+
+        var off = MovementPostProcessor.Apply(tp, new SliceSettings { EndRetractDistanceMm = 40f });
+        Assert.Same(tp, off);
+
+        var on = MovementPostProcessor.Apply(tp, new SliceSettings
+        {
+            EndRetractEnabled = true,
+            EndRetractDistanceMm = 40f,
+        });
+        var lift = on.Layers[0].Moves[^1];
+        Assert.Equal(MoveKind.Travel, lift.Kind);
+        Assert.True(lift.IsZHop);
+        Assert.Equal(8f, lift.From.X, 0.01f);
+        Assert.Equal(3f, lift.From.Y, 0.01f);
+        Assert.Equal(14f, lift.From.Z, 0.01f);
+        Assert.Equal(8f, lift.To.X, 0.01f);
+        Assert.Equal(3f, lift.To.Y, 0.01f);
+        Assert.Equal(54f, lift.To.Z, 0.01f);
+    }
+
     private static ToolpathMove Extrude(float x0, float y0, float x1, float y1) =>
         new(new Vector3(x0, y0, 10), new Vector3(x1, y1, 10), MoveKind.Extrude) { Normal = Vector3.UnitZ };
 

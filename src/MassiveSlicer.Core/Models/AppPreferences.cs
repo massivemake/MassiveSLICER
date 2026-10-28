@@ -450,6 +450,12 @@ public sealed class AppPreferences
     /// <summary>Vertical z-hop on travel moves in mm.</summary>
     public double ZHopMm { get; set; }
 
+    /// <summary>After the last print move, travel straight up in world Z.</summary>
+    public bool EndRetractEnabled { get; set; }
+
+    /// <summary>World +Z distance of the end-of-print retract, in mm.</summary>
+    public double EndRetractDistanceMm { get; set; } = 50;
+
     /// <summary>Wipe mode display: Off, Retrace, Same-Direction, 90-Degree.</summary>
     public string WipeModeDisplay { get; set; } = "Same-Direction";
 

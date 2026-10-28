@@ -1657,6 +1657,19 @@
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.ZHopMm}"/>
                             </Grid>
 
+                            <CheckBox Margin="8,6,8,2" Content="End retract" FontSize="11"
+                                      IsChecked="{Binding Additive.EndRetractEnabled, Mode=TwoWay}"
+                                      ToolTip.Tip="After the last move of the print, travel straight up in Z by the distance below. The extruder is off."/>
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="End retract (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="How far the nozzle travels straight up in Z at the end of the print."/>
+                                <TextBox Grid.Column="1" Classes="PanelTextBox Length" Text="{Binding Additive.EndRetractDistanceMm}"/>
+                            </Grid>
+
                             <!-- First layer speed / RPM overrides (KRL export) -->
                             <CheckBox Margin="8,6,8,0" IsChecked="{Binding Additive.FirstLayerAdjustmentsEnabled, Mode=TwoWay}"
                                       ToolTip.Tip="Enable first-layer speed/RPM adjustments. When off, the first layer prints at the normal speed/RPM and the export ignores these fields.">
@@ -4330,6 +4343,25 @@
                                             </Grid>
                                         </Grid>
                                         <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                            <TextBlock Text="Side offset" Classes="LabelMuted" VerticalAlignment="Center"
+                                                       ToolTip.Tip="How far the tool center sits inside or outside an outline or an imported curve. Contouring, cutout, and drilling along a curve follow it."/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.CurveSideOffsetMm, Mode=TwoWay}"
+                                                               Minimum="0" Maximum="500" Increment="0.1" FormatString="F2" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
+                                        <Grid Margin="8,0,8,2" ColumnDefinitions="*,140">
+                                            <TextBlock Text="Side" Classes="LabelMuted" VerticalAlignment="Center"
+                                                       ToolTip.Tip="Outside is away from the center of a closed curve. On the line keeps the tool center on the curve. Flip on a selected open curve swaps its side."/>
+                                            <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                                                      ItemsSource="{x:Static vm:SubtractiveSettingsViewModel.CurveSideOptions}"
+                                                      SelectedItem="{Binding Subtractive.CurveSideDisplay, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <CheckBox Margin="8,0,8,2" Content="Include tool radius" FontSize="11"
+                                                  IsChecked="{Binding Subtractive.CurveIncludeToolRadius, Mode=TwoWay}"
+                                                  ToolTip.Tip="Adds half the tool diameter on the chosen side. Off means the number is the tool-center distance."/>
+                                        <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
                                             <TextBlock Text="Number of depth cuts" Classes="LabelMuted" VerticalAlignment="Center"/>
                                             <NumericUpDown Grid.Column="1"
                                                            Value="{Binding Subtractive.NumberOfDepthCuts, Mode=TwoWay}"
@@ -4430,30 +4462,6 @@
                                                       IsChecked="{Binding Subtractive.ContouringMaxDepthEnabled, Mode=TwoWay}"/>
                                         </StackPanel>
 
-                                        <StackPanel IsVisible="{Binding Subtractive.ShowsDrillingCard}" Margin="0,6,0,0" Spacing="4">
-                                            <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10"
-                                                       Text="DRILLING — plunge / peck, no raster passes"/>
-                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
-                                                <TextBlock Text="Breakthrough" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                    <NumericUpDown Classes="Length" Value="{Binding Subtractive.DrillingBreakthroughMm, Mode=TwoWay}"
-                                                                   Minimum="0" Maximum="100" Increment="0.5" FormatString="F2" FontSize="11"/>
-                                                    <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
-                                                </Grid>
-                                            </Grid>
-                                            <CheckBox Margin="8,0,8,2" Content="Peck cycle" FontSize="11"
-                                                      IsChecked="{Binding Subtractive.DrillingPeck, Mode=TwoWay}"/>
-                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100"
-                                                  IsEnabled="{Binding Subtractive.DrillingPeck}">
-                                                <TextBlock Text="Peck depth" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
-                                                    <NumericUpDown Classes="Length" Value="{Binding Subtractive.DrillingPeckDepthMm, Mode=TwoWay}"
-                                                                   Minimum="0.05" Maximum="50" Increment="0.5" FormatString="F2" FontSize="11"/>
-                                                    <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
-                                                </Grid>
-                                            </Grid>
-                                        </StackPanel>
-
                                         <StackPanel IsVisible="{Binding Subtractive.ShowsSwarfCard}" Margin="0,6,0,0" Spacing="4">
                                             <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10"
                                                        Text="SWARF — side-of-tool contact, lead / lean"/>
@@ -4501,6 +4509,160 @@
                                                                Minimum="2" Maximum="200" Increment="1" FormatString="F0" FontSize="11"/>
                                             </Grid>
                                         </StackPanel>
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Classes="SectionExpander" Header="HOLES"
+                                          IsVisible="{Binding Subtractive.ShowsDrillingCard}"
+                                          IsExpanded="True">
+                                    <StackPanel Margin="0,2,0,6" Spacing="4">
+                                        <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
+                                                   Text="Ctrl-click an edge to mark it as a hole. Shift-click a face to place one. This list shows only those."/>
+                                        <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                            <TextBlock Text="Breakthrough" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.DrillingBreakthroughMm, Mode=TwoWay}"
+                                                               Minimum="0" Maximum="100" Increment="0.5" FormatString="F2" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
+                                        <CheckBox Margin="8,0,8,2" Content="Peck cycle" FontSize="11"
+                                                  IsChecked="{Binding Subtractive.DrillingPeck, Mode=TwoWay}"/>
+                                        <Grid Margin="8,0,8,2" ColumnDefinitions="*,100"
+                                              IsEnabled="{Binding Subtractive.DrillingPeck}">
+                                            <TextBlock Text="Peck depth" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                <NumericUpDown Classes="Length" Value="{Binding Subtractive.DrillingPeckDepthMm, Mode=TwoWay}"
+                                                               Minimum="0.05" Maximum="50" Increment="0.5" FormatString="F2" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
+                                        <Button Margin="8,4,8,2" Content="Find holes and edges"
+                                                Classes="PrimaryButton"
+                                                HorizontalAlignment="Stretch"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.FindDrillFeaturesCommand}"
+                                                ToolTip.Tip="Scan the selected model for holes and sharp edges, including squares, slots, polygons, counterbores, and countersinks."/>
+                                        <TextBlock Margin="8,0,8,2" FontSize="10" TextWrapping="Wrap"
+                                                   Text="{Binding $parent[Window].DataContext.Viewport.DrillStatusText}"/>
+                                        <TextBlock Margin="8,2,8,0" Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
+                                                   Text="Ctrl-click an edge to drill its center. Alt-click takes it off the list. Shift-click places a hole on a face. Shift-Alt-click removes that face hole. The line in the middle is the drill depth. A square, slot, or polygon is milled around its outline. A hole wider than the cutter is cleared to the middle, and a counterbore or countersink does the same in its wide section before the through hole."/>
+                                        <ScrollViewer MaxHeight="180" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                            <ItemsControl ItemsSource="{Binding $parent[Window].DataContext.Viewport.DrillHoles}" Margin="8,0,8,4">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Classes="ToolbarButton" HorizontalAlignment="Stretch"
+                                                                HorizontalContentAlignment="Left" Margin="0,2" Padding="8,4"
+                                                                Content="{Binding Name}"
+                                                                Command="{Binding $parent[Window].DataContext.Viewport.SelectDrillHoleCommand}"
+                                                                CommandParameter="{Binding}"/>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                        <Button Margin="8,0,8,4" Classes="ToolbarButton" HorizontalAlignment="Stretch"
+                                                HorizontalContentAlignment="Center" Content="REMOVE"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.RemoveDrillHoleCommand}"
+                                                IsEnabled="{Binding $parent[Window].DataContext.Viewport.HasSelectedDrillPoint}"
+                                                ToolTip.Tip="Take the selected hole out of the drill. A point placed on an edge or a face is deleted."/>
+                                        <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.HasSelectedDrillPoint}" Spacing="4">
+                                            <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.SelectedDrillHoleName}"
+                                                       Classes="LabelMuted" Margin="8,2,8,0" FontSize="11"/>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                <TextBlock Text="Hole diameter" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                    <NumericUpDown Classes="Length"
+                                                                   Value="{Binding $parent[Window].DataContext.Viewport.SelectedDrillDiameterMm, Mode=TwoWay}"
+                                                                   Minimum="0.1" Maximum="500" Increment="0.5" FormatString="F2" FontSize="11"/>
+                                                    <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Grid>
+                                            <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                <TextBlock Text="Hole depth" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                    <NumericUpDown Classes="Length"
+                                                                   Value="{Binding $parent[Window].DataContext.Viewport.SelectedDrillDepthMm, Mode=TwoWay}"
+                                                                   Minimum="0.05" Maximum="2000" Increment="0.5" FormatString="F2" FontSize="11"/>
+                                                    <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Grid>
+                                            <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.SelectedDrillIsFace}" Spacing="4">
+                                                <TextBlock Margin="8,2,8,0" Classes="LabelMuted" FontSize="10"
+                                                           Text="Face point. Edit the coordinates to place it exactly."/>
+                                                <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                    <TextBlock Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                    <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                        <NumericUpDown Classes="Length"
+                                                                       Value="{Binding $parent[Window].DataContext.Viewport.SelectedDrillX, Mode=TwoWay}"
+                                                                       Minimum="-100000" Maximum="100000" Increment="0.1" FormatString="F2" FontSize="11"/>
+                                                        <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                    </Grid>
+                                                </Grid>
+                                                <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                    <TextBlock Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                    <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                        <NumericUpDown Classes="Length"
+                                                                       Value="{Binding $parent[Window].DataContext.Viewport.SelectedDrillY, Mode=TwoWay}"
+                                                                       Minimum="-100000" Maximum="100000" Increment="0.1" FormatString="F2" FontSize="11"/>
+                                                        <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                    </Grid>
+                                                </Grid>
+                                                <Grid Margin="8,0,8,2" ColumnDefinitions="*,100">
+                                                    <TextBlock Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                    <Grid Grid.Column="1" ColumnDefinitions="*,Auto">
+                                                        <NumericUpDown Classes="Length"
+                                                                       Value="{Binding $parent[Window].DataContext.Viewport.SelectedDrillZ, Mode=TwoWay}"
+                                                                       Minimum="-100000" Maximum="100000" Increment="0.1" FormatString="F2" FontSize="11"/>
+                                                        <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                    </Grid>
+                                                </Grid>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Expander>
+
+                                <Expander Classes="SectionExpander" Header="CURVES" IsExpanded="True">
+                                    <StackPanel Margin="0,2,0,6" Spacing="4">
+                                        <TextBlock Margin="8,0,8,2" Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
+                                                   Text="Curves, edges, and polylines the tool can follow. Side offset on PASSES moves the tool center inside or outside the line."/>
+                                        <Button Margin="8,4,8,2" Content="Import curves"
+                                                Classes="PrimaryButton"
+                                                HorizontalAlignment="Stretch"
+                                                Command="{Binding Subtractive.ImportCurvesCommand}"
+                                                ToolTip.Tip="Import an OBJ polyline, an ASCII DXF, or an SVG. A flat drawing is placed on the top of the selected model."/>
+                                        <Button Margin="8,0,8,2" Classes="ToolbarButton" HorizontalAlignment="Stretch"
+                                                HorizontalContentAlignment="Center" Content="FIND EDGES"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.FindDrillFeaturesCommand}"
+                                                ToolTip.Tip="Scan the selected model for hole rims and sharp edges."/>
+                                        <Button Margin="8,0,8,2" Classes="ToolbarButton" HorizontalAlignment="Stretch"
+                                                HorizontalContentAlignment="Center" Content="ADD FOUND EDGES"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.AddFoundEdgesCommand}"
+                                                ToolTip.Tip="Copy the hole rims and edges from the last scan into this list."/>
+                                        <TextBlock Margin="8,0,8,2" FontSize="10" TextWrapping="Wrap"
+                                                   Text="{Binding Subtractive.CurveStatusText}"/>
+                                        <ScrollViewer MaxHeight="180" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                            <ItemsControl ItemsSource="{Binding Subtractive.CurveRows}" Margin="8,0,8,4">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Classes="ToolbarButton" HorizontalAlignment="Stretch"
+                                                                HorizontalContentAlignment="Left" Margin="0,2" Padding="8,4"
+                                                                Content="{Binding Label}"
+                                                                Command="{Binding $parent[Window].DataContext.RightPanel.Subtractive.SelectCurveCommand}"
+                                                                CommandParameter="{Binding}"/>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                        <Grid Margin="8,0,8,2" ColumnDefinitions="*,*">
+                                            <Button Classes="ToolbarButton" HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Center" Content="FLIP SIDE"
+                                                    Command="{Binding Subtractive.FlipCurveCommand}"
+                                                    IsEnabled="{Binding Subtractive.HasSelectedCurve}"
+                                                    ToolTip.Tip="Swap which side of the selected curve is outside."/>
+                                            <Button Grid.Column="1" Margin="4,0,0,0" Classes="ToolbarButton" HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Center" Content="REMOVE"
+                                                    Command="{Binding Subtractive.RemoveCurveCommand}"
+                                                    IsEnabled="{Binding Subtractive.HasSelectedCurve}"/>
+                                        </Grid>
                                     </StackPanel>
                                 </Expander>
 

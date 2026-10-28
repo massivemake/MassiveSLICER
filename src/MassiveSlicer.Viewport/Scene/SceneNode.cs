@@ -219,6 +219,18 @@ public sealed class SceneNode
             child.Parent = null;
     }
 
+    /// <summary>
+    /// Leaves the parent and keeps the world pose. The world matrix has to be read first:
+    /// a GLB root holds the metre-to-millimetre scale, and <see cref="WorldTransform"/> after
+    /// <see cref="RemoveChild"/> is only this node's own matrix.
+    /// </summary>
+    public void DetachKeepingWorld()
+    {
+        var world = WorldTransform;
+        Parent?.RemoveChild(this);
+        LocalTransform = world;
+    }
+
     // -- Rendering -------------------------------------------------------------
 
     /// <summary>

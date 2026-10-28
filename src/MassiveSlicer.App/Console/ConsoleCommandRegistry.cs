@@ -1285,6 +1285,7 @@ public sealed partial class ConsoleCommandRegistry
                     ctx.Log("[mill] brush size <mm> | brush falloff <0..1>");
                     ctx.Log("[mill] op <MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf|Morph>");
                     ctx.Log("[mill] axis <-z|+z|+x|-x|+y|-y|paint|camera|custom> | tilt <deg> | azimuth <deg>");
+                    ctx.Log("[mill] drill | drill size <mm> | drill depth <mm>");
                     ctx.Log("[mill] speed <mm/s> | travel <mm/s> | offset <mm>");
                     return;
                 }
@@ -1368,6 +1369,30 @@ public sealed partial class ConsoleCommandRegistry
                         {
                             ctx.LogError("[mill] op: MultiAxisFinishing|Drilling|PlanarFacing|Projection|Cutout|Contouring|Swarf|Morph");
                         }
+                        break;
+                    }
+
+                    case "drill":
+                    {
+                        if (parts.Length >= 3 && parts[1].ToLowerInvariant() is "size" or "diameter" or "depth")
+                        {
+                            if (!double.TryParse(parts[2], System.Globalization.NumberStyles.Float,
+                                    System.Globalization.CultureInfo.InvariantCulture, out var mm))
+                            {
+                                ctx.LogError("[mill] drill size <mm> | drill depth <mm>");
+                                break;
+                            }
+                            bool depth = parts[1].Equals("depth", StringComparison.OrdinalIgnoreCase);
+                            bool ok = depth
+                                ? vp.SetActiveDrillDepth((float)mm)
+                                : vp.SetActiveDrillDiameter((float)mm);
+                            if (!ok)
+                                ctx.LogError("[mill] drill: select a hole or a point first");
+                            else
+                                ctx.Log($"[mill] drill {parts[1].ToLowerInvariant()} → {mm:0.##} mm");
+                            break;
+                        }
+                        ctx.Log("[mill] drill " + vp.DescribeDrill());
                         break;
                     }
 

@@ -100,4 +100,11 @@ public sealed class MillSidebarSettings
     public string ToolCompensation { get; set; } = nameof(AdaToolCompensation.Off);
     public double TopHeightMm { get; set; }
     public double BottomHeightMm { get; set; }
+
+    /// <summary>Tool-center side offset for outlines and imported curves (mm).</summary>
+    public double CurveSideOffsetMm { get; set; }
+    public string CurveSide { get; set; } = nameof(CurveOffsetSide.Outside);
+    public bool CurveIncludeToolRadius { get; set; }
+    /// <summary>Curves imported or picked for contouring, cutout, and drilling. Empty on older workspaces.</summary>
+    public List<MillCurve> Curves { get; set; } = [];
 }
