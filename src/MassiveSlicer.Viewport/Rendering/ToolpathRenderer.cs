@@ -54,6 +54,7 @@ public sealed class ToolpathRenderer : IDisposable
     private float[]? _beadOverhangScores;
     private bool _beadOverhangSpectrum;
     private int  _orientationVao, _orientationVbo, _orientationCount;
+    private int  _layerHeightVao, _layerHeightVbo, _layerHeightCount;
     private int  _singularityPtVao, _singularityPtVbo, _singularityPointCount;
     private int[] _singularityVertexCumulative = [];
     private bool _disposed;
@@ -1423,6 +1424,31 @@ void main() {
         return new NVec3(s[^1].r, s[^1].g, s[^1].b);
     }
 
+    /// <summary>
+    /// Builds or rebuilds the layer-height VAO. 0 is the thinnest cut in this
+    /// toolpath, 1 is the thickest, drawn blue through green to red.
+    /// Must be called on the GL thread. Does not reslice.
+    /// </summary>
+    public void UpdateLayerHeight(float[] scoresPerFlatMove)
+    {
+        if (_layerHeightVao != 0) { GL.DeleteVertexArray(_layerHeightVao); GL.DeleteBuffer(_layerHeightVbo); }
+        _layerHeightVao = _layerHeightVbo = _layerHeightCount = 0;
+        if (_beadEbo == 0) return;
+        var data = BuildBeadColoredData(scoresPerFlatMove, t =>
+        {
+            var c = BeadOverhangPalette.Color(t, spectrum: true);
+            return new NVec3(c.X, c.Y, c.Z);
+        });
+        if (data.Length > 0)
+        {
+            (_layerHeightVao, _layerHeightVbo) = BuildVao(data);
+            GL.BindVertexArray(_layerHeightVao);
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, _beadEbo);
+            GL.BindVertexArray(0);
+            _layerHeightCount = _beadCount;
+        }
+    }
+
     public void UpdateBeadOrientation(float[] scoresPerFlatMove)
     {
         if (_orientationVao != 0) { GL.DeleteVertexArray(_orientationVao); GL.DeleteBuffer(_orientationVbo); }
@@ -1874,7 +1900,8 @@ void main() {
     public void Draw(Matrix4 mvp, bool selected = false,
                      bool showExtrusion = true, bool showTravel = true, bool showSeam = true,
                      bool showBead = false, bool showSdfBead = false, bool showBeadOverhang = false,
-                     bool showOrientationPreview = false, int scrubIndex = int.MaxValue,
+                     bool showOrientationPreview = false, bool showLayerHeightHeatmap = false,
+                     int scrubIndex = int.MaxValue,
                      Vector3 eyeLocal = default, float lineOpacity = 1f,
                      bool showLightning = true, int scrubStart = 0,
                      bool showWipe = true,
@@ -2079,6 +2106,18 @@ void main() {
             GL.BindVertexArray(_orientationVao);
             GL.DrawElements(PrimitiveType.Triangles,
                 Math.Max(0, Math.Min(_orientationCount, beadCount) - beadFirst),
+                DrawElementsType.UnsignedInt, (IntPtr)((long)beadFirst * sizeof(uint)));
+            GL.Enable(EnableCap.CullFace);
+        }
+        else if (showLayerHeightHeatmap && _layerHeightVao != 0 && beadCount > 0)
+        {
+            _shader.Use();
+            _shader.SetMatrix4("uMVP", ref mvp);
+            _shader.SetFloat("uOverride", 0f);
+            GL.Disable(EnableCap.CullFace);
+            GL.BindVertexArray(_layerHeightVao);
+            GL.DrawElements(PrimitiveType.Triangles,
+                Math.Max(0, Math.Min(_layerHeightCount, beadCount) - beadFirst),
                 DrawElementsType.UnsignedInt, (IntPtr)((long)beadFirst * sizeof(uint)));
             GL.Enable(EnableCap.CullFace);
         }
@@ -2618,6 +2657,7 @@ void main() {
         if (_noseDataFallback != 0) GL.DeleteTexture(_noseDataFallback);
         if (_beadOverhangVao  != 0) { GL.DeleteVertexArray(_beadOverhangVao);  GL.DeleteBuffer(_beadOverhangVbo);  }
         if (_orientationVao   != 0) { GL.DeleteVertexArray(_orientationVao);   GL.DeleteBuffer(_orientationVbo);   }
+        if (_layerHeightVao   != 0) { GL.DeleteVertexArray(_layerHeightVao);   GL.DeleteBuffer(_layerHeightVbo);   }
         if (_singularityPtVao != 0) { GL.DeleteVertexArray(_singularityPtVao); GL.DeleteBuffer(_singularityPtVbo); }
         _shader.Dispose();
         _beadShader.Dispose();

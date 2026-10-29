@@ -81,6 +81,67 @@ public sealed partial class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "scan-merge",
+            Description = "Merge the original scans into one mesh or point cloud. Skips an existing Merged Scan and hides it.",
+            Usage = "scan-merge mesh | scan-merge cloud",
+            Execute = (ctx, args) =>
+            {
+                var vp = ctx.Main.Viewport;
+                bool cloud = args.Trim().StartsWith("cloud", StringComparison.OrdinalIgnoreCase)
+                             || args.Trim().StartsWith("point", StringComparison.OrdinalIgnoreCase);
+                vp.ClearScanOutlinerSelection();
+                int hidden = 0;
+                int selected = 0;
+                foreach (var item in vp.GetBedLevelScanItems())
+                {
+                    if (item.Name.StartsWith("Merged Scan", StringComparison.OrdinalIgnoreCase))
+                    {
+                        item.Visible = false;
+                        hidden++;
+                        continue;
+                    }
+                    if (!item.Name.StartsWith("Scan ", StringComparison.Ordinal))
+                        continue;
+                    vp.ToggleScanOutlinerSelection(item);
+                    selected++;
+                }
+                if (selected < 2)
+                {
+                    ctx.LogError($"[scan-merge] need 2 original scans, have {selected}.");
+                    return;
+                }
+                var mode = cloud
+                    ? MassiveSlicer.Viewport.Scene.ScanMergeOutput.PointCloud
+                    : MassiveSlicer.Viewport.Scene.ScanMergeOutput.Mesh;
+                ctx.Log($"[scan-merge] merging {selected} scan(s) as {(cloud ? "point cloud" : "mesh")}; hid {hidden} previous merge(s).");
+                vp.RequestMergeScans(mode);
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "scan-align",
+            Description = "Move the model onto the scan. The scan stays. status only reads the tuning values.",
+            Usage = "scan-align | scan-align status",
+            Execute = (ctx, args) =>
+            {
+                var scan = ctx.Main.RightPanel.Scan;
+                if (args.Trim().Equals("status", StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Log(string.Format(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        "[scan-align] stock={0:0.##} mm  tol={1:0.##} mm  match={2:0}%  shift={3:0.##} mm  turn={4:0.##}°",
+                        scan.StockMm, scan.ToleranceMm, scan.MatchPercent, scan.MaxShiftMm, scan.MaxTurnDeg));
+                    return;
+                }
+
+                ctx.Log("[scan-align] locating the model, then fine-matching. The scan is not moved. A poor fit is not applied.");
+                ctx.Main.Viewport.RequestScanModelAlign();
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "save-as",
             Aliases = ["saveas", "save as"],
             Description = "Save workspace to a new file",

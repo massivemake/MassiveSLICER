@@ -116,6 +116,20 @@ public sealed class PreferencesViewModel : ViewModelBase
         set { if (SetField(ref _antiAliasing, value)) Commit(() => _prefs.AntiAliasing = value); }
     }
 
+    private bool _optimizedScanMerge = true;
+    public bool OptimizedScanMerge
+    {
+        get => _optimizedScanMerge;
+        set { if (SetField(ref _optimizedScanMerge, value)) Commit(() => _prefs.OptimizedScanMerge = value); }
+    }
+
+    private bool _reducedScanDisplay = true;
+    public bool ReducedScanDisplay
+    {
+        get => _reducedScanDisplay;
+        set { if (SetField(ref _reducedScanDisplay, value)) Commit(() => _prefs.ReducedScanDisplay = value); }
+    }
+
     // -- Appearance --------------------------------------------------------
 
     private AppTheme _activeTheme;
@@ -227,6 +241,8 @@ public sealed class PreferencesViewModel : ViewModelBase
         TouchpadZoomSpeed       = _prefs.TouchpadZoomSpeed;
         TouchpadInvertPan       = _prefs.TouchpadInvertPan;
         AntiAliasing            = _prefs.AntiAliasing;
+        OptimizedScanMerge      = _prefs.OptimizedScanMerge;
+        ReducedScanDisplay      = _prefs.ReducedScanDisplay;
         ActiveTheme             = Enum.TryParse<AppTheme>(_prefs.ActiveTheme, out var t) ? t : AppTheme.MassiveMake;
         ToolpathExtrudeColor    = HexToColor(_prefs.ToolpathExtrudeColor);
         ToolpathTravelColor     = HexToColor(_prefs.ToolpathTravelColor);

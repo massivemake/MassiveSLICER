@@ -64,6 +64,18 @@ public sealed class MeshData
     /// <summary>When true the GPU draws vertices as points instead of triangles.</summary>
     public bool RenderAsPoints { get; init; }
 
+    /// <summary>
+    /// Scan-only upload of position and normal (6 floats). Set for scans that have no
+    /// UVs, tangents, or material maps. CPU <see cref="Positions"/> are not rewritten.
+    /// </summary>
+    public bool CompactScanLayout { get; init; }
+
+    /// <summary>
+    /// When true, drawing uses a thinned copy of this scan. <see cref="Positions"/> and
+    /// <see cref="Normals"/> stay the measured mesh. Parts leave this false.
+    /// </summary>
+    public bool ReduceScanDisplay { get; set; }
+
     public MeshData(Vector3[] positions, Vector3[] normals, uint[]? indices,
                     string name = "Mesh", Vector4? baseColor = null,
                     float metallic = 0f, float roughness = 1f)

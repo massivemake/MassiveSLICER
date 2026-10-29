@@ -1045,6 +1045,9 @@
                                 <CheckBox Content="Bead overhang heatmap" FontSize="11"
                                           IsChecked="{Binding ShowBeadOverhang, Mode=TwoWay}"
                                           ToolTip.Tip="Bead colored by overhang percentage (see legend)"/>
+                                <CheckBox Content="Layer height heatmap" FontSize="11"
+                                          IsChecked="{Binding ShowLayerHeightHeatmap, Mode=TwoWay}"
+                                          ToolTip.Tip="Bead colored by layer thickness so adaptive layers are visible. Blue is the thinnest layer in this path, green the middle, red the thickest. Does not reslice or move geometry."/>
                                 <CheckBox Content="Orientation preview" FontSize="11"
                                           IsChecked="{Binding ShowOrientationPreview, Mode=TwoWay}"
                                           ToolTip.Tip="Bead colored by tool orientation change rate"/>
@@ -2143,6 +2146,36 @@
                     <Rectangle Grid.Row="4" Grid.Column="0" Width="12" Height="12" Fill="#FF0000" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
                     <TextBlock  Grid.Row="4" Grid.Column="2" Text="100%" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
                     <TextBlock  Grid.Row="4" Grid.Column="4" Text="Unsupported"        Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- Layer-height legend — same corner, only while that heatmap is on -->
+        <Border IsVisible="{Binding ShowLayerHeightHeatmap}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="{Binding BottomRightLegendMargin}"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="5"
+                Opacity="0.88"
+                Padding="8,6">
+            <StackPanel>
+                <TextBlock Text="LAYER HEIGHT"
+                           Classes="LabelMuted"
+                           FontSize="9"
+                           Margin="0,0,0,5"/>
+                <Grid ColumnDefinitions="14,6,Auto,10,Auto" RowDefinitions="Auto,Auto,Auto">
+                    <Rectangle Grid.Row="0" Grid.Column="0" Width="12" Height="12" Fill="#0000FF" RadiusX="2" RadiusY="2" VerticalAlignment="Center"/>
+                    <TextBlock  Grid.Row="0" Grid.Column="2" Text="Thin" FontSize="10" VerticalAlignment="Center"/>
+                    <TextBlock  Grid.Row="0" Grid.Column="4" Text="Thinnest in this path" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center"/>
+                    <Rectangle Grid.Row="1" Grid.Column="0" Width="12" Height="12" Fill="#00FF00" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="1" Grid.Column="2" Text="Mid"  FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="1" Grid.Column="4" Text="Middle thickness" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <Rectangle Grid.Row="2" Grid.Column="0" Width="12" Height="12" Fill="#FF0000" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="2" Grid.Column="2" Text="Thick" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="2" Grid.Column="4" Text="Thickest in this path" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
                 </Grid>
             </StackPanel>
         </Border>

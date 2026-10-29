@@ -1462,6 +1462,42 @@
                                     </Grid>
                                 </StackPanel>
                             </Expander>
+
+                            <Expander Classes="SectionExpander" Header="BRIM" IsExpanded="False"
+                                      ToolTip.Tip="Bed-adhesion brim: offset loops around the first layer, outside the footprint and/or inside interior holes. Generated as the last toolpath step, so it wraps X-bracing and any other first-layer additions.">
+                                <StackPanel Margin="0,2,0,4">
+                                    <CheckBox Margin="8,2,8,4"
+                                              Content="Enable brim"
+                                              FontSize="11"
+                                              IsChecked="{Binding Additive.BrimEnabled, Mode=TwoWay}"
+                                              ToolTip.Tip="Print offset loops around the first layer to secure the part to the bed. The footprint comes from the actual first-layer toolpath, so X-bracing and pattern bulges are enclosed."/>
+
+                                    <StackPanel IsVisible="{Binding Additive.ShowBrimControls}">
+                                        <Grid Margin="8,2,8,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="110"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Direction" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Which side of the path the loops sit on. Outside keeps the outer side. Inside keeps the other side. Both prints the whole boundary, outer side first."/>
+                                            <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
+                                                       ItemsSource="{Binding Additive.BrimDirectionOptions}"
+                                                       SelectedItem="{Binding Additive.BrimDirectionDisplay, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <Grid Margin="8,2,8,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="80"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Offset loops" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="How many loops to print around the part. More loops = wider skirt = stronger hold."/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BrimLoops, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <TextBlock Margin="10,0,10,4" FontSize="10" Opacity="0.6" TextWrapping="Wrap"
+                                                   Text="Loops are one bead width apart and print before the part, farthest edge first, so the last loop fuses to its first bead. Inward loops work the same way measured from each hole edge. Brim speed is fixed and independent of Adaptive Speed."/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Expander>
                         </StackPanel>
                     </Expander>
                     <Expander Classes="SectionExpander" Header="SEAM" IsExpanded="False">
@@ -2492,43 +2528,6 @@
                                                   FontSize="11"
                                                   IsChecked="{Binding Additive.XBracingExtendEdges, Mode=TwoWay}"
                                                   ToolTip.Tip="Partial X cells at left/right wall ends. Top and bottom of the part are never extended."/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Expander>
-
-                            <!-- Brim (collapsible group under EFFECTS) -->
-                            <Expander Classes="SectionExpander" Header="BRIM" IsExpanded="False"
-                                      ToolTip.Tip="Bed-adhesion brim: offset loops around the first layer, outside the footprint and/or inside interior holes. Generated as the last toolpath step, so it wraps X-bracing and any other first-layer additions.">
-                                <StackPanel Margin="0,2,0,4">
-                                    <CheckBox Margin="8,2,8,4"
-                                              Content="Enable brim"
-                                              FontSize="11"
-                                              IsChecked="{Binding Additive.BrimEnabled, Mode=TwoWay}"
-                                              ToolTip.Tip="Print offset loops around the first layer to secure the part to the bed. The footprint comes from the actual first-layer toolpath, so X-bracing and pattern bulges are enclosed."/>
-
-                                    <StackPanel IsVisible="{Binding Additive.ShowBrimControls}">
-                                        <Grid Margin="8,2,8,4">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="110"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="Direction" VerticalAlignment="Center" Classes="LabelMuted"
-                                                       ToolTip.Tip="Which side of the path the loops sit on.&#x0a;&#x0a;Offsetting the footprint produces ONE boundary that runs down BOTH sides of the path — out along one side, round the end, and back along the other. Measured on a real open wall it comes to 2.01x the path length. So this does not offset twice; it picks which stretches of that one boundary to keep.&#x0a;&#x0a;Outside: the outer side only. What brim did before this setting existed.&#x0a;&#x0a;Inside: the other side — the concave side of an open wall, or the bore of a closed one.&#x0a;&#x0a;Both: the whole boundary, outer side first so the run crosses over once rather than per loop.&#x0a;&#x0a;Side is measured against the path&apos;s direction of travel, so a run stays on one side for its whole length even where the wall bends both ways. If it picks the side you did not want, switch it. The inside runs out of room and stops on its own once the loops no longer fit."/>
-                                            <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
-                                                       ItemsSource="{Binding Additive.BrimDirectionOptions}"
-                                                       SelectedItem="{Binding Additive.BrimDirectionDisplay, Mode=TwoWay}"/>
-                                        </Grid>
-                                        <Grid Margin="8,2,8,4">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="80"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="Offset loops" VerticalAlignment="Center" Classes="LabelMuted"
-                                                       ToolTip.Tip="How many loops to print around the part. More loops = wider skirt = stronger hold."/>
-                                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BrimLoops, Mode=TwoWay}"/>
-                                        </Grid>
-                                        <TextBlock Margin="10,0,10,4" FontSize="10" Opacity="0.6" TextWrapping="Wrap"
-                                                   Text="Loops are one bead width apart and print before the part, farthest edge first, so the last loop fuses to its first bead. Inward loops work the same way measured from each hole edge. Brim speed is fixed and independent of Adaptive Speed."/>
                                     </StackPanel>
                                 </StackPanel>
                             </Expander>
@@ -3604,6 +3603,117 @@
                                             Command="{Binding Scan.Calibration.ApplyToTcpCommand}"
                                             ToolTip.Tip="Write this result into the TCP OFFSET fields for the active tool"/>
                                 </StackPanel>
+                            </StackPanel>
+                        </Expander>
+
+                        <!-- 3 ALIGNMENT -->
+                        <Expander Classes="StepCard" IsExpanded="True">
+                            <Expander.Header>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
+                                        <TextBlock Text="3" FontSize="10" FontWeight="Bold"
+                                                   Foreground="{DynamicResource AccentHover}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <TextBlock Text="ALIGNMENT" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Expander.Header>
+                            <StackPanel Margin="0,0,0,6">
+                                <TextBlock Classes="LabelMuted" Margin="10,4,10,8" TextWrapping="Wrap"
+                                           Text="Finds the model on the scan, then fine-tunes the fit. A scan of one face is enough — the rest of the model is ignored. The scan stays put — it is where the print actually is, and where the mill should cut. The print is thicker than the model, so the match leaves the stock thickness outside the model instead of sticking the two surfaces together. A weak fine match is not applied."/>
+
+                                <Grid Margin="10,2,10,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="88"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Stock thickness (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="How much bigger the printed part is than the model. The match leaves this much material outside the model."/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.StockMm}"/>
+                                </Grid>
+                                <Grid Margin="10,2,10,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="88"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Tolerance (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="If the leftover stock error is larger than this, the match is rejected and nothing moves."/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.ToleranceMm}"/>
+                                </Grid>
+                                <Grid Margin="10,2,10,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="88"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Minimum match (%)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Percent of the scan that must land on the model. One scanned face does not need the rest of the model to be covered."/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.MatchPercent}"/>
+                                </Grid>
+                                <Grid Margin="10,2,10,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="88"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Max shift (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="How far the fine match may still move after the locate step. The locate step can move farther than this."/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.MaxShiftMm}"/>
+                                </Grid>
+                                <Grid Margin="10,2,10,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="88"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Max rotation (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="How far the fine match may still turn after the locate step."/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.MaxTurnDeg}"/>
+                                </Grid>
+
+                                <Button Content="Match model to scan"
+                                        Classes="PrimaryButton" HorizontalAlignment="Stretch"
+                                        Margin="10,4,10,2"
+                                        Command="{Binding Scan.AlignModelCommand}"
+                                        ToolTip.Tip="Move the model onto the scan. The scan does not move. A poor fit shows an error and leaves both where they are."/>
+                                <TextBlock Text="{Binding Scan.AlignStatus}"
+                                           TextWrapping="Wrap" Margin="10,2,10,4" FontSize="11"
+                                           Foreground="#E85D4C"
+                                           IsVisible="{Binding Scan.AlignStatusIsError}"/>
+                                <TextBlock Text="{Binding Scan.AlignStatus}"
+                                           TextWrapping="Wrap" Margin="10,2,10,4" FontSize="11"
+                                           Classes="LabelMuted"
+                                           IsVisible="{Binding Scan.AlignStatusIsOk}"/>
+
+                                <TextBlock Text="ADJUST AFTER MATCH" Classes="SectionHeader"/>
+                                <TextBlock Classes="LabelMuted" Margin="10,0,10,4" TextWrapping="Wrap"
+                                           Text="Nudge the model from the matched pose. Offsets are measured from that pose, not stacked. The scan stays."/>
+                                <Grid Margin="10,2,10,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="72"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Offset (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.OffsetX}" PlaceholderText="X"/>
+                                    <TextBox Grid.Column="3" Classes="PanelTextBox" Text="{Binding Scan.OffsetY}" PlaceholderText="Y"/>
+                                    <TextBox Grid.Column="5" Classes="PanelTextBox" Text="{Binding Scan.OffsetZ}" PlaceholderText="Z"/>
+                                </Grid>
+                                <Grid Margin="10,2,10,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="72"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Rotate (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Turn about the model pivot, X then Y then Z, in degrees."/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.RotateX}" PlaceholderText="X"/>
+                                    <TextBox Grid.Column="3" Classes="PanelTextBox" Text="{Binding Scan.RotateY}" PlaceholderText="Y"/>
+                                    <TextBox Grid.Column="5" Classes="PanelTextBox" Text="{Binding Scan.RotateZ}" PlaceholderText="Z"/>
+                                </Grid>
                             </StackPanel>
                         </Expander>
 

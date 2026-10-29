@@ -258,6 +258,29 @@
                                 </StackPanel>
                                 <CheckBox Grid.Column="1" IsChecked="{Binding AntiAliasing}" VerticalAlignment="Center"/>
                             </Grid>
+                            <TextBlock Text="SCANS" Classes="SectionHeader" Margin="0,16,0,12"/>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Optimized scan merge" Foreground="{DynamicResource TextPrimary}" FontSize="12"/>
+                                    <TextBlock Text="Uncheck for the previous merge and full buffers. Scan positions stay the same." Classes="LabelMuted" FontSize="11" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <CheckBox Grid.Column="1" IsChecked="{Binding OptimizedScanMerge}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Lower scan view resolution" Foreground="{DynamicResource TextPrimary}" FontSize="12"/>
+                                    <TextBlock Text="Draws a thinned copy of the measured scan. Alignment, milling, and export keep the full scan." Classes="LabelMuted" FontSize="11" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <CheckBox Grid.Column="1" IsChecked="{Binding ReducedScanDisplay}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                            </Grid>
                         </StackPanel>
 
                         <!-- APPEARANCE section -->

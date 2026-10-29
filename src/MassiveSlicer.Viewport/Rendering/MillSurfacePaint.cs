@@ -111,6 +111,13 @@ public sealed class MillSurfacePaint : IDisposable
         _layers.Clear();
     }
 
+    /// <summary>Ask the next GL frame to push this node's paint weights again.</summary>
+    public void MarkDirty(SceneNode node)
+    {
+        if (_layers.TryGetValue(node, out var layer))
+            layer.MarkDirty();
+    }
+
     /// <summary>Upload dirty vertex weights to GPU. GL thread only.</summary>
     public void UploadDirty()
     {
@@ -161,6 +168,8 @@ public sealed class MillSurfacePaint : IDisposable
             Weights = new float[mesh.Positions.Length];
             _dirty = false;
         }
+
+        public void MarkDirty() => _dirty = true;
 
         public void StampWorld(
             Vector3 worldHit, float radiusMm, float falloff, float strength, bool erase)

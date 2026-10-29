@@ -93,8 +93,10 @@ internal static class WorkspaceService
             // Always embed a portable copy of the mesh beside the .mass (workspace_meshes/)
             // so the workspace opens on any machine, even when SourcePath is an absolute
             // path from the machine it was saved on. Load prefers SourcePath, then a file
-            // beside the .mass, then this embedded copy. Vertices are written in the root's
-            // space so a leaf that was flipped still reopens when the STEP file is gone.
+            // beside the .mass, then this embedded copy. A piece that only inherited a
+            // shared assembly path (ungroup) reopens from this copy instead. Vertices are
+            // written in the root's space so a leaf that was flipped still reopens when
+            // the STEP file is gone.
             if (MeshInRootSpace(node) is { } mesh)
             {
                 string fileName = $"{Guid.NewGuid():N}.stl";
@@ -311,6 +313,8 @@ internal static class WorkspaceService
 
         var piecesGroups = new Dictionary<string, ViewModels.OutlinerItemViewModel>(StringComparer.OrdinalIgnoreCase);
 
+        var sourceCounts = CountSourcePaths(doc.Models);
+
         int restored = 0;
         foreach (var entry in doc.Models)
         {
@@ -320,7 +324,11 @@ internal static class WorkspaceService
             // Mesh first (embedded scan STLs / CAD files). A SourcePath that is only a
             // .zdf used to win this race, wipe the load path, then fail Zivid remesh
             // and drop every scan (Rock V10.mass: 10 scans with sidecars, none shown).
-            string? loadPath = ResolveRestoreMeshPath(entry, workspacePath, out string? zdfPath);
+            // An ungrouped lobe keeps the parent GLB as SourcePath plus its own STL.
+            // That GLB is the whole assembly, so the piece must open from the STL.
+            bool assemblyPiece = PreferEmbeddedAssemblyPiece(entry, sourceCounts);
+            string? loadPath = ResolveRestoreMeshPath(
+                entry, workspacePath, out string? zdfPath, assemblyPiece);
 
             SceneNode? node = null;
             ViewModels.OutlinerItemViewModel? parentItem = null;
@@ -398,7 +406,8 @@ internal static class WorkspaceService
                 ApplyChildPoses(node, entry.ChildPoses);
                 if (zdfPath is not null)
                     node.SourceFilePath = zdfPath;
-                else if (entry.SourcePath is { } sp && File.Exists(sp))
+                else if (entry.SourcePath is { } sp && File.Exists(sp)
+                         && !LoadedEmbeddedMesh(node, entry, workspacePath))
                     node.SourceFilePath = sp;
 
                 if (isScan)
@@ -458,7 +467,11 @@ internal static class WorkspaceService
             // ApplyModifierStackAsync). That made a saved Cut modifier stack vanish on reload
             // even though Capture() had written it correctly. Both loops below are no-ops on
             // empty lists, so there's no need to special-case either one.
-            parentItem ??= viewport.FindOutlinerItem(node);
+            // The rotary bed's row owns the mesh in the scene graph, so a descendant
+            // search returns the bed and parks the toolpath beside the part. Save then
+            // skips it (no mesh of its own, and it is not a child of the part).
+            parentItem ??= viewport.FindOutlinerItemByOwnNode(node)
+                ?? viewport.FindOutlinerItem(node);
             if (parentItem is null)
             {
                 viewport.NotifyRenderNeeded();
@@ -643,14 +656,60 @@ internal static class WorkspaceService
         => path.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
+    /// How many models cite each <see cref="WorkspaceModelEntry.SourcePath"/>.
+    /// Comparison ignores case. Blank paths are skipped.
+    /// </summary>
+    internal static Dictionary<string, int> CountSourcePaths(IEnumerable<WorkspaceModelEntry> models)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in models)
+        {
+            if (string.IsNullOrWhiteSpace(entry.SourcePath)) continue;
+            counts.TryGetValue(entry.SourcePath, out int n);
+            counts[entry.SourcePath] = n + 1;
+        }
+        return counts;
+    }
+
+    /// <summary>
+    /// True when this entry is one piece of an assembly that other models also cite.
+    /// An older ungroup saved the parent GLB on every part next to that part's own STL.
+    /// Reloading the GLB draws the whole assembly once per part. A lone CAD file
+    /// (one model, or a real child hierarchy) stays on its source.
+    /// </summary>
+    internal static bool PreferEmbeddedAssemblyPiece(
+        WorkspaceModelEntry entry,
+        IReadOnlyDictionary<string, int> sourceCounts)
+    {
+        if (string.IsNullOrWhiteSpace(entry.EmbeddedMeshPath)) return false;
+        if (string.IsNullOrWhiteSpace(entry.SourcePath)) return false;
+        if (entry.ChildPoses is { Count: > 1 }) return false;
+        return sourceCounts.TryGetValue(entry.SourcePath, out int n) && n >= 2;
+    }
+
+    /// <summary>The loader opened the embedded sidecar, not the CAD source.</summary>
+    private static bool LoadedEmbeddedMesh(
+        SceneNode node, WorkspaceModelEntry entry, string workspacePath)
+    {
+        if (entry.EmbeddedMeshPath is null || node.SourceFilePath is not { } loaded)
+            return false;
+        string embed = WorkspaceLoader.ResolveMeshPath(workspacePath, entry.EmbeddedMeshPath);
+        return string.Equals(
+            Path.GetFullPath(loaded), Path.GetFullPath(embed), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Picks an ImportHelper-loadable mesh for a workspace entry, plus an optional
     /// ZDF remesh fallback. A <c>SourcePath</c> that is only a <c>.zdf</c> must not
     /// hide the embedded scan STL — those sidecars are how scans reopen without Zivid.
+    /// When <paramref name="preferEmbeddedPiece"/> is set, the embedded STL wins over
+    /// a shared assembly file so one ungrouped part does not reopen as every mesh.
     /// </summary>
     internal static string? ResolveRestoreMeshPath(
         WorkspaceModelEntry entry,
         string workspacePath,
-        out string? zdfPath)
+        out string? zdfPath,
+        bool preferEmbeddedPiece = false)
     {
         string? foundZdf = null;
         string? mesh = null;
@@ -667,6 +726,9 @@ internal static class WorkspaceService
             if (IsZdfPath(p)) { NoteZdf(p); return; }
             if (ImportHelper.IsSupported(p)) mesh = p;
         }
+
+        if (preferEmbeddedPiece && entry.EmbeddedMeshPath is { } pieceRel)
+            NoteMesh(WorkspaceLoader.ResolveMeshPath(workspacePath, pieceRel));
 
         NoteMesh(entry.SourcePath);
         if (mesh is null && entry.SourcePath is { } missingSrc)

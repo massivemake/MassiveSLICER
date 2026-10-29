@@ -10,7 +10,13 @@ public sealed record ToolpathSnapshot(
     Toolpath Raw,
     float BeadWidth,
     float LayerHeight,
-    System.Numerics.Vector3 MaterialColor);
+    System.Numerics.Vector3 MaterialColor,
+    // Cylinder-projection mills store the cutter at the station. These three say how that
+    // station is drawn onto the part right now (null / NaN = the moves are already where
+    // they are drawn). The cut plane uses them so a new cut sits on the line, not the table.
+    System.Numerics.Vector3? RotaryCenter = null,
+    float RotarySign = float.NaN,
+    Matrix4? RotarySpin = null);
 
 /// <summary>Queued toolpath upload for the GL render thread.</summary>
 public sealed class PendingToolpathEntry

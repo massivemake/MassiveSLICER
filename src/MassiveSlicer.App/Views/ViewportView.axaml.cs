@@ -414,6 +414,7 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.ShowBead)               or
                     nameof(ViewportViewModel.ShowBeadOverhang)       or
                     nameof(ViewportViewModel.BeadOverhangSpectrum)   or
+                    nameof(ViewportViewModel.ShowLayerHeightHeatmap) or
                     nameof(ViewportViewModel.ShowOrientationPreview) or
                     nameof(ViewportViewModel.ShowT1TcpEnvelope))
                 {
@@ -485,6 +486,8 @@ public partial class ViewportView : UserControl
                 return $"moves={n} scale min={min:F3} max={max:F3} tags={vm.ViewTags.Count} | renderer: {_renderer.DescribeToolpathEntry(kv.Key)}";
             };
             vm.OnMergeScansRequested     = mode => MergeSelectedScans(vm, mode);
+            vm.OnScanModelAlignRequested = () => _ = AlignModelToScanAsync();
+            vm.OnScanModelNudgeRequested = ApplyAlignNudge;
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
             vm.OnOutlinerSelectRequested = node =>
             {
@@ -529,6 +532,20 @@ public partial class ViewportView : UserControl
                     _renderer.Select(null);
                     UpdateFocusOverlay();
                 }
+                // The old method keeps the buffer. A scan hidden while optimized is on
+                // is released; showing it uploads the same CPU positions again.
+                if (OutlinerModelOps.IsScan(node) && vm.OptimizedScanMerge)
+                    _scanGpuRelease.Enqueue(node);
+            };
+            vm.OnNodeShown = node =>
+            {
+                if (OutlinerModelOps.IsScan(node))
+                    _scanGpuRestore.Enqueue(node);
+            };
+            vm.OnReducedScanDisplayChanged = () =>
+            {
+                _scanDisplayRefresh = true;
+                GlCanvas.RequestNextFrameRendering();
             };
             vm.OnFocusRequested       = FocusSelected;
             vm.OnFrameMoveRequested   = FrameCameraToScrubIndex;
@@ -1862,6 +1879,7 @@ public partial class ViewportView : UserControl
                 Avalonia.Threading.Dispatcher.UIThread.Post(() => GlCanvas?.RequestNextFrameRendering());
             _renderer.ShowBeadOverhang       = vm.ShowBeadOverhang;
             _renderer.ApplyBeadOverhangSpectrum(vm.BeadOverhangSpectrum);
+            _renderer.ShowLayerHeightHeatmap = vm.ShowLayerHeightHeatmap;
             _renderer.ShowOrientationPreview = vm.ShowOrientationPreview;
             // Scrub hides not-yet-printed moves whenever a scrub session is live
             // (selection or sticky timeline), matching what the user can see.
@@ -2114,7 +2132,7 @@ public partial class ViewportView : UserControl
             if (_pendingOverlayUpload is { } overlayUpload)
             {
                 _pendingOverlayUpload = null;
-                UploadPendingMeshes(overlayUpload);
+                UploadPendingMeshes(overlayUpload, vm.OptimizedScanMerge);
                 _renderer.InvalidateShaderAppearance();
             }
 
@@ -2124,7 +2142,7 @@ public partial class ViewportView : UserControl
                 if (vm.IsTcpAttractorNode(incoming))
                     RestoreTcpAttractorPick(incoming);
                 AttachUserImportToCell(incoming);
-                UploadPendingMeshes(incoming);
+                UploadPendingMeshes(incoming, vm.OptimizedScanMerge);
                 MarkUserImportSubtree(incoming);
                 _renderer.InvalidateShaderAppearance();
 
@@ -2134,6 +2152,13 @@ public partial class ViewportView : UserControl
 
                 _renderer.Select(incoming);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
+            }
+
+            DrainScanGpuQueues(vm.OptimizedScanMerge, vm.ReducedScanDisplay);
+            if (_scanDisplayRefresh)
+            {
+                _scanDisplayRefresh = false;
+                ReloadResidentScanDisplays(vm.OptimizedScanMerge);
             }
 
             // Scans and imports destined for the rotary turntable: parent under the E1 pivot so they
@@ -2151,7 +2176,7 @@ public partial class ViewportView : UserControl
                 else
                     _renderer.SceneRoot.AddChild(rotaryChild);   // fallback: no pivot this cell
 
-                UploadPendingMeshes(rotaryChild);
+                UploadPendingMeshes(rotaryChild, vm.OptimizedScanMerge);
                 MarkUserImportSubtree(rotaryChild);
                 _renderer.InvalidateShaderAppearance();
                 _renderer.Select(rotaryChild);
@@ -3902,11 +3927,15 @@ public partial class ViewportView : UserControl
     // traversal: the UI thread can be attaching models, toolpaths and cut-modifier gizmos to the
     // same subtree while these run (opening a workspace does exactly that), and a plain foreach
     // over the live child lists takes the whole app down when it does.
-    private static void UploadPendingMeshes(SceneNode root)
+    private static void UploadPendingMeshes(SceneNode root, bool deferHiddenScans = false)
     {
         foreach (var n in root.SelfAndDescendantsForRender())
         {
             if (n.PendingMesh is not { } data) continue;
+            // Optimized scans stay on the CPU while hidden, so a merge does not put the
+            // buffer back the same frame it hid the source. The old method uploads anyway.
+            // The transform is not touched.
+            if (deferHiddenScans && !n.Visible && OutlinerModelOps.IsScan(n)) continue;
             BindUploadedMesh(n, data);
         }
     }
@@ -6194,12 +6223,41 @@ public partial class ViewportView : UserControl
         _rawToolpathByNode.TryGetValue(node, out var raw);
         raw ??= smoothed;
         _toolpathMetaByNode.TryGetValue(node, out var meta);
+        var (rotaryCenter, rotarySign, rotarySpin) = RotaryDrawForSnapshot(node, smoothed);
         return new ToolpathSnapshot(
             smoothed,
             raw,
             meta.BeadWidth > 0 ? meta.BeadWidth : 6f,
             meta.LayerHeight > 0 ? meta.LayerHeight : 3f,
-            meta.MaterialColor);
+            meta.MaterialColor,
+            rotaryCenter,
+            rotarySign,
+            rotarySpin);
+    }
+
+    /// <summary>
+    /// Same gate as <see cref="RotaryDrawFor"/>: a heated plate does not unwind, and a path
+    /// with no E1 is already where it is drawn. Spin is the pivot motion since the raycast,
+    /// matching <see cref="ApplyRotaryToolpathSpin"/>.
+    /// </summary>
+    private (NVec3? Center, float Sign, Matrix4? Spin) RotaryDrawForSnapshot(SceneNode node, Toolpath tp)
+    {
+        if (_vm is { ActivePrintSurfaceIsHeated: true } || _rotaryBedPivot is null || !ToolpathUsesRotary(tp))
+            return (null, float.NaN, null);
+
+        NVec3 center;
+        if (_millRotaryAtGenerate.TryGetValue(node, out var gen) && gen.Center is { } stored)
+            center = stored;
+        else
+            center = new NVec3(
+                _rotaryBedPivot.WorldTransform.Row3.X,
+                _rotaryBedPivot.WorldTransform.Row3.Y,
+                _rotaryBedPivot.WorldTransform.Row3.Z);
+
+        Matrix4? spin = null;
+        if (_toolpathRotaryWorldAtGenerate.TryGetValue(node, out var wGen))
+            spin = wGen.Inverted() * _rotaryBedPivot.WorldTransform;
+        return (center, _bedRotationSign, spin);
     }
 
     private void StageToolpathMaps(PendingToolpathEntry entry)
@@ -6330,6 +6388,10 @@ public partial class ViewportView : UserControl
             var orientationRates = ComputeOrientationRatePerFlatMove(entry.Toolpath);
             SliceLogger.Step("UpdateToolpathBeadOrientation");
             _renderer.UpdateToolpathBeadOrientation(entry.Node, orientationRates);
+            SliceLogger.Step("LayerHeightHeatmap");
+            var layerHeight = LayerHeightHeatmap.Scores(entry.Toolpath);
+            SliceLogger.Step("UpdateToolpathLayerHeight");
+            _renderer.UpdateToolpathLayerHeight(entry.Node, layerHeight);
 
             // Always the geometry centroid used when building the VBO (points are relative to it).
             _toolpathOriginByNode[entry.Node] = geometryCentroid;
@@ -8664,11 +8726,17 @@ public partial class ViewportView : UserControl
             mesh.BaseColor, mesh.Metallic, mesh.Roughness,
             mesh.Uvs?.ToArray(), mesh.Tangents?.ToArray(), mesh.Material);
 
+    /// <summary>
+    /// True when Explode can split a shell without stalling the click.
+    /// Meshes past <see cref="MeshConnectedComponents.UiProbeMaxCorners"/> are
+    /// left whole: the probe reads every CPU corner, and the drawn scan is only
+    /// a thinned copy of that mesh.
+    /// </summary>
     private static bool HasExplodableMeshes(SceneNode root)
     {
         foreach (var node in root.SelfAndDescendants())
         {
-            if (node.Mesh?.PickingData is { } mesh && MeshConnectedComponents.HasMultipleComponents(mesh))
+            if (node.Mesh?.PickingData is { } mesh && MeshConnectedComponents.HasMultipleComponentsForUi(mesh))
                 return true;
         }
         return false;
@@ -8687,8 +8755,9 @@ public partial class ViewportView : UserControl
         {
             // Read the world pose before unparenting. A GLB root holds the ×1000
             // millimetre scale, and WorldTransform after RemoveChild drops it.
+            // Do not copy the parent file path. That path is the whole assembly,
+            // and the next open would draw every mesh once per part.
             child.DetachKeepingWorld();
-            child.SourceFilePath ??= root.SourceFilePath;
             promoted.Add(child);
         }
 
@@ -8703,7 +8772,6 @@ public partial class ViewportView : UserControl
                 CullFaces      = root.CullFaces,
                 Visible        = root.Visible,
                 LayerPreview   = root.LayerPreview,
-                SourceFilePath = root.SourceFilePath,
             };
             root.Mesh = null;
             promoted.Insert(0, meshNode);
@@ -19774,6 +19842,55 @@ public partial class ViewportView : UserControl
         robot.SetNextPositionName(data.Positions.Count + 1);
     }
 
+    private readonly ConcurrentQueue<SceneNode> _scanGpuRelease = new();
+    private readonly ConcurrentQueue<SceneNode> _scanGpuRestore = new();
+    private bool _scanMergeBusy;
+    private bool _scanDisplayRefresh;
+
+    /// <summary>
+    /// Frees or restores scan GPU buffers only. Never writes <see cref="SceneNode.LocalTransform"/>.
+    /// Release runs before the new merge is uploaded so the old buffer is gone first.
+    /// The old method drops a queued release and uploads the full 14-float layout.
+    /// </summary>
+    private void DrainScanGpuQueues(bool optimizedScanMerge, bool reducedScanDisplay)
+    {
+        while (_scanGpuRelease.TryDequeue(out var node))
+        {
+            if (!optimizedScanMerge || node.Visible || !OutlinerModelOps.IsScan(node)) continue;
+            foreach (var n in node.SelfAndDescendantsForRender())
+                n.Mesh?.ReleaseGpuBuffers();
+        }
+
+        while (_scanGpuRestore.TryDequeue(out var node))
+        {
+            if (!node.Visible || !OutlinerModelOps.IsScan(node)) continue;
+            foreach (var n in node.SelfAndDescendantsForRender())
+            {
+                if (n.PendingMesh is { } pending)
+                    n.PendingMesh = ViewportViewModel.ScanMeshForUpload(pending, optimizedScanMerge, reducedScanDisplay);
+                if (n.Mesh is { } mr)
+                    mr.EnsureGpu(optimizedScanMerge);
+                else if (n.PendingMesh is { } data)
+                    BindUploadedMesh(n, data);
+                _millSurfacePaint?.MarkDirty(n);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds a scan graphics buffer after the view-resolution toggle.
+    /// The measured positions and the node transform stay as they are.
+    /// </summary>
+    private void ReloadResidentScanDisplays(bool allowCompact)
+    {
+        foreach (var n in _renderer.SceneRoot.SelfAndDescendantsForRender())
+        {
+            if (n.Mesh is not { } mr || !mr.NeedsDisplayReload) continue;
+            mr.ReloadDisplay(allowCompact);
+            _millSurfacePaint?.MarkDirty(n);
+        }
+    }
+
     private void MergeSelectedScans(ViewportViewModel vm, ScanMergeOutput output)
     {
         var items = vm.SelectedScanItems.ToList();
@@ -19782,10 +19899,118 @@ public partial class ViewportView : UserControl
             System.Console.WriteLine($"[scan-merge] need 2+ scans, have {items.Count}");
             return;
         }
+        if (_scanMergeBusy)
+        {
+            System.Console.WriteLine("[scan-merge] already running");
+            return;
+        }
 
-        var nodes = items.Select(i => i.Node).ToList();
-        var result = ScanMerger.Merge(nodes, output);
-        if (result is null)
+        if (!vm.OptimizedScanMerge)
+        {
+            MergeSelectedScansOnCaller(vm, items, output);
+            return;
+        }
+
+        // Detached copies of the world pose. ScanMerger is unchanged, and this worker
+        // never writes the live scans, so a move during the merge cannot be torn or undone.
+        var snapshots = new List<SceneNode>(items.Count);
+        foreach (var item in items)
+        {
+            var cpu = item.Node.Mesh?.PickingData ?? item.Node.PendingMesh;
+            if (cpu is null)
+            {
+                System.Console.WriteLine($"[scan-merge] \"{item.Node.Name}\" has no mesh");
+                return;
+            }
+            snapshots.Add(new SceneNode
+            {
+                Name = item.Node.Name,
+                PendingMesh = cpu,
+                LocalTransform = item.Node.WorldTransform,
+            });
+        }
+
+        var anchorWorld = snapshots[0].LocalTransform;
+        _scanMergeBusy = true;
+
+        _ = Task.Run(() =>
+        {
+            var merged = ScanMerger.Merge(snapshots, output);
+            MeshData? local = merged is null ? null : ScanMerger.ToLocalFrame(merged.Mesh, anchorWorld);
+            return (merged, local);
+        }).ContinueWith(t =>
+        {
+            Dispatcher.UIThread.Post(() => FinishScanMerge(vm, items, output, anchorWorld, t));
+        });
+    }
+
+    /// <summary>
+    /// Previous merge: <see cref="ScanMerger.Merge"/> on the live nodes, on this thread.
+    /// Reads each world pose and does not assign <see cref="SceneNode.LocalTransform"/>.
+    /// </summary>
+    private void MergeSelectedScansOnCaller(
+        ViewportViewModel vm,
+        List<OutlinerItemViewModel> items,
+        ScanMergeOutput output)
+    {
+        var nodes = new List<SceneNode>(items.Count);
+        foreach (var item in items)
+        {
+            var cpu = item.Node.Mesh?.PickingData ?? item.Node.PendingMesh;
+            if (cpu is null)
+            {
+                System.Console.WriteLine($"[scan-merge] \"{item.Node.Name}\" has no mesh");
+                return;
+            }
+            nodes.Add(item.Node);
+        }
+
+        var anchorWorld = nodes[0].WorldTransform;
+        try
+        {
+            var merged = ScanMerger.Merge(nodes, output);
+            var local = merged is null ? null : ScanMerger.ToLocalFrame(merged.Mesh, anchorWorld);
+            PlaceMergedScan(vm, items, output, anchorWorld, merged, local);
+        }
+        catch (Exception ex)
+        {
+            System.Console.WriteLine("[scan-merge] " + ex.GetBaseException().Message);
+        }
+    }
+
+    private void FinishScanMerge(
+        ViewportViewModel vm,
+        List<OutlinerItemViewModel> sources,
+        ScanMergeOutput output,
+        Matrix4 anchorWorld,
+        Task<(ScanMerger.MergeResult? merged, MeshData? local)> work)
+    {
+        _scanMergeBusy = false;
+        if (VisualRoot is null) return;
+
+        if (work.IsFaulted)
+        {
+            System.Console.WriteLine("[scan-merge] " + work.Exception?.GetBaseException().Message);
+            return;
+        }
+
+        var (result, localMesh) = work.Result;
+        PlaceMergedScan(vm, sources, output, anchorWorld, result, localMesh);
+    }
+
+    /// <summary>
+    /// Adds the merged scan at the anchor world pose and hides the sources.
+    /// Hiding sets visibility only. Source <see cref="SceneNode.LocalTransform"/> is not assigned.
+    /// </summary>
+    private void PlaceMergedScan(
+        ViewportViewModel vm,
+        List<OutlinerItemViewModel> sources,
+        ScanMergeOutput output,
+        Matrix4 anchorWorld,
+        ScanMerger.MergeResult? result,
+        MeshData? localMesh)
+    {
+        if (result is null || localMesh is null)
         {
             System.Console.WriteLine("[scan-merge] no geometry to merge");
             return;
@@ -19794,9 +20019,6 @@ public partial class ViewportView : UserControl
         var label = output == ScanMergeOutput.PointCloud
             ? $"Merged Scan ({result.SourceCount} clouds)"
             : $"Merged Scan ({result.SourceCount} meshes)";
-
-        var anchorWorld = nodes[0].WorldTransform;
-        var localMesh   = ScanMerger.ToLocalFrame(result.Mesh, anchorWorld);
 
         var merged = new SceneNode
         {
@@ -19811,7 +20033,7 @@ public partial class ViewportView : UserControl
 
         vm.AddScanNode(merged);
 
-        foreach (var item in items)
+        foreach (var item in sources)
             item.Visible = false;
 
         vm.ClearScanOutlinerSelection();

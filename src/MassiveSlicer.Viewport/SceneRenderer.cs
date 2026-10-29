@@ -738,6 +738,7 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Invoked on a background thread when a carve grid is ready to draw.</summary>
     public Action? SdfCarveReady { get; set; }
     public bool ShowBeadOverhang        { get; set; } = false;
+    public bool ShowLayerHeightHeatmap  { get; set; } = false;
     public bool ShowOrientationPreview  { get; set; } = false;
     private bool _beadOverhangSpectrum;
 
@@ -1026,6 +1027,16 @@ public sealed class SceneRenderer : IDisposable
     {
         if (_toolpaths.TryGetValue(node, out var entry))
             entry.Renderer.UpdateBeadOrientation(orientationRatePerFlatMove);
+    }
+
+    /// <summary>
+    /// Uploads per-move layer-thickness scores. Must be called on the GL thread.
+    /// Showing the map later does not reslice.
+    /// </summary>
+    public void UpdateToolpathLayerHeight(SceneNode node, float[] scoresPerFlatMove)
+    {
+        if (_toolpaths.TryGetValue(node, out var entry))
+            entry.Renderer.UpdateLayerHeight(scoresPerFlatMove);
     }
 
     /// <summary>
@@ -1693,6 +1704,7 @@ public sealed class SceneRenderer : IDisposable
                 showZHop: ShowZHopMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showSdfBead: ShowSdfBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
+                showLayerHeightHeatmap: ShowLayerHeightHeatmap,
                 scrubIndex: scrub,
                 eyeLocal: eyeLocal, lineOpacity: ToolpathLineOpacity,
                 scrubStart: scrubLo,

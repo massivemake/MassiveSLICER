@@ -11,8 +11,30 @@ public static class MeshConnectedComponents
 {
     private const float QuantizeScale = 10000f;
 
+    /// <summary>
+    /// Corner count above which a shell probe must not run on the UI thread.
+    /// The probe quantises every corner. A merged scan is tens of millions of
+    /// unindexed corners, and that walk is what freezes an outliner click.
+    /// Ordinary parts sit under this (about 160k triangles).
+    /// </summary>
+    public const int UiProbeMaxCorners = 500_000;
+
+    /// <summary>
+    /// False when <see cref="HasMultipleComponents"/> would stall the UI thread.
+    /// </summary>
+    public static bool CanProbeOnUiThread(MeshData mesh)
+        => mesh.Positions.Length <= UiProbeMaxCorners;
+
     /// <summary>Returns <c>true</c> when the mesh contains more than one disconnected shell.</summary>
     public static bool HasMultipleComponents(MeshData mesh) => CountComponents(mesh) > 1;
+
+    /// <summary>
+    /// Shell check for a click that only enables Explode. A mesh past
+    /// <see cref="UiProbeMaxCorners"/> is reported as one shell so the click
+    /// returns without walking its corners.
+    /// </summary>
+    public static bool HasMultipleComponentsForUi(MeshData mesh)
+        => CanProbeOnUiThread(mesh) && HasMultipleComponents(mesh);
 
     /// <summary>Returns the number of connected triangle components in <paramref name="mesh"/>.</summary>
     public static int CountComponents(MeshData mesh)

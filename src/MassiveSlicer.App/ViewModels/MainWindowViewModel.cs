@@ -77,6 +77,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private bool _applyingUndoRedo;
     private bool _suppressWorkspaceDirty;
     private string _lastCommittedPrefsJson = "";
+    private string? _openWorkspaceFile;
 
     /// <summary>Cell the last swap completed on, so a switch to a different robot can be told apart from a reload.</summary>
     private string? _lastSwapCellName;
@@ -471,6 +472,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         Toolbar.SyncRobotRequested += (_, _) => robot.ConnectCommand.Execute(null);
 
         RightPanel.Scan.OnTestScanRequested = RunTestScan;
+        RightPanel.Scan.OnAlignModelRequested = () => Viewport.RequestScanModelAlign();
+        RightPanel.Scan.OnAlignOffsetChanged = () => Viewport.RequestScanModelNudge();
         RightPanel.Scan.OnMoveQuickPositionRequested = name => _ = MoveQuickPositionAsync(name);
         RightPanel.Scan.OnSaveQuickPositionRequested = name => _ = SaveQuickPositionAsync(name);
 
@@ -3570,6 +3573,30 @@ public sealed class MainWindowViewModel : ViewModelBase
         return "[sync] desynced.";
     }
 
+    /// <summary>
+    /// Title bar and taskbar caption. <see cref="BuildInfo.Label"/> is the build
+    /// version (baseline, date, commit), so the caption follows the exe instead of
+    /// a leftover feature sentence. The open scene name is added once a workspace is open.
+    /// </summary>
+    public string WindowTitle => FormatWindowTitle(_openWorkspaceFile);
+
+    internal static string FormatWindowTitle(string? workspaceFileName)
+    {
+        var version = BuildInfo.Label;
+        if (string.IsNullOrWhiteSpace(workspaceFileName))
+            return $"MassiveSlicer Lfam3 Milling - {version}";
+        return $"MassiveSlicer Lfam3 Milling - {workspaceFileName} - {version}";
+    }
+
+    private void RememberOpenWorkspace(string? path)
+    {
+        var name = string.IsNullOrWhiteSpace(path) ? null : Path.GetFileName(path);
+        if (string.Equals(_openWorkspaceFile, name, StringComparison.Ordinal))
+            return;
+        _openWorkspaceFile = name;
+        OnPropertyChanged(nameof(WindowTitle));
+    }
+
     /// <summary>Clears user models and starts a fresh unsaved workspace.</summary>
     public void NewWorkspace()
     {
@@ -3582,6 +3609,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             AppPreferences.LastWorkspacePath = null;
             PreferencesLoader.Save(AppPreferences);
             StatusBar.FileStatus = "Untitled";
+            RememberOpenWorkspace(null);
             ClearWorkspaceDirty();
         }
         finally
@@ -4266,6 +4294,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             Viewport.Erp.RefreshWorkspaceCandidates();
             PreferencesLoader.Save(AppPreferences);
             StatusBar.FileStatus = Path.GetFileName(path);
+            RememberOpenWorkspace(path);
             ClearWorkspaceDirty();
             Console.Log(toolpathCount > 0
                 ? $"[workspace] Saved {modelCount} model(s) and {toolpathCount} toolpath(s) to {path}"
@@ -4398,6 +4427,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         AppPreferences.LastWorkspacePath = workspacePath;
         RecordRecentWorkspace(workspacePath);
         StatusBar.FileStatus = Path.GetFileName(workspacePath);
+        RememberOpenWorkspace(workspacePath);
         SyncKrlFrameIndicesToActiveTab();
         PreferencesLoader.Save(AppPreferences);
         Console.Log(restoredCount == doc.Models.Count
@@ -4625,6 +4655,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.AutoDepth              = copy.AutoDepth;
         live.OrbitAroundSelection   = copy.OrbitAroundSelection;
         live.AntiAliasing           = copy.AntiAliasing;
+        // OptimizedScanMerge and ReducedScanDisplay stay on the machine preference.
+        // A workspace snapshot that omits either key deserializes as true and would
+        // turn that path back on at every open.
         live.ActiveTheme            = copy.ActiveTheme;
         live.DefaultBackdropPath    = copy.DefaultBackdropPath;
         live.DefaultBackdropBlur     = copy.DefaultBackdropBlur;
@@ -4884,6 +4917,8 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         // Viewport visibility & navigation
         vp.AttachBeadOverhangPreference(p);
+        vp.AttachOptimizedScanMergePreference(p);
+        vp.AttachReducedScanDisplayPreference(p);
         vp.ShowGrid            = p.ShowGrid;
         vp.ShowContactShadows       = p.ShadowCatcherEnabled;
         vp.ContactShadowSize        = p.ContactShadowSize;

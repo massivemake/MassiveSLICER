@@ -76,6 +76,23 @@ public sealed class AppPreferences
     /// <summary>Enable multi-sample anti-aliasing in the OpenGL viewport.</summary>
     public bool AntiAliasing { get; set; } = true;
 
+    /// <summary>
+    /// Scan merge and upload. True runs the merge off the interface thread, stores
+    /// position and normal only, and frees a scan's graphics buffer when it is hidden.
+    /// False is the previous method: merge on the interface thread, 14 floats per
+    /// vertex, and hidden scans keep their buffers. Neither choice moves a scan.
+    /// Machine preference only — a workspace file must not copy this field.
+    /// </summary>
+    public bool OptimizedScanMerge { get; set; } = true;
+
+    /// <summary>
+    /// When true, the viewport draws a thinned copy of a scan. Each drawn vertex is
+    /// one of the measured vertices. Alignment, milling, and export keep the full
+    /// scan. False draws every measured vertex. Neither choice moves a scan.
+    /// Machine preference only — a workspace file must not copy this field.
+    /// </summary>
+    public bool ReducedScanDisplay { get; set; } = true;
+
     // ── Appearance ────────────────────────────────────────────────────────
 
     /// <summary>Active colour theme name (matches a Resources/Themes/*.axaml file).</summary>

@@ -5,7 +5,7 @@
         x:Class="MassiveSlicer.App.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         x:CompileBindings="False"
-        Title="MassiveSlicer Lfam3 Milling - Leftover toolpaths stay on the outliner - 2026-10-28"
+        Title="{Binding WindowTitle}"
         Icon="avares://MassiveSlicer.App/Assets/icon.ico"
         Height="900" Width="1440"
         MinHeight="600" MinWidth="900"

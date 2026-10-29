@@ -27,6 +27,10 @@ Start with these five. Add a file when a new user-visible behavior ships.
 | SDF bit side carve | `sdf-bit-side-carve.md` | `viewset SdfCarveBitSides` (read-only; `true` rebuilds the SDF view) |
 | Continuous Planar Field | `continuous-planar.md` | `cpf` (read-only; does not select the method) |
 | Bead overhang colors | `bead-overhang-colors.md` | `viewset BeadOverhangSpectrum` (read-only; `true` writes the app preference) |
+| Layer height heatmap | `layer-height-heatmap.md` | `viewset ShowLayerHeightHeatmap` (read-only; `true` shows the map and is not saved) |
+| Scan merge performance | `scan-merge-performance.md` | `viewset OptimizedScanMerge` (read-only; `false` writes the app preference) |
+| Scan view resolution | `scan-display-resolution.md` | `viewset ReducedScanDisplay` (read-only; `false` writes the app preference) |
+| Scan model alignment | `scan-model-align.md` | `scan-align status` (read-only; `scan-align` alone moves the model when the fit is good) |
 | End wipe | `end-wipe.md` | `addset EndWipeEnabled` (read-only; a value reslices) |
 
 Proof standards: real user path, action + resulting state, side effects on disk/console. Unit tests are extra, not a substitute.

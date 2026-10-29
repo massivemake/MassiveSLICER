@@ -39,4 +39,30 @@ public sealed class AppPreferencesTest
         Assert.Equal("Sine", loaded.WaveEffect);
         Assert.Equal(3, loaded.WallCount);
     }
+
+    [Fact]
+    public void Optimized_scan_merge_stays_on_when_a_snapshot_omits_it()
+    {
+        var omitted = JsonSerializer.Deserialize<AppPreferences>("{}");
+        Assert.NotNull(omitted);
+        Assert.True(omitted.OptimizedScanMerge);
+
+        var json = JsonSerializer.Serialize(new AppPreferences { OptimizedScanMerge = false });
+        var loaded = JsonSerializer.Deserialize<AppPreferences>(json);
+        Assert.NotNull(loaded);
+        Assert.False(loaded.OptimizedScanMerge);
+    }
+
+    [Fact]
+    public void Reduced_scan_display_stays_on_when_a_snapshot_omits_it()
+    {
+        var omitted = JsonSerializer.Deserialize<AppPreferences>("{}");
+        Assert.NotNull(omitted);
+        Assert.True(omitted.ReducedScanDisplay);
+
+        var json = JsonSerializer.Serialize(new AppPreferences { ReducedScanDisplay = false });
+        var loaded = JsonSerializer.Deserialize<AppPreferences>(json);
+        Assert.NotNull(loaded);
+        Assert.False(loaded.ReducedScanDisplay);
+    }
 }

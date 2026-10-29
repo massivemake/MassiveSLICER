@@ -49,7 +49,10 @@ public static class ScanPointCloudAligner
             for (int i = 0; i < transformed.Length; i++)
                 transformed[i] = TransformPoint(transformed[i], step);
 
-            accum = step * accum;
+            // Row-vector: p * (accum * step) applies the new step last, matching the
+            // sample loop above. step * accum applies the passes backwards and spins
+            // a cloud that needed more than one iteration.
+            accum = accum * step;
 
             float maxShift = 0f;
             for (int i = 0; i < src.Length; i++)
@@ -127,15 +130,14 @@ public static class ScanPointCloudAligner
             s20 += a.Z * b.X; s21 += a.Z * b.Y; s22 += a.Z * b.Z;
         }
 
-        // H = A^T * B for row-vector centroids → rotation R (row) satisfies A * R ≈ B.
+        // H_ij = Σ a_i b_j. Its polar factor Q (H = Q P) is the row-vector
+        // rotation, because a * Q ≈ b.
         var h = new Matrix3(
             s00, s01, s02,
             s10, s11, s12,
             s20, s21, s22);
 
-        // Polar decomposition via 3x3 SVD substitute: use MathNet? We don't have it.
-        // Use iterative orthogonalization (Newton-Schulz) on H to get R.
-        var r = OrthogonalizeRows(h);
+        var r = PolarRotation(h);
 
         var rot4 = new Matrix4(
             r.M11, r.M12, r.M13, 0,
@@ -176,7 +178,7 @@ public static class ScanPointCloudAligner
             s10, s11, s12,
             s20, s21, s22);
 
-        var r = OrthogonalizeRows(h);
+        var r = PolarRotation(h);
         var rot4 = new Matrix4(
             r.M11, r.M12, r.M13, 0,
             r.M21, r.M22, r.M23, 0,
@@ -193,18 +195,89 @@ public static class ScanPointCloudAligner
         return toOrigin * rotation * fromOrigin;
     }
 
-    private static Matrix3 OrthogonalizeRows(Matrix3 m)
+    /// <summary>
+    /// Orthogonal factor of a 3×3 covariance. Gram-Schmidt on the rows leaves the
+    /// stretch of a long scan in the rotation, which throws the cloud off the bed.
+    /// </summary>
+    private static Matrix3 PolarRotation(Matrix3 h)
     {
-        // Gram-Schmidt on rows of m to produce a proper rotation (row-vector basis).
-        var r0 = new Vector3(m.M11, m.M12, m.M13).Normalized();
-        var r1 = new Vector3(m.M21, m.M22, m.M23);
+        double[,] x =
+        {
+            { h.M11, h.M12, h.M13 },
+            { h.M21, h.M22, h.M23 },
+            { h.M31, h.M32, h.M33 },
+        };
+
+        double scale = 0;
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                scale += x[r, c] * x[r, c];
+        scale = Math.Sqrt(scale);
+        if (scale < 1e-8)
+            return Matrix3.Identity;
+
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                x[r, c] /= scale;
+
+        // Newton-Schulz: X ← ½ X (3I − XᵀX), scaled so singular values sit in (0, √3).
+        for (int iter = 0; iter < 16; iter++)
+        {
+            double[,] xt = Transpose3(x);
+            double[,] xtx = Mul3(xt, x);
+            xtx[0, 0] = 3 - xtx[0, 0];
+            xtx[1, 1] = 3 - xtx[1, 1];
+            xtx[2, 2] = 3 - xtx[2, 2];
+            xtx[0, 1] = -xtx[0, 1];
+            xtx[0, 2] = -xtx[0, 2];
+            xtx[1, 0] = -xtx[1, 0];
+            xtx[1, 2] = -xtx[1, 2];
+            xtx[2, 0] = -xtx[2, 0];
+            xtx[2, 1] = -xtx[2, 1];
+            x = Mul3(x, xtx);
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    x[r, c] *= 0.5;
+        }
+
+        var r0 = new Vector3((float)x[0, 0], (float)x[0, 1], (float)x[0, 2]);
+        var r1 = new Vector3((float)x[1, 0], (float)x[1, 1], (float)x[1, 2]);
+        var r2 = new Vector3((float)x[2, 0], (float)x[2, 1], (float)x[2, 2]);
+        if (r0.LengthSquared < 1e-10f || r1.LengthSquared < 1e-10f)
+            return Matrix3.Identity;
+        r0.Normalize();
         r1 -= r0 * Vector3.Dot(r1, r0);
-        r1 = r1.Normalized();
-        var r2 = Vector3.Cross(r0, r1).Normalized();
+        if (r1.LengthSquared < 1e-10f)
+            return Matrix3.Identity;
+        r1.Normalize();
+        var crossed = Vector3.Cross(r0, r1);
+        // A reflection (det −1) would mirror the scan. Force a proper rotation.
+        if (Vector3.Dot(crossed, r2) < 0f)
+            crossed = -crossed;
+        r2 = crossed.Normalized();
         return new Matrix3(
             r0.X, r0.Y, r0.Z,
             r1.X, r1.Y, r1.Z,
             r2.X, r2.Y, r2.Z);
+    }
+
+    private static double[,] Transpose3(double[,] m)
+    {
+        return new[,]
+        {
+            { m[0, 0], m[1, 0], m[2, 0] },
+            { m[0, 1], m[1, 1], m[2, 1] },
+            { m[0, 2], m[1, 2], m[2, 2] },
+        };
+    }
+
+    private static double[,] Mul3(double[,] a, double[,] b)
+    {
+        var r = new double[3, 3];
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                r[i, j] = a[i, 0] * b[0, j] + a[i, 1] * b[1, j] + a[i, 2] * b[2, j];
+        return r;
     }
 
     private static Vector3 Centroid(ReadOnlySpan<Vector3> pts)

@@ -10,6 +10,7 @@ using MassiveSlicer.Commands;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Core.Scanning;
+using MassiveSlicer.Core.Slicing;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.Viewport.Scene.Modifiers;
@@ -460,6 +461,24 @@ public sealed partial class ViewportViewModel : ViewModelBase
         {
             if (!SetField(ref _showBeadOverhang, value)) return;
             if (value && _showOrientationPreview) { _showOrientationPreview = false; OnPropertyChanged(nameof(ShowOrientationPreview)); }
+            if (value && _showLayerHeightHeatmap) { _showLayerHeightHeatmap = false; OnPropertyChanged(nameof(ShowLayerHeightHeatmap)); }
+        }
+    }
+
+    private bool _showLayerHeightHeatmap;
+    /// <summary>
+    /// Bead colored by layer thickness (adaptive layer height). View toggle only.
+    /// Not written to the workspace. Does not reslice.
+    /// </summary>
+    public bool ShowLayerHeightHeatmap
+    {
+        get => _showLayerHeightHeatmap;
+        set
+        {
+            if (!SetField(ref _showLayerHeightHeatmap, value)) return;
+            if (!value) return;
+            if (_showBeadOverhang) { _showBeadOverhang = false; OnPropertyChanged(nameof(ShowBeadOverhang)); }
+            if (_showOrientationPreview) { _showOrientationPreview = false; OnPropertyChanged(nameof(ShowOrientationPreview)); }
         }
     }
 
@@ -501,6 +520,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         {
             if (!SetField(ref _showOrientationPreview, value)) return;
             if (value && _showBeadOverhang) { _showBeadOverhang = false; OnPropertyChanged(nameof(ShowBeadOverhang)); }
+            if (value && _showLayerHeightHeatmap) { _showLayerHeightHeatmap = false; OnPropertyChanged(nameof(ShowLayerHeightHeatmap)); }
         }
     }
 
@@ -6993,6 +7013,16 @@ public sealed partial class ViewportViewModel : ViewModelBase
         OnMergeScansRequested?.Invoke(output);
     }
 
+    /// <summary>Match the model to the scan. The view applies a transform only when the fit is good.</summary>
+    internal Action? OnScanModelAlignRequested { get; set; }
+
+    /// <summary>Applies the Scan-tab nudge on top of the last accepted match.</summary>
+    internal Action? OnScanModelNudgeRequested { get; set; }
+
+    internal void RequestScanModelAlign() => OnScanModelAlignRequested?.Invoke();
+
+    internal void RequestScanModelNudge() => OnScanModelNudgeRequested?.Invoke();
+
     /// <summary>Mounts one LFAM 3 toolhead exclusively when its outliner row is clicked.</summary>
     internal Action<string>? OnOutlinerToolheadSelected { get; set; }
 
@@ -7010,6 +7040,117 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Callback registered by the viewport code-behind to deselect a node when it is hidden.</summary>
     internal Action<SceneNode>? OnNodeHidden { get; set; }
+
+    /// <summary>Callback when an outliner row is shown again. Scans use this to restore a released GPU buffer.</summary>
+    internal Action<SceneNode>? OnNodeShown { get; set; }
+
+    private AppPreferences? _scanMergePrefs;
+    private bool _optimizedScanMerge = true;
+
+    /// <summary>
+    /// True uses the background scan merge, the 6-float upload, and frees a hidden
+    /// scan's graphics buffer. False is the previous method. Positions are not written.
+    /// </summary>
+    public bool OptimizedScanMerge
+    {
+        get => _optimizedScanMerge;
+        set
+        {
+            if (!SetField(ref _optimizedScanMerge, value)) return;
+            if (_scanMergePrefs is { } prefs && prefs.OptimizedScanMerge != value)
+            {
+                prefs.OptimizedScanMerge = value;
+                PreferencesLoader.Save(prefs);
+            }
+        }
+    }
+
+    /// <summary>Copies the saved scan-merge choice in without writing preferences back.</summary>
+    internal void AttachOptimizedScanMergePreference(AppPreferences prefs)
+    {
+        _scanMergePrefs = prefs;
+        if (_optimizedScanMerge == prefs.OptimizedScanMerge) return;
+        _optimizedScanMerge = prefs.OptimizedScanMerge;
+        OnPropertyChanged(nameof(OptimizedScanMerge));
+    }
+
+    private bool _reducedScanDisplay = true;
+
+    /// <summary>
+    /// True draws a thinned copy of each scan. False draws every measured vertex.
+    /// The full positions stay on the mesh either way.
+    /// </summary>
+    public bool ReducedScanDisplay
+    {
+        get => _reducedScanDisplay;
+        set
+        {
+            if (!SetField(ref _reducedScanDisplay, value)) return;
+            if (_scanMergePrefs is { } prefs && prefs.ReducedScanDisplay != value)
+            {
+                prefs.ReducedScanDisplay = value;
+                PreferencesLoader.Save(prefs);
+            }
+            StampScanDisplayResolution(value);
+            OnReducedScanDisplayChanged?.Invoke();
+        }
+    }
+
+    /// <summary>Fired after the display flag changes so the viewport can rebuild resident scan buffers.</summary>
+    internal Action? OnReducedScanDisplayChanged { get; set; }
+
+    /// <summary>Copies the saved display choice in without writing preferences back.</summary>
+    internal void AttachReducedScanDisplayPreference(AppPreferences prefs)
+    {
+        _scanMergePrefs = prefs;
+        if (_reducedScanDisplay == prefs.ReducedScanDisplay) return;
+        _reducedScanDisplay = prefs.ReducedScanDisplay;
+        OnPropertyChanged(nameof(ReducedScanDisplay));
+        StampScanDisplayResolution(prefs.ReducedScanDisplay);
+        OnReducedScanDisplayChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Records the display choice on scan meshes already in the outliner.
+    /// Position arrays and <see cref="SceneNode.LocalTransform"/> are not written.
+    /// </summary>
+    internal void StampScanDisplayResolution(bool reduce)
+    {
+        foreach (var item in EnumerateAllScanItems())
+        {
+            foreach (var n in item.Node.SelfAndDescendantsForRender())
+            {
+                if (n.PendingMesh is { } pending)
+                    pending.ReduceScanDisplay = WantReducedDisplay(pending, reduce);
+                if (n.Mesh?.PickingData is { } cpu && !ReferenceEquals(cpu, n.PendingMesh))
+                    cpu.ReduceScanDisplay = WantReducedDisplay(cpu, reduce);
+            }
+        }
+    }
+
+    static bool WantReducedDisplay(MeshData mesh, bool reduce)
+        => reduce && mesh.Uvs is null && mesh.Tangents is null && mesh.Material is null;
+
+    /// <summary>
+    /// Same vertex arrays, with the scan upload stride and display flag selected by the
+    /// performance toggles. A mesh that carries UVs, tangents, or a material map is returned unchanged.
+    /// </summary>
+    internal static MeshData ScanMeshForUpload(MeshData source, bool compactScanLayout, bool reduceScanDisplay = true)
+    {
+        if (source.Uvs is not null || source.Tangents is not null || source.Material is not null)
+            return source;
+        bool reduce = reduceScanDisplay;
+        if (source.CompactScanLayout == compactScanLayout && source.ReduceScanDisplay == reduce)
+            return source;
+        return new MeshData(
+            source.Positions, source.Normals, source.Indices, source.Name,
+            source.BaseColor, source.Metallic, source.Roughness)
+        {
+            RenderAsPoints = source.RenderAsPoints,
+            CompactScanLayout = compactScanLayout,
+            ReduceScanDisplay = reduce,
+        };
+    }
 
     /// <summary>
     /// Returns the world-space pose of a KUKA tool frame (TCP XYZ + ABC orientation)
@@ -7787,8 +7928,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     public void AddScanNode(SceneNode node)
     {
-        // Ensure lime translucent look even for restored STLs / re-meshed ZDFs.
-        ApplyScanAppearance(node);
+        // Ensure lime look even for restored STLs / re-meshed ZDFs.
+        // The compact and display flags follow the performance toggles and do not copy vertices.
+        ApplyScanAppearance(node, OptimizedScanMerge, ReducedScanDisplay);
         FlattenScansToBedGroup();
         var parentObject = _rotaryGroupItem;
         EnqueueRotarySceneNode(node);
@@ -7804,10 +7946,20 @@ public sealed partial class ViewportViewModel : ViewModelBase
         NotifyRenderNeeded();
     }
 
+    /// <summary>Scan lime #8CFF26. Restored STL white is not this colour.</summary>
+    internal static bool IsScanLime(OpenTK.Mathematics.Vector4 color)
+        => MathF.Abs(color.X - 0.55f) < 0.08f
+           && MathF.Abs(color.Y - 1.00f) < 0.08f
+           && MathF.Abs(color.Z - 0.15f) < 0.08f
+           && color.W > 0.99f;
+
     /// <summary>
     /// Lime green (opaque) scan look. Applied for live captures, ZDF recover, and workspace restore.
+    /// <paramref name="compactScanLayout"/> false keeps the previous 14-float upload.
+    /// <paramref name="reduceScanDisplay"/> false draws every measured vertex.
+    /// The position and normal arrays are reused either way.
     /// </summary>
-    internal static void ApplyScanAppearance(SceneNode node)
+    internal static void ApplyScanAppearance(SceneNode node, bool compactScanLayout = true, bool reduceScanDisplay = true)
     {
         // #8CFF26 ≈ (0.55, 1.00, 0.15)
         var lime = new OpenTK.Mathematics.Vector4(0.55f, 1.00f, 0.15f, 1f);
@@ -7821,13 +7973,28 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 gpu.Color        = lime;
                 gpu.AlphaModeInt = (int)MassiveSlicer.Viewport.Scene.AlphaMode.Opaque;
             }
-            // Restored STLs often have non-lime PendingMesh — re-stamp before GPU upload.
-            if (n.PendingMesh is { } pm
-                && (pm.BaseColor.X < 0.5f || pm.BaseColor.Y < 0.9f || pm.BaseColor.W < 0.99f))
+            // Restored STLs come back white. A white mesh fails a "too dark" test and
+            // stayed white, so re-stamp anything that is not already scan lime.
+            // Same position and normal arrays. The flags only change the graphics buffer.
+            if (n.PendingMesh is { } pm)
             {
-                n.PendingMesh = new MassiveSlicer.Viewport.Scene.MeshData(
-                    pm.Positions, pm.Normals, pm.Indices, pm.Name,
-                    lime, 0f, 0.85f);
+                bool textured = pm.Uvs is not null || pm.Tangents is not null || pm.Material is not null;
+                bool wantReduce = reduceScanDisplay && !textured;
+                if (!IsScanLime(pm.BaseColor) || pm.CompactScanLayout != compactScanLayout
+                    || (!textured && pm.ReduceScanDisplay != wantReduce))
+                {
+                    bool alreadyLime = IsScanLime(pm.BaseColor);
+                    n.PendingMesh = new MassiveSlicer.Viewport.Scene.MeshData(
+                        pm.Positions, pm.Normals, pm.Indices, pm.Name,
+                        alreadyLime ? pm.BaseColor : lime,
+                        alreadyLime ? pm.Metallic : 0f,
+                        alreadyLime ? pm.Roughness : 0.85f)
+                    {
+                        RenderAsPoints = pm.RenderAsPoints,
+                        CompactScanLayout = compactScanLayout,
+                        ReduceScanDisplay = wantReduce,
+                    };
+                }
             }
         }
     }
@@ -8324,7 +8491,8 @@ public sealed partial class ViewportViewModel : ViewModelBase
             canReloadModel: modelFileOps ? OutlinerModelOps.CanReload : null,
             canReplaceModel: modelFileOps ? OutlinerModelOps.CanReplace : null,
             onReloadModel: modelFileOps ? item => OnModelReloadRequested?.Invoke(item.Node) : null,
-            onReplaceModel: modelFileOps ? item => OnModelReplaceRequested?.Invoke(item.Node) : null);
+            onReplaceModel: modelFileOps ? item => OnModelReplaceRequested?.Invoke(item.Node) : null,
+            onShow: OutlinerModelOps.IsScan(node) ? () => OnNodeShown?.Invoke(node) : null);
 
     private OutlinerItemViewModel RegisterOutlinerItem(SceneNode node)
     {
@@ -8410,6 +8578,28 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 return item;
         }
         return null;
+    }
+
+    /// <summary>
+    /// The outliner row whose own node is <paramref name="node"/>.
+    /// An ancestor such as the rotary bed also contains that node in its scene
+    /// subtree, and <see cref="FindOutlinerItem"/> returns the ancestor. Restore
+    /// must use this so a toolpath is nested under the part, where save reads it.
+    /// </summary>
+    internal OutlinerItemViewModel? FindOutlinerItemByOwnNode(SceneNode node)
+    {
+        OutlinerItemViewModel? found = null;
+        void Walk(System.Collections.Generic.IEnumerable<OutlinerItemViewModel> items)
+        {
+            foreach (var item in items)
+            {
+                if (ReferenceEquals(item.Node, node))
+                    found = item;
+                Walk(item.Children);
+            }
+        }
+        Walk(OutlinerItems);
+        return found;
     }
 
     /// <summary>Returns the outliner item whose root node matches <paramref name="node"/>.</summary>
@@ -8760,7 +8950,10 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal CutModifier AddCutModifier(OutlinerItemViewModel ownerItem, string? name = null)
     {
         var modifier = new CutModifier { Name = name ?? NextCutName(GetModifiers(ownerItem)) };
-        GetOrCreateModifierGizmoNode(modifier, ownerItem);
+        // A saved name is a restore. Leave the pose at zero so the caller can write the
+        // stored fields; walking the toolpath here would put the plane on the path and
+        // then have to be undone.
+        GetOrCreateModifierGizmoNode(modifier, ownerItem, placeAtOwner: name is null);
         return modifier;
     }
 
@@ -9047,35 +9240,138 @@ public sealed partial class ViewportViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// World point a new cut should appear at. A toolpath wins over the mesh: cylinder
+    /// projection stores the cutter at the station, and the snapshot's rotary pose is what
+    /// actually draws the line on the part. No path falls back to the mesh box centre.
+    /// </summary>
+    private Vector3? SpawnCenter(OutlinerItemViewModel owner)
+        => ToolpathDrawCenter(owner) ?? ComputeWorldCenter(owner.Node);
+
+    private OutlinerItemViewModel? ToolpathForCutSpawn(OutlinerItemViewModel owner)
+    {
+        if (_selectedOutlinerItem is { IsToolpath: true } selected && IsUnderOwner(owner, selected))
+            return selected;
+        return FindToolpathChild(owner, OutlinerToolpathKind.Mill)
+            ?? FindToolpathChild(owner, OutlinerToolpathKind.Print)
+            ?? FindAnyToolpathChild(owner);
+    }
+
+    private bool IsUnderOwner(OutlinerItemViewModel owner, OutlinerItemViewModel item)
+    {
+        for (var p = item; p is not null; p = FindParentOutlinerItem(p))
+            if (ReferenceEquals(p, owner)) return true;
+        return false;
+    }
+
+    private static OutlinerItemViewModel? FindAnyToolpathChild(OutlinerItemViewModel parent)
+    {
+        foreach (var child in parent.Children)
+        {
+            if (child.IsToolpath) return child;
+            var nested = FindAnyToolpathChild(child);
+            if (nested is not null) return nested;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Box centre of the toolpath as it is drawn. Station points go through
+    /// <see cref="ProjectionMill.OnTable"/> when the snapshot carries a rotary pose, then
+    /// through the same node pose the renderer uses (parked on the raw centroid, then any
+    /// table spin). Cut segments only — a travel home must not pull the plane to the table.
+    /// </summary>
+    private Vector3? ToolpathDrawCenter(OutlinerItemViewModel owner)
+    {
+        var tpItem = ToolpathForCutSpawn(owner);
+        if (tpItem is null) return null;
+        var snap = GetToolpathSnapshot?.Invoke(tpItem.Node);
+        var path = snap?.Smoothed;
+        if (path is null) return null;
+
+        var origin = System.Numerics.Vector3.Zero;
+        int originCount = 0;
+        foreach (var layer in path.Layers)
+            foreach (var move in layer.Moves)
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
+                {
+                    origin += move.From + move.To;
+                    originCount += 2;
+                }
+        if (originCount == 0) return null;
+        origin /= originCount;
+
+        bool unwind = snap!.RotaryCenter is not null && !float.IsNaN(snap.RotarySign);
+        var rotaryCenter = snap.RotaryCenter ?? System.Numerics.Vector3.Zero;
+        float sign = snap.RotarySign;
+
+        // Upload parks the node on the raw centroid. Identity while that centroid is far
+        // away means the path is not parked yet, so pretend it already is.
+        var local = tpItem.Node.LocalTransform;
+        bool unparked =
+            MathF.Abs(local.Row3.X) < 1f && MathF.Abs(local.Row3.Y) < 1f && MathF.Abs(local.Row3.Z) < 1f
+            && MathF.Abs(local.Row0.X - 1f) < 1e-3f && MathF.Abs(local.Row1.Y - 1f) < 1e-3f
+            && MathF.Abs(local.Row2.Z - 1f) < 1e-3f
+            && origin.LengthSquared() > 100f * 100f;
+        var draw = unparked
+            ? Matrix4.CreateTranslation(origin.X, origin.Y, origin.Z)
+            : local;
+        if (snap.RotarySpin is { } spin)
+            draw *= spin;
+
+        System.Numerics.Vector3 Place(System.Numerics.Vector3 p, float e1)
+            => unwind ? ProjectionMill.OnTable(p, e1, rotaryCenter, sign) : p;
+
+        Vector3 WorldOf(System.Numerics.Vector3 station, float e1)
+        {
+            var placed = Place(station, e1);
+            var vbo = placed - origin;
+            return Vector3.TransformPosition(new Vector3(vbo.X, vbo.Y, vbo.Z), draw);
+        }
+
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        foreach (var layer in path.Layers)
+            foreach (var move in layer.Moves)
+            {
+                if (!ToolpathMoveKinds.IsCutSegment(move.Kind)) continue;
+                var a = WorldOf(move.From, move.E1Mm);
+                var b = WorldOf(move.To, move.E1Mm);
+                min = Vector3.ComponentMin(min, Vector3.ComponentMin(a, b));
+                max = Vector3.ComponentMax(max, Vector3.ComponentMax(a, b));
+            }
+        return (min + max) * 0.5f;
+    }
+
+    /// <summary>
     /// Gets (or lazily creates) a modifier's dedicated plane object: real geometry, pickable,
     /// its own outliner row, parented into <paramref name="ownerItem"/>'s Modifiers group from
     /// the moment it's created (so it moves/rotates with that mesh, and reorders/relinks via the
-    /// outliner drag system — never a special case in code). A brand-new modifier spawns
-    /// centered on the owner's current world height rather than always at bed center, so it
-    /// starts somewhere sensible relative to whatever you were looking at.
+    /// outliner drag system — never a special case in code). A brand-new modifier spawns on the
+    /// drawn toolpath (or the mesh, when there is no path) rather than at the rotary table.
     /// </summary>
-    internal SceneNode GetOrCreateModifierGizmoNode(CutModifier cut, OutlinerItemViewModel ownerItem)
+    internal SceneNode GetOrCreateModifierGizmoNode(
+        CutModifier cut, OutlinerItemViewModel ownerItem, bool placeAtOwner = true)
     {
         if (!_modifierGizmoNodes.TryGetValue(cut, out var node))
         {
             var groupNode = GetOrCreateModifiersGroup(ownerItem);
 
-            if (cut.Orientation == CutOrientation.Horizontal
-                && ComputeWorldCenter(ownerItem.Node) is { } ownerCenter)
-                cut.Offset = ownerCenter.Z - ResolveBedCenterXYZ().Z;
-            else if (cut.Orientation == CutOrientation.Vertical
-                && ComputeWorldCenter(ownerItem.Node) is { } ownerCenterV)
+            if (placeAtOwner && SpawnCenter(ownerItem) is { } center)
             {
-                // Same idea as Horizontal above — start the plane at the owner mesh's own
-                // location instead of always at raw bed center, since a mesh won't always sit
-                // at bed center. RotationDegrees is always 0 for a brand-new modifier (normal =
-                // +X, tangent = +Y), so this is just the mesh's bed-center-relative X/Y/Z split
-                // directly across Offset/PositionTangent/PositionZ.
-                var bedCenterV = ResolveBedCenterXYZ();
-                var deltaV = ownerCenterV - bedCenterV;
-                cut.Offset          = deltaV.X;
-                cut.PositionTangent = deltaV.Y;
-                cut.PositionZ       = deltaV.Z;
+                var delta = center - ResolveBedCenterXYZ();
+                if (cut.Orientation == CutOrientation.Horizontal)
+                {
+                    cut.PositionX = delta.X;
+                    cut.PositionY = delta.Y;
+                    cut.Offset    = delta.Z;
+                }
+                else
+                {
+                    // RotationDegrees is 0 for a brand-new cut (normal +X, tangent +Y).
+                    cut.Offset          = delta.X;
+                    cut.PositionTangent = delta.Y;
+                    cut.PositionZ       = delta.Z;
+                }
             }
 
             node = new SceneNode

@@ -11,6 +11,7 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 {
     private readonly Action _notifyRender;
     private readonly Action? _onHide;
+    private readonly Action? _onShow;
     private string? _displayName;
 
     public SceneNode Node { get; }
@@ -218,7 +219,8 @@ public sealed class OutlinerItemViewModel : ViewModelBase
             if (Node.Visible == value) return;
             Node.Visible = value;
             OnPropertyChanged();
-            if (!value) _onHide?.Invoke();
+            if (value) _onShow?.Invoke();
+            else _onHide?.Invoke();
             _notifyRender();
         }
     }
@@ -330,11 +332,13 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         Func<OutlinerItemViewModel, bool>? canReloadModel = null,
         Func<OutlinerItemViewModel, bool>? canReplaceModel = null,
         Action<OutlinerItemViewModel>? onReloadModel = null,
-        Action<OutlinerItemViewModel>? onReplaceModel = null)
+        Action<OutlinerItemViewModel>? onReplaceModel = null,
+        Action? onShow = null)
     {
         Node          = node;
         _notifyRender = notifyRender;
         _onHide       = onHide;
+        _onShow       = onShow;
         _displayName  = displayName;
         CanDelete                 = canDelete;
         UsesExclusiveVisibility   = usesExclusiveVisibility;

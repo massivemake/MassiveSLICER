@@ -159,11 +159,19 @@ public sealed class MeshRenderer : IDisposable
     /// <summary>Overlay strength (0..1). High enough that lime paint is obvious on the surface.</summary>
     public float SelectionTintStrength { get; set; } = 0.88f;
 
-    private readonly bool _renderAsPoints;
+    private bool _renderAsPoints;
 
     // Interleaved: pos3 + nrm3 + uv2 + tan4 + paintUv2 = 14 floats.
     // paintUv is a dedicated channel so mill paint never rewrites material TEXCOORD_0.
     private const int FloatsPerVertex = 14;
+
+    /// <summary>Scan layout: position and normal only. Disabled UV and tangent attributes read as zero.</summary>
+    private const int CompactFloatsPerVertex = 6;
+
+    private bool _compactScan;
+
+    /// <summary>Value of <see cref="MeshData.ReduceScanDisplay"/> last uploaded into the vertex buffer.</summary>
+    private bool _uploadedReduceFlag;
 
     // -- GLSL source ----------------------------------------------------------
 
@@ -678,6 +686,7 @@ void main() {
         _shader.SetInt("uEnvTex",             1);
         _shader.SetInt("uHasEnv",             HasEnvMap ? 1 : 0);
 
+        if (_vbo == 0) return;
         GL.BindVertexArray(_vao);
         var primitive = _renderAsPoints ? PrimitiveType.Points : PrimitiveType.Triangles;
         if (_renderAsPoints) GL.PointSize(2.5f);
@@ -725,6 +734,7 @@ void main() {
     /// </summary>
     internal void DrawRaw()
     {
+        if (_vbo == 0) return;
         GL.BindVertexArray(_vao);
         var primitive = _renderAsPoints ? PrimitiveType.Points : PrimitiveType.Triangles;
         if (_renderAsPoints) GL.PointSize(2.5f);
@@ -747,15 +757,91 @@ void main() {
             throw new ArgumentException("Paint UV count must match vertex count.", nameof(paintUvs));
 
         _hasPaintUv = true;
-        // Full VBO rebuild keeps material UV0 / tangents exactly as uploaded.
-        // Rebind VAO so attribute 4 (paint weights) is guaranteed live after BufferData.
+        // A reduced scan keeps the thinned drawing in every workflow mode. Each drawn
+        // corner carries the paint weight of the measured vertex it was copied from.
+        // PickingData and the caller's weight array stay the full mesh.
+        if (TryReducedPaintVertices(PickingData, paintUvs, out var drawPos, out var drawNrm, out var drawPaint))
+        {
+            _compactScan = false;
+            _renderAsPoints = false;
+            _uploadedReduceFlag = true;
+            if (_vao == 0) _vao = GL.GenVertexArray();
+            if (_vbo == 0) _vbo = GL.GenBuffer();
+            WritePaintedDraw(drawPos, drawNrm, drawPaint);
+            _indexed = false;
+            _count = drawPos.Length;
+            GL.BindVertexArray(_vao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+            BindFullAttributes();
+            GL.BindVertexArray(0);
+            return;
+        }
+
+        // Parts, and scans that are already under the display cap, draw every vertex.
+        _compactScan = false;
+        if (_vbo == 0)
+            Upload(PickingData, allowCompact: false);
         RebuildVbo(PickingData.Uvs, paintUvs);
+        RestoreFullDrawRange();
         GL.BindVertexArray(_vao);
         GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
-        int stride = FloatsPerVertex * sizeof(float);
-        GL.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, stride, 12 * sizeof(float));
-        GL.EnableVertexAttribArray(4);
+        BindFullAttributes();
         GL.BindVertexArray(0);
+    }
+
+    /// <summary>
+    /// Paint weights for the thinned drawing. Returns false when the scan is drawn whole,
+    /// and then the outputs are the source arrays. Does not write <paramref name="source"/>.
+    /// </summary>
+    internal static bool TryReducedPaintVertices(
+        MeshData source,
+        Vector2[] fullPaint,
+        out Vector3[] positions,
+        out Vector3[] normals,
+        out Vector2[] paint,
+        int target = ScanDisplaySubset.TargetSamples)
+    {
+        positions = source.Positions;
+        normals = source.Normals;
+        paint = fullPaint;
+        if (fullPaint.Length != source.Positions.Length) return false;
+        if (!ScanDisplaySubset.TryBuild(source, out var thinPos, out var thinNrm, out var src, target))
+            return false;
+
+        var mapped = new Vector2[src.Length];
+        for (int i = 0; i < src.Length; i++)
+        {
+            int s = src[i];
+            mapped[i] = (uint)s < (uint)fullPaint.Length ? fullPaint[s] : default;
+        }
+
+        positions = thinPos;
+        normals = thinNrm;
+        paint = mapped;
+        return true;
+    }
+
+    /// <summary>
+    /// Drawing covers the whole mesh, including its index list when it has one.
+    /// Used for parts and for scans that are already under the display cap.
+    /// </summary>
+    void RestoreFullDrawRange()
+    {
+        var data = PickingData;
+        if (data.Indices is { Length: > 0 } idx)
+        {
+            if (_ebo == 0) _ebo = GL.GenBuffer();
+            GL.BindVertexArray(_vao);
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, _ebo);
+            GL.BufferData(BufferTarget.ElementArrayBuffer, (IntPtr)IndexBufferBytes(idx.Length),
+                          idx, BufferUsageHint.StaticDraw);
+            _count = idx.Length;
+            _indexed = true;
+            return;
+        }
+
+        _count = data.Positions.Length;
+        _indexed = false;
     }
 
     /// <summary>Legacy name — routes to <see cref="ApplyPaintUvs"/> (does not touch material UVs).</summary>
@@ -802,9 +888,93 @@ void main() {
         }
 
         GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, verts.Length * sizeof(float), verts, BufferUsageHint.StaticDraw);
+        GL.BufferData(BufferTarget.ArrayBuffer, (IntPtr)VertexBufferBytes(verts.Length), verts, BufferUsageHint.StaticDraw);
         GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
     }
+
+    /// <summary>14-float draw of an already-thinned scan, with paint weights in the paint UV.</summary>
+    void WritePaintedDraw(Vector3[] positions, Vector3[] normals, Vector2[] paintUvs)
+    {
+        int n = positions.Length;
+        var verts = new float[n * FloatsPerVertex];
+        for (int i = 0; i < n; i++)
+        {
+            int o = i * FloatsPerVertex;
+            verts[o + 0] = positions[i].X;
+            verts[o + 1] = positions[i].Y;
+            verts[o + 2] = positions[i].Z;
+            verts[o + 3] = normals[i].X;
+            verts[o + 4] = normals[i].Y;
+            verts[o + 5] = normals[i].Z;
+            verts[o + 12] = paintUvs[i].X;
+            verts[o + 13] = paintUvs[i].Y;
+        }
+
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, (IntPtr)VertexBufferBytes(verts.Length), verts, BufferUsageHint.StaticDraw);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+    }
+
+    /// <summary>
+    /// Deletes the vertex buffers only. CPU <see cref="PickingData"/> and the node transform
+    /// stay. GL thread only. A later <see cref="EnsureGpu"/> uploads the same positions again.
+    /// </summary>
+    public void ReleaseGpuBuffers()
+    {
+        if (_disposed || _vbo == 0) return;
+        GL.DeleteVertexArray(_vao);
+        GL.DeleteBuffer(_vbo);
+        if (_ebo != 0) GL.DeleteBuffer(_ebo);
+        _vao = 0;
+        _vbo = 0;
+        _ebo = 0;
+        _indexed = false;
+    }
+
+    /// <summary>
+    /// Uploads <see cref="PickingData"/> again after <see cref="ReleaseGpuBuffers"/>.
+    /// <paramref name="allowCompact"/> false forces the 14-float layout even when the
+    /// mesh is marked compact. CPU positions stay the same. A buffer that is already
+    /// uploaded is left as it is.
+    /// </summary>
+    public void EnsureGpu(bool allowCompact = true)
+    {
+        if (_disposed || _vbo != 0) return;
+        Upload(PickingData, allowCompact);
+    }
+
+    /// <summary>
+    /// True when a resident buffer was uploaded with a different display flag than
+    /// <see cref="PickingData"/> now has. An empty buffer is left for <see cref="EnsureGpu"/>.
+    /// </summary>
+    public bool NeedsDisplayReload
+        => _vbo != 0 && _uploadedReduceFlag != PickingData.ReduceScanDisplay;
+
+    /// <summary>
+    /// Drops the graphics buffer and uploads <see cref="PickingData"/> again.
+    /// A scan marked <see cref="MeshData.ReduceScanDisplay"/> draws the thinned copy.
+    /// Picking data and the node transform are not replaced.
+    /// </summary>
+    public void ReloadDisplay(bool allowCompact = true)
+    {
+        if (_disposed) return;
+        ReleaseGpuBuffers();
+        Upload(PickingData, allowCompact);
+    }
+
+    /// <summary>True for a scan mesh with no UVs, tangents, or material maps.</summary>
+    internal static bool UseCompactScanLayout(MeshData data)
+        => data.CompactScanLayout
+           && data.Uvs is null
+           && data.Tangents is null
+           && data.Material is null;
+
+    /// <summary>
+    /// Floats stored per vertex for this mesh. Parts stay at 14.
+    /// <paramref name="allowCompact"/> false is the previous full layout.
+    /// </summary>
+    internal static int FloatsPerUploadedVertex(MeshData data, bool allowCompact = true)
+        => allowCompact && UseCompactScanLayout(data) ? CompactFloatsPerVertex : FloatsPerVertex;
 
     /// <inheritdoc/>
     public void Dispose()
@@ -824,25 +994,57 @@ void main() {
         if (_indexed) GL.DeleteBuffer(_ebo);
     }
 
+    /// <summary>
+    /// Byte size of an interleaved float buffer. A merged scan is about 60 million
+    /// vertices; <c>count * sizeof(float)</c> as a 32-bit int wraps negative, and
+    /// glBufferData then stores nothing so the mesh never draws.
+    /// </summary>
+    internal static long VertexBufferBytes(int floatCount)
+        => (long)floatCount * sizeof(float);
+
+    internal static long IndexBufferBytes(int indexCount)
+        => (long)indexCount * sizeof(uint);
+
     // -- Upload ----------------------------------------------------------------
 
-    private void Upload(MeshData data)
+    private void Upload(MeshData data, bool allowCompact = true)
     {
-        // Interleaved: [pos3, nrm3, materialUv2, tan4, paintUv2] = 14 floats.
-        // Material UV0 and paint UV are independent channels.
-        int vertexCount = data.Positions.Length;
-        var verts = new float[vertexCount * FloatsPerVertex];
-        var uvs = data.Uvs;
-        var tangents = data.Tangents;
+        // Parts stay 14 floats. A scan with no UVs or tangents stores position and normal only
+        // when the performance toggle allows it. Both layouts write CPU positions into
+        // attribute 0. PickingData stays the full mesh. A reduced scan draws a smaller
+        // copy of those same vertices and does not replace them.
+        _uploadedReduceFlag = data.ReduceScanDisplay;
+        _renderAsPoints = data.RenderAsPoints;
+        var positions = data.Positions;
+        var normals = data.Normals;
+        uint[]? indices = data.Indices;
+        if (ScanDisplaySubset.TryBuild(data, out var thinPositions, out var thinNormals))
+        {
+            positions = thinPositions;
+            normals = thinNormals;
+            indices = null;
+            // The thinned copy is a solid triangle surface, including when the
+            // source scan is a point cloud. Drawing it as points brings the specks back.
+            _renderAsPoints = false;
+        }
+
+        _compactScan = allowCompact && UseCompactScanLayout(data);
+        int floatsPerVertex = _compactScan ? CompactFloatsPerVertex : FloatsPerVertex;
+        int vertexCount = positions.Length;
+        var verts = new float[vertexCount * floatsPerVertex];
+        bool thinned = !ReferenceEquals(positions, data.Positions);
+        var uvs = thinned ? null : data.Uvs;
+        var tangents = thinned ? null : data.Tangents;
         for (int i = 0; i < vertexCount; i++)
         {
-            int o = i * FloatsPerVertex;
-            verts[o + 0] = data.Positions[i].X;
-            verts[o + 1] = data.Positions[i].Y;
-            verts[o + 2] = data.Positions[i].Z;
-            verts[o + 3] = data.Normals[i].X;
-            verts[o + 4] = data.Normals[i].Y;
-            verts[o + 5] = data.Normals[i].Z;
+            int o = i * floatsPerVertex;
+            verts[o + 0] = positions[i].X;
+            verts[o + 1] = positions[i].Y;
+            verts[o + 2] = positions[i].Z;
+            verts[o + 3] = normals[i].X;
+            verts[o + 4] = normals[i].Y;
+            verts[o + 5] = normals[i].Z;
+            if (_compactScan) continue;
             if (uvs is not null)
             {
                 verts[o + 6] = uvs[i].X;
@@ -865,8 +1067,32 @@ void main() {
 
         GL.BindVertexArray(_vao);
         GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, verts.Length * sizeof(float), verts, BufferUsageHint.StaticDraw);
+        GL.BufferData(BufferTarget.ArrayBuffer, (IntPtr)VertexBufferBytes(verts.Length), verts, BufferUsageHint.StaticDraw);
 
+        if (_compactScan) BindCompactAttributes();
+        else BindFullAttributes();
+
+        if (indices != null)
+        {
+            _ebo = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, _ebo);
+            GL.BufferData(BufferTarget.ElementArrayBuffer, (IntPtr)IndexBufferBytes(indices.Length),
+                          indices, BufferUsageHint.StaticDraw);
+            _count   = indices.Length;
+            _indexed = true;
+        }
+        else
+        {
+            _count = vertexCount;
+            _indexed = false;
+        }
+
+        GL.BindVertexArray(0);
+    }
+
+    /// <summary>VAO and array buffer are bound. 14-float part layout, including paint UV.</summary>
+    private static void BindFullAttributes()
+    {
         int stride = FloatsPerVertex * sizeof(float);
         GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
         GL.EnableVertexAttribArray(0);
@@ -878,21 +1104,18 @@ void main() {
         GL.EnableVertexAttribArray(3);
         GL.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, stride, 12 * sizeof(float));
         GL.EnableVertexAttribArray(4);
+    }
 
-        if (data.Indices != null)
-        {
-            _ebo = GL.GenBuffer();
-            GL.BindBuffer(BufferTarget.ElementArrayBuffer, _ebo);
-            GL.BufferData(BufferTarget.ElementArrayBuffer, data.Indices.Length * sizeof(uint),
-                          data.Indices, BufferUsageHint.StaticDraw);
-            _count   = data.Indices.Length;
-            _indexed = true;
-        }
-        else
-        {
-            _count = vertexCount;
-        }
-
-        GL.BindVertexArray(0);
+    /// <summary>VAO and array buffer are bound. Position and normal only; UV and tangent stay disabled.</summary>
+    private static void BindCompactAttributes()
+    {
+        int stride = CompactFloatsPerVertex * sizeof(float);
+        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+        GL.EnableVertexAttribArray(0);
+        GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
+        GL.EnableVertexAttribArray(1);
+        GL.DisableVertexAttribArray(2);
+        GL.DisableVertexAttribArray(3);
+        GL.DisableVertexAttribArray(4);
     }
 }

@@ -71,6 +71,75 @@ public sealed class WorkspaceScanRestoreTest
     }
 
     [Fact]
+    public void ResolveRestoreMeshPath_prefers_embedded_stl_for_a_shared_assembly_piece()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            string stl = Path.Combine(dir, "workspace_meshes", "lobe.stl");
+            Directory.CreateDirectory(Path.GetDirectoryName(stl)!);
+            File.WriteAllText(stl, MinimalStl());
+            string glb = Path.Combine(dir, "iceberg_tables_rev8_grounded_tops.glb");
+            File.WriteAllBytes(glb, [0x67, 0x6c, 0x54, 0x46]);
+            string mass = Path.Combine(dir, "Lobes_All.mass");
+
+            var piece = new WorkspaceModelEntry
+            {
+                Name             = "Lobes_P1",
+                SourcePath       = glb,
+                EmbeddedMeshPath = "workspace_meshes/lobe.stl",
+                ChildPoses       = [new WorkspaceNodePose { Path = "0" }],
+            };
+            var assembly = new WorkspaceModelEntry
+            {
+                Name       = "iceberg_tables_rev8_grounded_tops",
+                SourcePath = glb,
+            };
+            var counts = WorkspaceService.CountSourcePaths([piece, assembly]);
+
+            Assert.True(WorkspaceService.PreferEmbeddedAssemblyPiece(piece, counts));
+            Assert.False(WorkspaceService.PreferEmbeddedAssemblyPiece(assembly, counts));
+
+            string? mesh = WorkspaceService.ResolveRestoreMeshPath(
+                piece, mass, out string? zdfPath, preferEmbeddedPiece: true);
+            Assert.Equal(Path.GetFullPath(stl), mesh);
+            Assert.Null(zdfPath);
+        }
+        finally
+        {
+            TryDelete(dir);
+        }
+    }
+
+    [Fact]
+    public void PreferEmbeddedAssemblyPiece_leaves_a_real_hierarchy_on_the_cad_file()
+    {
+        string glb = Path.Combine(Path.GetTempPath(), "assembly.glb");
+        var piece = new WorkspaceModelEntry
+        {
+            Name             = "Lobes_P1",
+            SourcePath       = glb,
+            EmbeddedMeshPath = "workspace_meshes/lobe.stl",
+            ChildPoses =
+            [
+                new WorkspaceNodePose { Path = "0" },
+                new WorkspaceNodePose { Path = "0/1" },
+            ],
+        };
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { [glb] = 13 };
+        Assert.False(WorkspaceService.PreferEmbeddedAssemblyPiece(piece, counts));
+
+        var alone = new WorkspaceModelEntry
+        {
+            Name             = "rockV10",
+            SourcePath       = glb,
+            EmbeddedMeshPath = "workspace_meshes/part.stl",
+        };
+        var one = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { [glb] = 1 };
+        Assert.False(WorkspaceService.PreferEmbeddedAssemblyPiece(alone, one));
+    }
+
+    [Fact]
     public void RestoreModels_loads_scan_from_embedded_stl_when_source_is_zdf()
     {
         var dir = NewTempDir();

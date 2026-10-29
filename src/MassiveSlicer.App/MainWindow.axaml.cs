@@ -25,6 +25,15 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainWindowViewModel vm) return;
 
+        // The binding covers Avalonia. Push the same string to the native caption
+        // so the taskbar preview follows the open scene and the build version.
+        Title = vm.WindowTitle;
+        vm.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(MainWindowViewModel.WindowTitle))
+                Title = vm.WindowTitle;
+        };
+
         vm.CaptureAppScreenshot = () => CaptureAppScreenshotAsync();
         vm.CaptureViewportPng   = () => Viewport.CaptureScreenshotAsync();
 
