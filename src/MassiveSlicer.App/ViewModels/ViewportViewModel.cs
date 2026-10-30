@@ -7862,6 +7862,135 @@ public sealed partial class ViewportViewModel : ViewModelBase
         RefreshCanMergeScans();
     }
 
+    /// <summary>
+    /// World-space triangles of the part model. A selected model wins. Otherwise
+    /// the visible models. A hidden model is used when nothing else is visible.
+    /// Scans, toolpaths, and tools are left out.
+    /// </summary>
+    internal float[] CollectWorkpieceTriangles()
+    {
+        var items = new List<OutlinerItemViewModel>();
+        foreach (var item in EnumerateAllContentItems())
+        {
+            if (!IsWorkpieceItem(item)) continue;
+            items.Add(item);
+        }
+
+        var selected = GetSelectedSceneNode?.Invoke();
+        if (selected is not null)
+        {
+            OutlinerItemViewModel? hit = null;
+            foreach (var item in items)
+            {
+                if (item.Node == selected || item.Node.SelfAndDescendants().Any(n => n == selected))
+                {
+                    hit = item;
+                    break;
+                }
+            }
+            if (hit is not null)
+                items = [hit];
+            else
+                PreferVisible(items);
+        }
+        else
+            PreferVisible(items);
+
+        var bag = new List<float>(items.Count * 256);
+        foreach (var item in items)
+        {
+            foreach (var node in item.Node.SelfAndDescendants())
+            {
+                if (OutlinerModelOps.IsToolpath(node) || OutlinerModelOps.IsScan(node)) continue;
+                var mesh = node.Mesh?.PickingData ?? node.PendingMesh;
+                if (mesh is null || mesh.Positions.Length == 0) continue;
+                var world = node.WorldTransform;
+                if (mesh.Indices is { Length: >= 3 } indices)
+                {
+                    int limit = indices.Length - (indices.Length % 3);
+                    for (int i = 0; i < limit; i += 3)
+                    {
+                        AddWorld(bag, mesh.Positions[indices[i]], world);
+                        AddWorld(bag, mesh.Positions[indices[i + 1]], world);
+                        AddWorld(bag, mesh.Positions[indices[i + 2]], world);
+                    }
+                }
+                else
+                {
+                    int limit = mesh.Positions.Length - (mesh.Positions.Length % 3);
+                    for (int i = 0; i < limit; i += 3)
+                    {
+                        AddWorld(bag, mesh.Positions[i], world);
+                        AddWorld(bag, mesh.Positions[i + 1], world);
+                        AddWorld(bag, mesh.Positions[i + 2], world);
+                    }
+                }
+            }
+        }
+
+        return bag.ToArray();
+
+        static void PreferVisible(List<OutlinerItemViewModel> list)
+        {
+            var visible = list.Where(i => i.Visible).ToList();
+            if (visible.Count > 0)
+            {
+                list.Clear();
+                list.AddRange(visible);
+            }
+        }
+
+        static void AddWorld(List<float> bag, OpenTK.Mathematics.Vector3 local, OpenTK.Mathematics.Matrix4 world)
+        {
+            var p = OpenTK.Mathematics.Vector3.TransformPosition(local, world);
+            bag.Add(p.X);
+            bag.Add(p.Y);
+            bag.Add(p.Z);
+        }
+    }
+
+    static bool IsWorkpieceItem(OutlinerItemViewModel item)
+    {
+        if (OutlinerModelOps.IsScan(item.Node) || OutlinerModelOps.IsToolpath(item.Node)) return false;
+        if (item.UsesExclusiveVisibility) return false;
+        if (item.Node.PickTier == MassiveSlicer.Viewport.Scene.PickTier.Environment) return false;
+        return OutlinerModelOps.HasMeshGeometry(item.Node);
+    }
+
+    /// <summary>
+    /// World x,y,z samples from the selected scans, or every bed scan when none
+    /// are selected. Stride keeps a merged cloud off the UI thread's full copy.
+    /// </summary>
+    internal float[] SampleScanWorldPoints(int maxPoints)
+    {
+        if (maxPoints < 1) maxPoints = 1;
+        var items = _selectedScanItems.Count > 0
+            ? _selectedScanItems.Where(OutlinerModelOps.IsScanItem).ToList()
+            : GetBedLevelScanItems().ToList();
+        var bag = new List<float>(maxPoints * 3);
+        int kept = 0;
+        foreach (var item in items)
+        {
+            foreach (var node in item.Node.SelfAndDescendants())
+            {
+                var mesh = node.Mesh?.PickingData ?? node.PendingMesh;
+                if (mesh is null || mesh.Positions.Length == 0) continue;
+                int stride = Math.Max(1, mesh.Positions.Length / Math.Max(1, maxPoints / Math.Max(1, items.Count)));
+                var world = node.WorldTransform;
+                for (int i = 0; i < mesh.Positions.Length && kept < maxPoints; i += stride)
+                {
+                    var p = OpenTK.Mathematics.Vector3.TransformPosition(mesh.Positions[i], world);
+                    bag.Add(p.X);
+                    bag.Add(p.Y);
+                    bag.Add(p.Z);
+                    kept++;
+                }
+            }
+        }
+
+        return bag.ToArray();
+    }
+
     internal IReadOnlyList<OutlinerItemViewModel> GetBedLevelScanItems()
     {
         if (_rotaryGroupItem is not null)

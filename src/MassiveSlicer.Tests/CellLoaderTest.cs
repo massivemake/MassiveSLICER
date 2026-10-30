@@ -67,6 +67,7 @@ public class CellLoaderTest
         {
             File.WriteAllText(Path.Combine(dir, "lfam3.json"), "{}");
             File.WriteAllText(Path.Combine(dir, "lfam3.homes.json"), "{}");
+            File.WriteAllText(Path.Combine(dir, "lfam3.scanposes.json"), "{}");
 
             var names = CellLoader.EnumerateCellFiles(dir)
                 .Select(Path.GetFileName)
@@ -74,6 +75,7 @@ public class CellLoaderTest
 
             Assert.Contains("lfam3.json", names);
             Assert.DoesNotContain("lfam3.homes.json", names);
+            Assert.DoesNotContain("lfam3.scanposes.json", names);
         }
         finally
         {

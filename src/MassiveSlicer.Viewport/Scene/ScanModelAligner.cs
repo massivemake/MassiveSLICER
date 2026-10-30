@@ -85,7 +85,7 @@ public static class ScanModelAligner
         }
 
         var scanGrid = new ScanGrid(scanPoints, pair);
-        var accum = Locate(points, normals, scanPoints, scanGrid, pair);
+        var accum = Locate(points, normals, scanPoints, scanGrid, pair, stock);
         if (accum != Matrix4.Identity)
             Apply(points, normals, accum);
 
@@ -105,6 +105,16 @@ public static class ScanModelAligner
             accum *= step;
             if (stepMm < ConvergenceMm)
                 break;
+        }
+
+        // Point-to-plane cannot see a slide along the sheet. The seat is already
+        // on the face, so the scan points within 15 mm are that face, and their
+        // mean gap is the slide. Points past the part are outside this snap.
+        var snap = SnapInsetShift(points, normals, scanGrid, stock);
+        if (snap.M41 * snap.M41 + snap.M42 * snap.M42 + snap.M43 * snap.M43 > 1e-8f)
+        {
+            Apply(points, normals, snap);
+            accum *= snap;
         }
 
         var measure = Measure(points, normals, scanPoints, scanGrid, stock, pair);
@@ -448,7 +458,7 @@ public static class ScanModelAligner
     /// Returns identity when the model is already as close as a locate can make it.
     /// </summary>
     private static Matrix4 Locate(
-        Vector3[] points, Vector3[] normals, IReadOnlyList<Vector3> scan, ScanGrid grid, float pair)
+        Vector3[] points, Vector3[] normals, IReadOnlyList<Vector3> scan, ScanGrid grid, float pair, float stock)
     {
         var here = ScorePose(points, Matrix4.Identity, grid);
         var zero = TranslationPose(points, normals, scan, pair, grid, Matrix4.Identity);
@@ -465,11 +475,15 @@ public static class ScanModelAligner
             }
         }
 
-        var full = SearchFullTurn(points, normals, scan, grid, pair, pivot);
+        var full = SearchFullTurn(points, normals, scan, grid, pair, pivot, stock);
         if (Clearer(full, best))
             best = full;
 
-        if (best.Inliers < 0.20f || !Clearer(best, here))
+        // A scanned face can be a small part of the model. Keep a pose that puts
+        // the scan on that face even when most of the model is elsewhere.
+        if (!Clearer(best, here))
+            return Matrix4.Identity;
+        if (best.Inliers < 0.20f && PortionOfScanOnModel(points, scan, best.Delta, pair) < 0.35f)
             return Matrix4.Identity;
         return best.Delta;
     }
@@ -481,21 +495,36 @@ public static class ScanModelAligner
     /// </summary>
     private static PoseScore SearchFullTurn(
         Vector3[] points, Vector3[] normals, IReadOnlyList<Vector3> scan,
-        ScanGrid fine, float pair, Vector3 pivot)
+        ScanGrid fine, float pair, Vector3 pivot, float stock)
     {
         // A scanned face is a sheet. Stand the model's face on that sheet first.
         // The euler grid below is for a scan that shows more than one side.
+        // A seat that only covers a stripe of the scan does not skip that search.
+        PoseScore? sheet = null;
+        float sheetCover = 0f;
         if (TrySheetAxis(scan, out var sheetAxis))
         {
-            var seated = SeatOnSheet(points, normals, scan, fine, pair, pivot, sheetAxis);
-            if (seated.Inliers >= 0.20f && seated.MedianMm < pair)
+            if (TryMeanSurfaceNormal(scan, sheetAxis, out var surface))
+                sheetAxis = surface;
+            var seated = SeatOnSheet(points, normals, scan, fine, pair, pivot, sheetAxis, stock);
+            sheetCover = PortionOfScanOnModel(points, scan, seated.Delta, pair);
+            // A one-face scan longer than the part covers about a third of the
+            // points. The euler grid does not improve that seat, and it is the
+            // slow part of a merged scan. A stripe below this still falls through.
+            if (sheetCover >= 0.30f && seated.MedianMm < pair)
                 return seated;
+            if (sheetCover >= 0.20f)
+                sheet = seated;
         }
 
         float radius = MeanRadius(points);
         float residual = radius * MathF.Sin(MathHelper.DegreesToRadians(23f));
         float coarse = MathF.Max(pair, MathF.Min(400f, residual * 1.4f));
-        var rank = coarse > pair + 1f ? new ScanGrid(scan, coarse) : fine;
+        // A merged scan is tens of thousands of samples. A few hundred is a test
+        // part or one face, and thinning those cells drops the shape.
+        var rank = coarse > pair + 1f
+            ? new ScanGrid(scan, coarse, spread: scan.Count > 4000)
+            : fine;
 
         var bestAng = Vector3.Zero;
         var best = ScorePose(points, Matrix4.Identity, rank);
@@ -525,12 +554,20 @@ public static class ScanModelAligner
             }
         }
 
+        PoseScore euler;
         if (best.Inliers < 0.12f)
-            return ScorePose(points, Matrix4.Identity, fine);
+            euler = ScorePose(points, Matrix4.Identity, fine);
+        else
+        {
+            var pulled = Pull(points, normals, best.Delta, rank, stock: 0f, coarse);
+            var rotation = RotationOf(pulled);
+            euler = TranslationPose(points, normals, scan, pair, fine, rotation);
+        }
 
-        var pulled = Pull(points, normals, best.Delta, rank, stock: 0f, coarse);
-        var rotation = RotationOf(pulled);
-        return TranslationPose(points, normals, scan, pair, fine, rotation);
+        if (sheet is PoseScore seatedPose
+            && sheetCover >= PortionOfScanOnModel(points, scan, euler.Delta, pair))
+            return seatedPose;
+        return euler;
     }
 
     /// <summary>
@@ -541,7 +578,7 @@ public static class ScanModelAligner
     /// </summary>
     private static PoseScore SeatOnSheet(
         Vector3[] points, Vector3[] normals, IReadOnlyList<Vector3> scan,
-        ScanGrid fine, float pair, Vector3 pivot, Vector3 axis)
+        ScanGrid fine, float pair, Vector3 pivot, Vector3 axis, float stock)
     {
         var faces = FaceNormals(normals, 8);
         float reach = MaxRadius(points) * MathF.Sin(MathHelper.DegreesToRadians(8f));
@@ -552,38 +589,56 @@ public static class ScanModelAligner
         var best = ScorePose(points, Matrix4.Identity, fine);
         float bestCover = -1f;
         float bestWorst = float.MaxValue;
+        float bestTurn = float.MaxValue;
         bool any = false;
 
-        bool Prefer(float cover, float worst, bool have)
+        // A symmetric face fits equally well flipped over. When the scan coverage
+        // and the farthest gap tie, keep the smaller turn so the normal stays
+        // pointed at the scan.
+        bool Prefer(float cover, float worst, float turn, bool have)
         {
             if (cover < 0.20f) return false;
             if (!have) return true;
             if (cover > bestCover + 0.02f) return true;
             if (bestCover > cover + 0.02f) return false;
-            return worst + 1f < bestWorst;
+            if (worst + 1f < bestWorst) return true;
+            if (bestWorst + 1f < worst) return false;
+            return turn + 1f < bestTurn;
         }
 
+        var tried = new List<Vector3>();
         foreach (var face in faces)
         {
-            var members = new List<int>();
-            for (int i = 0; i < normals.Length; i++)
+            // One flat bin is a stripe of a curved face. Average the facing
+            // normals so the whole curve stands on the sheet, not that stripe.
+            if (!TryCurvedFace(normals, face, out var widened, out var members))
+                continue;
+            bool already = false;
+            for (int t = 0; t < tried.Count; t++)
             {
-                if (Vector3.Dot(normals[i], face) > 0.85f)
-                    members.Add(i);
+                if (Vector3.Dot(tried[t], widened) > 0.98f)
+                {
+                    already = true;
+                    break;
+                }
             }
 
-            if (members.Count < 8) continue;
+            if (already) continue;
+            tried.Add(widened);
 
+            // 1 when the scan is this face. Lower when the sheet continues past
+            // the part, so the far end of that sheet is not the rank.
+            float rankAt = OverlapRank(points, members, scan);
             for (int sign = -1; sign <= 1; sign += 2)
             {
                 var target = axis * sign;
-                var align = RotationFromTo(face, target);
+                var align = RotationFromTo(widened, target);
 
-                bool Score(float spin, float bin, float gate, out float cover, out float worst, out Matrix4 delta)
+                bool Score(float spin, float bin, float gate, bool polish, out float cover, out float worst, out Matrix4 delta)
                 {
                     var pre = AboutPivot(
                         pivot, align * Matrix4.CreateFromAxisAngle(target, MathHelper.DegreesToRadians(spin)));
-                    if (!TryFaceTranslation(points, normals, scan, members, bin, pre, out var shift))
+                    if (!TryFaceTranslation(points, normals, scan, members, bin, pre, stock, out var shift))
                     {
                         cover = 0f;
                         worst = float.MaxValue;
@@ -592,11 +647,17 @@ public static class ScanModelAligner
                     }
 
                     delta = pre * Matrix4.CreateTranslation(shift);
-                    MeasureFaceOverlap(points, members, scan, delta, gate, out cover, out worst);
+                    MeasureFaceOverlap(
+                        points, normals, members, scan, delta, gate, rankAt, stock,
+                        out cover, out worst, out float edgeGap);
+                    // The last fraction of a degree is the corner. The sheet past
+                    // the part is not that corner.
+                    if (polish)
+                        worst = edgeGap;
                     return true;
                 }
 
-                bool Pick(float origin, float step, int radius, float bin, float gate, out float spin, out Matrix4 delta)
+                bool Pick(float origin, float step, int radius, float bin, float gate, bool polish, out float spin, out Matrix4 delta)
                 {
                     spin = origin;
                     delta = Matrix4.Identity;
@@ -605,47 +666,285 @@ public static class ScanModelAligner
                     bool hit = false;
                     for (int s = -radius; s <= radius; s++)
                     {
-                        if (!Score(origin + s * step, bin, gate, out float candCover, out float candWorst, out var candDelta))
+                        if (!Score(origin + s * step, bin, gate, polish, out float candCover, out float candWorst, out var candDelta))
                             continue;
-                        if (hit && candCover <= cover + 0.02f && (cover > candCover + 0.02f || candWorst >= worst))
+                        float candSpin = origin + s * step;
+                        bool betterCover = candCover > cover + 0.02f;
+                        bool coverTied = candCover >= cover - 0.02f;
+                        // The last tenth of a degree moves a long face by a
+                        // fraction of a millimetre. The coarse rank stays at 1 mm.
+                        float worstGain = polish ? 0.2f : 1f;
+                        bool betterWorst = candWorst + worstGain < worst;
+                        // Only a face that truly coincides at two spins (a square
+                        // grid) may prefer the smaller spin. A long face's edge
+                        // moves more than this between samples.
+                        bool sameSeat = coverTied && MathF.Abs(candWorst - worst) <= 0.25f;
+                        bool closerSpin = sameSeat && MathF.Abs(candSpin) + 0.01f < MathF.Abs(spin);
+                        if (hit && !betterCover && !(coverTied && betterWorst) && !closerSpin)
                             continue;
                         hit = true;
                         cover = candCover;
                         worst = candWorst;
-                        spin = origin + s * step;
+                        spin = candSpin;
                         delta = candDelta;
                     }
 
                     return hit;
                 }
 
-                if (!Pick(0f, 15f, 12, capture, coarseGate, out float twist, out _))
+                if (!Pick(0f, 15f, 12, capture, coarseGate, false, out float twist, out _))
                     continue;
-                if (!Pick(twist, 2f, 4, mid, mid, out twist, out _))
+                if (!Pick(twist, 2f, 4, mid, mid, false, out twist, out _))
                     continue;
-                if (!Pick(twist, 1f, 2, pair, pair, out twist, out _))
+                if (!Pick(twist, 1f, 2, pair, pair, false, out twist, out _))
                     continue;
                 // A degree of twist at the end of a long face is several millimetres.
                 // Point-to-plane will not pull it back, because every normal on this
-                // face points the same way.
-                if (!Pick(twist, 0.1f, 6, pair, pair, out twist, out _))
+                // face points the same way. Polish the corner, not the sheet past it.
+                if (!Pick(twist, 0.1f, 6, pair, pair, true, out twist, out _))
                     continue;
-                if (!Pick(twist, 0.02f, 6, pair, pair, out twist, out var seated))
+                if (!Pick(twist, 0.02f, 6, pair, pair, true, out twist, out _))
                     continue;
-                if (!Score(twist, pair, pair, out float tightCover, out float tightWorst, out seated))
-                    continue;
-                if (!Prefer(tightCover, tightWorst, any)) continue;
+                // A curved face's estimated normal is still a fraction of a degree
+                // off. Point-to-plane cannot see the twist that leaves, so tilt
+                // the seat until the far side of the face lands.
+                float minDot = 1f;
+                for (int n = 0; n < members.Count; n++)
+                    minDot = MathF.Min(minDot, Vector3.Dot(normals[members[n]], widened));
+                // A failed tilt must not throw away the spin search. The untilted
+                // seat is already on the face.
+                bool tilted = false;
+                float tightCover = 0f;
+                float tightWorst = float.MaxValue;
+                Matrix4 seated = Matrix4.Identity;
+                if (minDot < 0.96f)
+                {
+                    tilted = TryTiltedSeat(
+                        points, normals, members, scan, fine, pivot, align, target, twist, pair, rankAt, stock,
+                        out seated, out tightCover, out tightWorst);
+                }
 
+                if (!tilted && !Score(twist, pair, pair, true, out tightCover, out tightWorst, out seated))
+                    continue;
+                float turn = RotationDegrees(seated);
+                if (!Prefer(tightCover, tightWorst, turn, any)) continue;
                 var pose = ScorePose(points, seated, fine);
-                if (pose.Inliers < 0.12f) continue;
+                if (pose.Inliers < 0.12f && tightCover < 0.50f) continue;
                 any = true;
                 best = pose;
                 bestCover = tightCover;
                 bestWorst = tightWorst;
+                bestTurn = turn;
             }
         }
 
         return any ? best : ScorePose(points, Matrix4.Identity, fine);
+    }
+
+    /// <summary>
+    /// Spins stay on <paramref name="target"/>. A curved sheet's normal is only
+    /// known to a fraction of a degree, so try a small tilt about the two axes
+    /// in the sheet and keep the seat whose face edge is closest. The shift is
+    /// the face vote, nudged back onto the scan, not the centroid of a scan
+    /// that continues past the part.
+    /// </summary>
+    private static bool TryTiltedSeat(
+        Vector3[] points, Vector3[] normals, List<int> members, IReadOnlyList<Vector3> scan, ScanGrid grid,
+        Vector3 pivot, Matrix4 align, Vector3 target, float twist, float gate, float rankAt, float stock,
+        out Matrix4 delta, out float cover, out float worst)
+    {
+        delta = Matrix4.Identity;
+        cover = 0f;
+        worst = float.MaxValue;
+        var pole = MathF.Abs(target.X) < 0.9f ? Vector3.UnitX : Vector3.UnitY;
+        var u = Vector3.Cross(target, pole);
+        if (u.LengthSquared < 1e-8f) return false;
+        u.Normalize();
+        var v = Vector3.Cross(target, u);
+        v.Normalize();
+        var spin = Matrix4.CreateFromAxisAngle(target, MathHelper.DegreesToRadians(twist));
+        var basePre = AboutPivot(pivot, align * spin);
+        if (!TryFaceTranslation(points, normals, scan, members, MathF.Max(gate, 1f), basePre, stock, out var baseShift))
+            return false;
+        if (baseShift.LengthSquared <= 1f) return false;
+        bool hit = false;
+        float bestEdge = float.MaxValue;
+        for (int ix = -8; ix <= 8; ix++)
+        {
+            for (int iy = -8; iy <= 8; iy++)
+            {
+                var tilt = Matrix4.CreateFromAxisAngle(u, MathHelper.DegreesToRadians(ix * 0.05f))
+                         * Matrix4.CreateFromAxisAngle(v, MathHelper.DegreesToRadians(iy * 0.05f));
+                var pre = AboutPivot(pivot, align * spin * tilt);
+                // A fraction of a degree does not change which bin wins. Nudge
+                // the seated shift onto the scan instead of voting it again.
+                var shift = NudgeShift(points, normals, members, grid, pre, baseShift, stock);
+                if (shift.LengthSquared <= 1f) continue;
+                var cand = pre * Matrix4.CreateTranslation(shift);
+                MeasureFaceOverlap(
+                    points, normals, members, scan, cand, gate, rankAt, stock,
+                    out float candCover, out float candWorst, out float candEdge);
+                if (candCover < 0.20f) continue;
+                // The corner of the face, not the sheet past the part. A similar
+                // corner keeps the seat whose body sits closer.
+                bool betterEdge = candEdge + 0.05f < bestEdge;
+                bool edgeClose = candEdge <= bestEdge + 0.05f;
+                bool betterBody = candWorst + 0.05f < worst;
+                if (hit && !betterEdge && !(edgeClose && betterBody))
+                    continue;
+                hit = true;
+                bestEdge = candEdge;
+                worst = candWorst;
+                cover = candCover;
+                delta = cand;
+            }
+        }
+
+        return hit;
+    }
+
+    /// <summary>
+    /// Moves <paramref name="shift"/> onto the scan points already within 15 mm
+    /// of this tilted face. A fraction of a degree does not need another vote.
+    /// </summary>
+    private static Vector3 NudgeShift(
+        Vector3[] points, Vector3[] normals, List<int> members, ScanGrid scan,
+        Matrix4 pre, Vector3 shift, float stock)
+    {
+        const float limit = 15f;
+        float limitSq = limit * limit;
+        int step = Math.Max(1, members.Count / 200);
+        var sum = Vector3.Zero;
+        int count = 0;
+        for (int i = 0; i < members.Count; i += step)
+        {
+            var n = TransformNormal(normals[members[i]], pre);
+            if (n.LengthSquared < 1e-8f) continue;
+            var target = TransformPoint(points[members[i]], pre) + shift + n * stock;
+            if (!scan.TryNearest(target, out var q)) continue;
+            var gap = q - target;
+            if (gap.LengthSquared > limitSq) continue;
+            sum += gap;
+            count++;
+        }
+
+        if (count < 8) return shift;
+        var corr = sum / count;
+        if (corr.Length > 8f) return shift;
+        return shift + corr;
+    }
+
+    /// <summary>
+    /// The facing surface around <paramref name="seed"/>. A flat face stays that
+    /// face. A curve wider than one bin is walked to its own mean, so the far
+    /// side is included and the normal is not left tilted toward the seed.
+    /// </summary>
+    private static bool TryCurvedFace(
+        Vector3[] normals, Vector3 seed, out Vector3 widened, out List<int> members)
+    {
+        widened = seed;
+        members = new List<int>();
+        if (widened.LengthSquared < 1e-8f) return false;
+        widened.Normalize();
+
+        for (int pass = 0; pass < 8; pass++)
+        {
+            var sum = Vector3.Zero;
+            int count = 0;
+            for (int i = 0; i < normals.Length; i++)
+            {
+                if (Vector3.Dot(normals[i], widened) <= 0.5f) continue;
+                sum += normals[i];
+                count++;
+            }
+
+            if (count < 8 || sum.LengthSquared < 1e-8f) return false;
+            sum.Normalize();
+            float settled = Vector3.Dot(sum, widened);
+            widened = sum;
+            if (settled > 0.999f) break;
+        }
+
+        for (int i = 0; i < normals.Length; i++)
+        {
+            if (Vector3.Dot(normals[i], widened) > 0.5f)
+                members.Add(i);
+        }
+
+        return members.Count >= 8;
+    }
+
+    /// <summary>Fraction of the scan that lands within <paramref name="gate"/> of the posed model.</summary>
+    private static float PortionOfScanOnModel(
+        Vector3[] points, IReadOnlyList<Vector3> scan, Matrix4 delta, float gate)
+    {
+        if (points.Length == 0 || scan.Count == 0) return 0f;
+        int modelStep = Math.Max(1, points.Length / 200);
+        int scanStep = Math.Max(1, scan.Count / 400);
+        var posed = new List<Vector3>(points.Length / modelStep + 1);
+        for (int i = 0; i < points.Length; i += modelStep)
+            posed.Add(TransformPoint(points[i], delta));
+
+        int seen = 0;
+        int hit = 0;
+        float gateSq = gate * gate;
+        for (int s = 0; s < scan.Count; s += scanStep)
+        {
+            seen++;
+            var q = scan[s];
+            bool near = false;
+            for (int i = 0; i < posed.Count; i++)
+            {
+                if ((posed[i] - q).LengthSquared <= gateSq)
+                {
+                    near = true;
+                    break;
+                }
+            }
+
+            if (near) hit++;
+        }
+
+        return seen == 0 ? 0f : hit / (float)seen;
+    }
+
+    /// <summary>
+    /// Point-to-plane leaves a slide along the sheet. The pose is already on the
+    /// face, so each point takes the scan point within 15 mm of the stocked
+    /// surface and the pose steps by their mean gap. The gaps have to agree:
+    /// a twist, a sampled corner, a correction under 1 mm or over 8 mm, or
+    /// fewer than 8 points, is left alone. Points past the part and a sideways
+    /// slide have no such neighbours.
+    /// </summary>
+    private static Matrix4 SnapInsetShift(
+        Vector3[] points, Vector3[] normals, ScanGrid scan, float stock)
+    {
+        const float limit = 15f;
+        float limitSq = limit * limit;
+        var sum = Vector3.Zero;
+        int count = 0;
+        float sqSum = 0f;
+        for (int i = 0; i < points.Length; i++)
+        {
+            var n = normals[i];
+            if (n.LengthSquared < 1e-8f) continue;
+            var target = points[i] + n * stock;
+            if (!scan.TryNearest(target, out var q)) continue;
+            var gap = q - target;
+            if (gap.LengthSquared > limitSq) continue;
+            sum += gap;
+            sqSum += gap.LengthSquared;
+            count++;
+        }
+
+        if (count < 8) return Matrix4.Identity;
+        var corr = sum / count;
+        // A twist or a sampled corner scatters the gaps. Averaging those moves
+        // the far corner the wrong way. A real slide points the same way.
+        float rms = MathF.Sqrt(MathF.Max(0f, sqSum / count - corr.LengthSquared));
+        if (corr.Length < 1f || corr.Length < rms * 2f || corr.Length > 8f)
+            return Matrix4.Identity;
+        return Matrix4.CreateTranslation(corr);
     }
 
     /// <summary>
@@ -654,7 +953,7 @@ public static class ScanModelAligner
     /// </summary>
     private static bool TryFaceTranslation(
         Vector3[] model, Vector3[] normals, IReadOnlyList<Vector3> scan,
-        List<int> facePoints, float bin, Matrix4 pre, out Vector3 translation)
+        List<int> facePoints, float bin, Matrix4 pre, float stock, out Vector3 translation)
     {
         translation = Vector3.Zero;
         if (facePoints.Count < 8 || bin < 1f) return false;
@@ -666,10 +965,13 @@ public static class ScanModelAligner
         for (int n = 0; n < facePoints.Count; n += modelStep)
         {
             var p = TransformPoint(model[facePoints[n]], pre);
+            // The scan is the outside of the stock. Vote the model surface, or a
+            // curved face's differing normals pull the bin off the rigid shift.
+            var inset = TransformNormal(normals[facePoints[n]], pre) * stock;
             samples++;
             for (int j = 0; j < scan.Count; j += scanStep)
             {
-                var t = scan[j] - p;
+                var t = scan[j] - p - inset;
                 var key = (
                     (int)MathF.Floor(t.X / bin + 0.5f),
                     (int)MathF.Floor(t.Y / bin + 0.5f),
@@ -680,56 +982,125 @@ public static class ScanModelAligner
         }
 
         int bestCount = 7;
-        Vector3 bestSum = Vector3.Zero;
         foreach (var slot in votes.Values)
-        {
-            if (slot.Count <= bestCount) continue;
-            bestCount = slot.Count;
-            bestSum = slot.Sum;
-        }
-
+            if (slot.Count > bestCount) bestCount = slot.Count;
         if (bestCount < 8 || samples < 8)
             return false;
 
-        var raw = bestSum / bestCount;
-        if (float.IsNaN(raw.X) || float.IsInfinity(raw.X))
-            return false;
-
-        if (raw.Length > FarMoveMm)
+        // A busy bin's mean is pulled off a curved face by the other pairs that
+        // land in it. The face-to-scan centroid is one candidate. Rank candidates
+        // by the closest third of the scan, so points past the part do not make
+        // every shift look equally far and a tight stripe cannot win on the median.
+        var turned = new Vector3[facePoints.Count];
+        var posed = new List<Vector3>(samples);
+        var posedNormal = new List<Vector3>(samples);
+        var faceSum = Vector3.Zero;
+        for (int i = 0; i < facePoints.Count; i++)
         {
-            translation = raw;
-            return translation.LengthSquared > 1f;
+            var p = TransformPoint(model[facePoints[i]], pre);
+            faceSum += p;
+            turned[i] = TransformNormal(normals[facePoints[i]], pre);
+            if (i % modelStep == 0)
+            {
+                posed.Add(p);
+                posedNormal.Add(turned[i]);
+            }
         }
 
-        var turned = new Vector3[facePoints.Count];
-        for (int i = 0; i < facePoints.Count; i++)
-            turned[i] = TransformNormal(normals[facePoints[i]], pre);
-        translation = ProjectToConstrained(raw, turned);
-        return translation.LengthSquared > 1f;
+        var scanSum = Vector3.Zero;
+        for (int j = 0; j < scan.Count; j++)
+            scanSum += scan[j];
+
+        var candidates = new List<Vector3>(25);
+        if (posed.Count > 0 && scan.Count > 0)
+            candidates.Add(scanSum / scan.Count - faceSum / facePoints.Count);
+        foreach (var slot in votes.Values.OrderByDescending(slot => slot.Count).Take(24))
+        {
+            if (slot.Count < 8) break;
+            candidates.Add(slot.Sum / slot.Count);
+        }
+
+        float bestOwned = float.MaxValue;
+        float bestMedian = float.MaxValue;
+        float bestWorst = float.MaxValue;
+        bool found = false;
+        foreach (var raw in candidates)
+        {
+            if (float.IsNaN(raw.X) || float.IsInfinity(raw.X)) continue;
+            var shift = raw.Length > FarMoveMm ? raw : ProjectToConstrained(raw, turned);
+            if (shift.LengthSquared <= 1f) continue;
+            var distances = new List<float>();
+            for (int j = 0; j < scan.Count; j += scanStep)
+            {
+                var q = scan[j];
+                float best = float.MaxValue;
+                for (int i = 0; i < posed.Count; i++)
+                {
+                    // Rank the model surface under the stock, not the outer skin.
+                    // Otherwise the closest shift sits on the scan and the curve
+                    // cannot pull that tangent back.
+                    var onScan = posed[i] + shift + posedNormal[i] * stock;
+                    float d = (onScan - q).LengthSquared;
+                    if (d < best) best = d;
+                }
+
+                distances.Add(MathF.Sqrt(best));
+            }
+
+            if (distances.Count == 0) continue;
+            distances.Sort();
+            // The closest third of the scan is the part. The rest may be bed
+            // past the model, and that tail makes every shift look equally far.
+            float owned = distances[(int)((distances.Count - 1) * 0.35f)];
+            float median = distances[distances.Count / 2];
+            float worst = distances[distances.Count - 1];
+            bool betterOwned = owned + 5f < bestOwned;
+            bool ownedTied = owned <= bestOwned + 5f;
+            bool betterMedian = median + 0.5f < bestMedian
+                || (median < bestMedian + 0.5f && worst < bestWorst);
+            if (!found || betterOwned || (ownedTied && betterMedian))
+            {
+                found = true;
+                bestOwned = owned;
+                bestMedian = median;
+                bestWorst = worst;
+                translation = shift;
+            }
+        }
+
+        return found;
     }
 
     /// <summary>
-    /// Fraction of the scan that lands on this face, and the farthest scan point.
-    /// Euclidean on purpose: a near miss along the face is still the right twist,
-    /// and a tab the face does not own stays far.
+    /// Fraction of the scan that lands on this face, and how far the part's own
+    /// share of that scan sits. Euclidean on purpose: a near miss along the face
+    /// is still the right twist, and a tab the face does not own stays far.
     /// </summary>
     private static void MeasureFaceOverlap(
-        Vector3[] points, List<int> facePoints, IReadOnlyList<Vector3> scan,
-        Matrix4 delta, float gate, out float cover, out float worst)
+        Vector3[] points, Vector3[] normals, List<int> facePoints, IReadOnlyList<Vector3> scan,
+        Matrix4 delta, float gate, float rankAt, float stock,
+        out float cover, out float worst, out float edgeGap)
     {
         cover = 0f;
         worst = float.MaxValue;
+        edgeGap = float.MaxValue;
         if (facePoints.Count == 0 || scan.Count == 0) return;
 
         int modelStep = Math.Max(1, facePoints.Count / 200);
         int scanStep = Math.Max(1, scan.Count / 400);
         var posed = new List<Vector3>(facePoints.Count / modelStep + 1);
+        var posedNormal = new List<Vector3>(facePoints.Count / modelStep + 1);
         for (int n = 0; n < facePoints.Count; n += modelStep)
+        {
             posed.Add(TransformPoint(points[facePoints[n]], delta));
+            posedNormal.Add(TransformNormal(normals[facePoints[n]], delta));
+        }
 
         int seen = 0;
         int hit = 0;
-        float far = 0f;
+        var distances = new List<float>();
+        var modelBest = new float[posed.Count];
+        Array.Fill(modelBest, float.MaxValue);
         float gateSq = gate * gate;
         for (int s = 0; s < scan.Count; s += scanStep)
         {
@@ -738,17 +1109,63 @@ public static class ScanModelAligner
             var q = scan[s];
             for (int i = 0; i < posed.Count; i++)
             {
-                float d = (posed[i] - q).LengthSquared;
+                // The stock thickness hides a twist: 4 mm of stock and 2 mm of
+                // slide are almost the same distance. Rank the stocked surface.
+                var onScan = posed[i] + posedNormal[i] * stock;
+                float d = (onScan - q).LengthSquared;
                 if (d < best) best = d;
+                if (d < modelBest[i]) modelBest[i] = d;
             }
 
             if (best <= gateSq) hit++;
-            float dist = MathF.Sqrt(best);
-            if (dist > far) far = dist;
+            distances.Add(MathF.Sqrt(best));
         }
 
         cover = seen == 0 ? 0f : hit / (float)seen;
-        worst = far;
+        if (distances.Count == 0)
+        {
+            worst = float.MaxValue;
+            edgeGap = float.MaxValue;
+            return;
+        }
+
+        distances.Sort();
+        // Spin ranking uses the part's share of the sheet. The farthest scan
+        // point is the same for every spin once the sheet continues past the part.
+        float rank = Math.Clamp(rankAt, 0.25f, 1f);
+        worst = distances[(int)((distances.Count - 1) * rank)];
+
+        // The model's own corner, not the scan past the part. A connected sheet
+        // has no gap to walk, and the corner is what a fraction of a degree moves.
+        edgeGap = 0f;
+        for (int i = 0; i < modelBest.Length; i++)
+        {
+            if (modelBest[i] == float.MaxValue) continue;
+            edgeGap = MathF.Max(edgeGap, MathF.Sqrt(modelBest[i]));
+        }
+    }
+
+    /// <summary>
+    /// 1 when the scan's in-plane spread matches the face. Lower when the sheet
+    /// continues past the part. Rotation invariant, so the model can still be
+    /// far away and turned.
+    /// </summary>
+    private static float OverlapRank(Vector3[] model, List<int> face, IReadOnlyList<Vector3> scan)
+    {
+        if (face.Count < 8 || scan.Count < 8) return 1f;
+        var facePts = new List<Vector3>(face.Count);
+        for (int i = 0; i < face.Count; i++)
+            facePts.Add(model[face[i]]);
+        if (!TryPrincipalAxes(facePts, out _, out _, out float faceMid, out float faceWide))
+            return 1f;
+        if (!TryPrincipalAxes(scan, out _, out _, out float scanMid, out float scanWide))
+            return 1f;
+        float faceArea = MathF.Sqrt(MathF.Max(faceMid, 0f) * MathF.Max(faceWide, 0f));
+        float scanArea = MathF.Sqrt(MathF.Max(scanMid, 0f) * MathF.Max(scanWide, 0f));
+        if (faceArea < 1f || scanArea < 1f) return 1f;
+        float share = faceArea / scanArea;
+        if (share >= 0.8f) return 1f;
+        return Math.Clamp(share, 0.35f, 0.7f);
     }
 
     private static List<Vector3> FaceNormals(Vector3[] normals, int max)
@@ -799,14 +1216,123 @@ public static class ScanModelAligner
     private static bool TrySheetAxis(IReadOnlyList<Vector3> scan, out Vector3 axis)
     {
         axis = Vector3.Zero;
-        if (scan.Count < 12) return false;
-        var center = Centroid(scan);
-        double xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
-        for (int i = 0; i < scan.Count; i++)
+        if (!TryPrincipalAxes(scan, out var thinAxis, out float thin, out _, out float wide))
+            return false;
+        if (wide < 1e-4f || thin > 0.15f * wide)
+            return false;
+        axis = thinAxis;
+        return true;
+    }
+
+    /// <summary>
+    /// Mean of the scan's local surface normals. The best-fit plane of a curved
+    /// face is tilted off that mean, and standing the model on the plane leaves
+    /// only a stripe of the scan within the match gate.
+    /// </summary>
+    private static bool TryMeanSurfaceNormal(IReadOnlyList<Vector3> scan, Vector3 plane, out Vector3 mean)
+    {
+        mean = plane;
+        if (scan.Count < 12 || plane.LengthSquared < 1e-8f) return false;
+
+        int probes = Math.Min(40, scan.Count);
+        int probeStep = Math.Max(1, scan.Count / probes);
+        var nearest = new List<float>(probes);
+        for (int i = 0; i < scan.Count; i += probeStep)
         {
-            double x = scan[i].X - center.X;
-            double y = scan[i].Y - center.Y;
-            double z = scan[i].Z - center.Z;
+            float best = float.MaxValue;
+            var p = scan[i];
+            for (int j = 0; j < scan.Count; j++)
+            {
+                if (j == i) continue;
+                float d = (scan[j] - p).LengthSquared;
+                if (d > 1e-4f && d < best) best = d;
+            }
+
+            if (best < float.MaxValue)
+                nearest.Add(MathF.Sqrt(best));
+        }
+
+        if (nearest.Count < 8) return false;
+        nearest.Sort();
+        float radius = Math.Clamp(nearest[nearest.Count / 2] * 4f, 15f, 250f);
+        float radiusSq = radius * radius;
+
+        int seeds = Math.Min(80, scan.Count);
+        int seedStep = Math.Max(1, scan.Count / seeds);
+        var accepted = new List<Vector3>();
+        for (int i = 0; i < scan.Count; i += seedStep)
+        {
+            var origin = scan[i];
+            var patch = new List<Vector3>();
+            for (int j = 0; j < scan.Count; j++)
+            {
+                if ((scan[j] - origin).LengthSquared <= radiusSq)
+                    patch.Add(scan[j]);
+            }
+
+            if (patch.Count < 8) continue;
+            if (!TryPrincipalAxes(patch, out var normal, out float thin, out float middle, out _))
+                continue;
+            if (middle <= 1e-6f || thin > 0.2f * middle) continue;
+            if (Vector3.Dot(normal, plane) < 0f)
+                normal = -normal;
+            accepted.Add(normal);
+        }
+
+        if (accepted.Count < 8) return false;
+
+        // A flat extension past the part shares one normal. A curved face does
+        // not. Cap that spike so the extension cannot tilt the axis off the face.
+        // Under the cap the sum is the sample mean, so a face with no extension
+        // is unchanged.
+        int cap = Math.Max(4, accepted.Count / 10);
+        var bins = new Dictionary<(int Tilt, int Pan), (int Count, Vector3 Sum)>();
+        for (int i = 0; i < accepted.Count; i++)
+        {
+            var n = accepted[i];
+            int tilt = (int)MathF.Round(MathF.Acos(Math.Clamp(n.Z, -1f, 1f)) / MathF.PI * 36f);
+            if (tilt < 0) tilt = 0;
+            if (tilt > 36) tilt = 36;
+            int pan = (int)MathF.Round((MathF.Atan2(n.Y, n.X) + MathF.PI) / (2f * MathF.PI) * 36f);
+            if (pan < 0) pan = 0;
+            if (pan >= 36) pan = 0;
+            var key = (tilt, pan);
+            bins.TryGetValue(key, out var slot);
+            bins[key] = (slot.Count + 1, slot.Sum + n);
+        }
+
+        var sum = Vector3.Zero;
+        foreach (var slot in bins.Values)
+        {
+            float w = Math.Min(slot.Count, cap);
+            sum += slot.Sum * (w / slot.Count);
+        }
+
+        if (sum.LengthSquared < 1e-8f) return false;
+        sum.Normalize();
+        if (Vector3.Dot(sum, plane) < 0f)
+            sum = -sum;
+        mean = sum;
+        return true;
+    }
+
+    private static bool TryPrincipalAxes(
+        IReadOnlyList<Vector3> pts,
+        out Vector3 thinAxis, out float thin, out float middle, out float wide)
+    {
+        thinAxis = Vector3.Zero;
+        thin = 0f;
+        middle = 0f;
+        wide = 0f;
+        if (pts.Count < 8) return false;
+
+        var center = Centroid(pts);
+        double xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+        for (int i = 0; i < pts.Count; i++)
+        {
+            double x = pts[i].X - center.X;
+            double y = pts[i].Y - center.Y;
+            double z = pts[i].Z - center.Z;
             xx += x * x;
             xy += x * y;
             xz += x * z;
@@ -815,7 +1341,7 @@ public static class ScanModelAligner
             zz += z * z;
         }
 
-        double inv = 1.0 / scan.Count;
+        double inv = 1.0 / pts.Count;
         var a = new double[3, 3]
         {
             { xx * inv, xy * inv, xz * inv },
@@ -824,19 +1350,22 @@ public static class ScanModelAligner
         };
         var v = new double[3, 3] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
         Jacobi3(a, v);
-        int thin = 0;
-        int wide = 0;
+        int thinI = 0;
+        int wideI = 0;
         for (int i = 1; i < 3; i++)
         {
-            if (a[i, i] < a[thin, thin]) thin = i;
-            if (a[i, i] > a[wide, wide]) wide = i;
+            if (a[i, i] < a[thinI, thinI]) thinI = i;
+            if (a[i, i] > a[wideI, wideI]) wideI = i;
         }
 
-        if (a[wide, wide] < 1e-4 || a[thin, thin] > 0.15 * a[wide, wide])
-            return false;
-        axis = new Vector3((float)v[0, thin], (float)v[1, thin], (float)v[2, thin]);
-        if (axis.LengthSquared < 1e-8f) return false;
-        axis.Normalize();
+        if (thinI == wideI) return false;
+        int midI = 3 - thinI - wideI;
+        thin = (float)a[thinI, thinI];
+        middle = (float)a[midI, midI];
+        wide = (float)a[wideI, wideI];
+        thinAxis = new Vector3((float)v[0, thinI], (float)v[1, thinI], (float)v[2, thinI]);
+        if (thinAxis.LengthSquared < 1e-8f) return false;
+        thinAxis.Normalize();
         return true;
     }
 
@@ -1201,12 +1730,27 @@ public static class ScanModelAligner
         private readonly float _cell;
         private readonly float _pairSq;
 
-        public ScanGrid(IReadOnlyList<Vector3> scan, float pair)
+        public ScanGrid(IReadOnlyList<Vector3> scan, float pair, bool spread = false)
         {
             _cell = MathF.Max(pair, 1f);
             _pairSq = pair * pair;
+            // The coarse rank grid's cells are hundreds of millimetres. Keeping
+            // every scan point makes each pose test walk the whole cloud. One
+            // point per half-cell is enough to tell a turn, and the fine grid
+            // still holds every point for the fit that is applied.
+            float sub = spread ? _cell * 0.5f : 0f;
+            var seen = spread ? new HashSet<(int X, int Y, int Z)>() : null;
             for (int i = 0; i < scan.Count; i++)
             {
+                if (seen is not null)
+                {
+                    var fine = (
+                        (int)MathF.Floor(scan[i].X / sub),
+                        (int)MathF.Floor(scan[i].Y / sub),
+                        (int)MathF.Floor(scan[i].Z / sub));
+                    if (!seen.Add(fine)) continue;
+                }
+
                 var key = Key(scan[i]);
                 if (!_cells.TryGetValue(key, out var list))
                 {

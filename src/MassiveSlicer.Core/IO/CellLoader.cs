@@ -36,7 +36,8 @@ public static class CellLoader
 
     /// <summary>
     /// Returns paths of cell JSON files under the given directory (recursive).
-    /// Skips <c>*.homes.json</c> sidecars — those are saved home positions, not cells.
+    /// Skips <c>*.homes.json</c> and <c>*.scanposes.json</c> sidecars — those are
+    /// saved positions, not cells.
     /// </summary>
     public static IEnumerable<string> FindAll(string directory = "assets/cells")
     {
@@ -57,17 +58,23 @@ public static class CellLoader
         return [];
     }
 
-    /// <summary>Cell JSON files in <paramref name="cellsDir"/>. Omits <c>*.homes.json</c>.</summary>
+    /// <summary>Cell JSON files in <paramref name="cellsDir"/>. Omits home and scan-pose sidecars.</summary>
     internal static IEnumerable<string> EnumerateCellFiles(string cellsDir)
     {
         if (!Directory.Exists(cellsDir)) yield break;
         foreach (var file in Directory.EnumerateFiles(cellsDir, "*.json", SearchOption.AllDirectories))
         {
-            if (file.EndsWith(".homes.json", StringComparison.OrdinalIgnoreCase))
+            if (IsCellSidecar(file))
                 continue;
             yield return file;
         }
     }
+
+    static bool IsCellSidecar(string file)
+        => file.EndsWith(".homes.json", StringComparison.OrdinalIgnoreCase)
+           || file.EndsWith(".homes.json.tmp", StringComparison.OrdinalIgnoreCase)
+           || file.EndsWith(".scanposes.json", StringComparison.OrdinalIgnoreCase)
+           || file.EndsWith(".scanposes.json.tmp", StringComparison.OrdinalIgnoreCase);
 
     private static IEnumerable<string> CandidateCellDirectories(string fallbackRelative)
     {
@@ -210,6 +217,58 @@ public static class CellLoader
             System.Console.Error.WriteLine($"[cell] homes sidecar ignored ({path}): {ex.Message}");
         }
     }
+
+    // -- Scan poses (sidecar only; never written into the cell JSON) ----------
+
+    /// <summary>
+    /// Reads <c>*.scanposes.json</c> beside <paramref name="cellPath"/>. A missing or
+    /// unreadable sidecar still returns the built-in Overview pose. Does not read
+    /// pose joints out of the cell JSON.
+    /// </summary>
+    public static ScanPoseFile LoadScanPoses(string cellPath)
+    {
+        ScanPoseFile? saved = null;
+        var path = ScanPosesSidecarPath(cellPath);
+        if (File.Exists(path))
+        {
+            try
+            {
+                var json = File.ReadAllText(path);
+                if (!string.IsNullOrWhiteSpace(json))
+                    saved = JsonSerializer.Deserialize<ScanPoseFile>(json, Options);
+            }
+            catch (Exception ex)
+            {
+                System.Console.Error.WriteLine($"[cell] scan pose sidecar ignored ({path}): {ex.Message}");
+            }
+        }
+
+        return ScanPoses.EnsureOverview(saved);
+    }
+
+    /// <summary>
+    /// Writes scan poses to <c>*.scanposes.json</c> only. The cell JSON is not opened
+    /// for write, so a pose save cannot change export, homes, or TOOL_DATA.
+    /// </summary>
+    public static void SaveScanPoses(string cellPath, ScanPoseFile data)
+    {
+        var path = ScanPosesSidecarPath(cellPath);
+        var file = ScanPoses.EnsureOverview(data);
+        string json = JsonSerializer.Serialize(file, WriteOptions);
+        if (string.IsNullOrWhiteSpace(json))
+            throw new InvalidDataException($"Refusing to write empty scan pose sidecar: {path}");
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+        string temp = path + ".tmp";
+        File.WriteAllText(temp, json);
+        File.Move(temp, path, overwrite: true);
+    }
+
+    public static string ScanPosesSidecarPath(string cellPath)
+        => Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(cellPath)) ?? ".",
+            Path.GetFileNameWithoutExtension(cellPath) + ".scanposes.json");
 
     /// <summary>
     /// Writes a measured rotary-bed centre (world / ROBROOT mm) into the cell JSON at

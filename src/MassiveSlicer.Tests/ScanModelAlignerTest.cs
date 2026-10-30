@@ -217,6 +217,82 @@ public sealed class ScanModelAlignerTest
     }
 
     [Fact]
+    public void A_curved_face_moved_far_and_turned_is_still_located()
+    {
+        // Match reported "Not applied. Only 29% of the scan lies on the model.
+        // The rest of the model is ignored." Stock 3 mm, tolerance 2 mm,
+        // minimum match 35%, max shift 100 mm, max rotation 20°. The part had
+        // been moved further and rotated. The scan is one curved face.
+        var model = CurvedRock();
+        var scan = new List<Vector3>();
+        for (int i = 0; i < model.Points.Count; i++)
+        {
+            if (model.Normals[i].Z < 0.5f) continue;
+            scan.Add(model.Points[i] + model.Normals[i] * 3f);
+        }
+
+        var moved = Pose(model, new Vector3(160f, -70f, 210f), new Vector3(8000f, -4200f, 2600f));
+        var result = ScanModelAligner.Align(
+            moved.Points, moved.Normals, scan,
+            new ScanModelAligner.ScanModelAlignRequest(3f, 2f, 0.35f, 100f, 20f));
+
+        Assert.True(result.Accepted, result.Message);
+        Assert.True(result.RotationDeg > 30f, result.Message);
+        int checkedFace = 0;
+        for (int i = 0; i < model.Points.Count; i++)
+        {
+            if (model.Normals[i].Z < 0.5f) continue;
+            var back = ScanModelAligner.TransformPoint(moved.Points[i], result.ModelWorldDelta);
+            var err = (back - model.Points[i]).Length;
+            Assert.True(err < 1.5f, $"{result.Message} err={err:0.00} i={i}");
+            checkedFace++;
+        }
+
+        Assert.True(checkedFace > 40, $"face samples {checkedFace}");
+    }
+
+    [Fact]
+    public void A_long_scan_past_the_face_moved_far_and_turned_is_still_located()
+    {
+        // The merged rock scan is longer than the model. Points past the part
+        // must not decide the seat. Stock 3 mm, tolerance 2 mm, minimum 35%.
+        var model = CurvedRock();
+        var scan = new List<Vector3>();
+        for (int i = 0; i < model.Points.Count; i++)
+        {
+            if (model.Normals[i].Z < 0.5f) continue;
+            scan.Add(model.Points[i] + model.Normals[i] * 3f);
+        }
+
+        int faceCount = scan.Count;
+        for (int k = 0; k < faceCount; k++)
+        {
+            float y = 900f + (k % 40) * 35f;
+            float x = (k / 40) * 40f - 80f;
+            scan.Add(new Vector3(x, y, 1400f));
+        }
+
+        var moved = Pose(model, new Vector3(160f, -70f, 210f), new Vector3(8000f, -4200f, 2600f));
+        var result = ScanModelAligner.Align(
+            moved.Points, moved.Normals, scan,
+            new ScanModelAligner.ScanModelAlignRequest(3f, 2f, 0.35f, 100f, 20f));
+
+        Assert.True(result.Accepted, result.Message);
+        Assert.True(result.RotationDeg > 30f, result.Message);
+        int checkedFace = 0;
+        for (int i = 0; i < model.Points.Count; i++)
+        {
+            if (model.Normals[i].Z < 0.5f) continue;
+            var back = ScanModelAligner.TransformPoint(moved.Points[i], result.ModelWorldDelta);
+            var err = (back - model.Points[i]).Length;
+            Assert.True(err < 1.5f, $"{result.Message} err={err:0.00} i={i}");
+            checkedFace++;
+        }
+
+        Assert.True(checkedFace > 40, $"face samples {checkedFace}");
+    }
+
+    [Fact]
     public void A_sideways_slide_on_one_face_is_rejected()
     {
         var model = Face(shift: new Vector3(120f, 0f, 2f));
@@ -317,6 +393,47 @@ public sealed class ScanModelAlignerTest
                 normals.Add(normal);
             }
         }
+    }
+
+    /// <summary>
+    /// A curved front, a tab, and a back slab. The scan in the test is the front only.
+    /// A half-turn of this outline is not the same shape.
+    /// </summary>
+    private static Cloud CurvedRock()
+    {
+        var points = new List<Vector3>();
+        var normals = new List<Vector3>();
+        const float radius = 1400f;
+        for (int a = -10; a <= 10; a++)
+        {
+            float ang = a * (5f * MathF.PI / 180f);
+            var n = new Vector3(MathF.Sin(ang), 0f, MathF.Cos(ang));
+            for (int y = -8; y <= 8; y++)
+            {
+                if (y > 3 && a > 4) continue;
+                points.Add(n * radius + new Vector3(0f, y * 50f, 0f));
+                normals.Add(n);
+            }
+        }
+
+        float tab = 18f * MathF.PI / 180f;
+        var tabNormal = new Vector3(MathF.Sin(tab), 0f, MathF.Cos(tab));
+        for (int k = 0; k < 5; k++)
+        {
+            points.Add(tabNormal * radius + new Vector3(0f, 470f + k * 35f, 0f));
+            normals.Add(tabNormal);
+        }
+
+        for (int x = -4; x <= 4; x++)
+        {
+            for (int y = -4; y <= 4; y++)
+            {
+                points.Add(new Vector3(x * 80f, y * 80f, radius - 260f));
+                normals.Add(-Vector3.UnitZ);
+            }
+        }
+
+        return new Cloud(points, normals);
     }
 
     /// <summary>Three faces at different distances, plus a tab so the flat face is not a square.</summary>

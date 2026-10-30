@@ -3368,6 +3368,128 @@
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Margin="0,0,0,8">
 
+                        <Expander Classes="StepCard" IsExpanded="True">
+                            <Expander.Header>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="MAGIC SCAN" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Expander.Header>
+                            <StackPanel Margin="0,0,0,6">
+                                <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
+                                           Text="Localization seats the loaded model on the part so milling can start. Part recreation merges the scans and stops at the mesh. These buttons move the simulated robot only, including when the robot is not synced. The fine stations stay on screen. Hand-eye stays in its own card."/>
+                                <CheckBox Content="Fake scan data"
+                                          IsChecked="{Binding Scan.UseFakeScanData}"
+                                          Margin="10,0,10,2"
+                                          FontSize="11"
+                                          ToolTip.Tip="Off: Test Scan uses the Zivid camera. On: Test Scan lifts the simulated scanner, grids the whole model, then moves closer for the fine points. The live arm is not moved. Hand-eye and bed calibration always use the camera."/>
+                                <TextBlock Text="{Binding Scan.FakeScanCaption}"
+                                           TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,0,10,6"/>
+                                <ComboBox Margin="10,0,10,4"
+                                          HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding Scan.MagicScanModes}"
+                                          SelectedItem="{Binding Scan.MagicScanMode, Mode=TwoWay}"
+                                          ToolTip.Tip="Localization matches the model. Part recreation does not move a model."/>
+                                <Button Content="Magic Scan"
+                                        Classes="PrimaryButton"
+                                        HorizontalAlignment="Stretch"
+                                        Margin="10,0,10,4"
+                                        Command="{Binding Scan.MagicScanCommand}"
+                                        ToolTip.Tip="Prepare the overhead pose on the simulated robot. The live arm is not moved."/>
+                                <Button Content="Move to overhead"
+                                        Classes="PrimaryButton"
+                                        HorizontalAlignment="Stretch"
+                                        Margin="10,0,10,4"
+                                        IsVisible="{Binding Scan.ShowMagicMove}"
+                                        Command="{Binding Scan.MoveToOverheadCommand}"
+                                        ToolTip.Tip="With Fake scan data off, put the simulated robot on the selected Scan Pose. With it on, lift the simulated scanner, grid the whole model, then move closer. Does not move the live arm, synced or not."/>
+                                <TextBlock Text="{Binding Scan.MagicScanStatus}"
+                                           Classes="LabelMuted" Margin="10,0,10,6" TextWrapping="Wrap"/>
+
+                                <TextBlock Text="COARSE" Classes="SectionHeader"/>
+                                <Grid Margin="10,2,10,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Bed clearance (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Points at or below the bed plus this height are the table, not the part."/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.BedClearanceMm}"/>
+                                </Grid>
+                                <Grid Margin="10,2,10,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Coarse field (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="A part wider than this asks for a second overhead pose."/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.CoarseFieldMm}"/>
+                                </Grid>
+                                <Button Content="Detect part"
+                                        HorizontalAlignment="Stretch"
+                                        Margin="10,0,10,4"
+                                        Command="{Binding Scan.DetectPartCommand}"
+                                        ToolTip.Tip="Box the points above the bed in the selected scan, or in every bed scan."/>
+                                <TextBlock Text="{Binding Scan.DetectedPartText}"
+                                           Classes="LabelMuted" Margin="10,0,10,6" TextWrapping="Wrap"/>
+
+                                <TextBlock Text="FINE PATH" Classes="SectionHeader"/>
+                                <Grid Margin="10,2,10,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Standoff (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Camera height above the top of the detected part."/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.StandoffMm}"/>
+                                </Grid>
+                                <Grid Margin="10,2,10,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Footprint (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="How wide one look-down frame covers."/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.FootprintMm}"/>
+                                </Grid>
+                                <Grid Margin="10,2,10,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Overlap (%)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="How much neighboring fine frames overlap."/>
+                                    <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.OverlapPercent}"/>
+                                </Grid>
+                                <Button Content="Plan fine scan"
+                                        HorizontalAlignment="Stretch"
+                                        Margin="10,0,10,4"
+                                        Command="{Binding Scan.PlanFineScanCommand}"
+                                        ToolTip.Tip="Build the look-down stations from the knobs. Does not move the arm."/>
+                                <ItemsControl ItemsSource="{Binding Scan.MagicScanStations}" Margin="10,0,10,4"
+                                              IsVisible="{Binding Scan.ShowMagicReview}"/>
+                                <Grid Margin="10,0,10,4" ColumnDefinitions="*,8,*,8,*">
+                                    <Button Grid.Column="0" Content="New toolpath"
+                                            HorizontalAlignment="Stretch"
+                                            Command="{Binding Scan.NewMagicToolpathCommand}"
+                                            ToolTip.Tip="Plan the fine path again from the current knobs."/>
+                                    <Button Grid.Column="2" Content="Rescan"
+                                            HorizontalAlignment="Stretch"
+                                            Command="{Binding Scan.RescanMagicCommand}"
+                                            ToolTip.Tip="Drop the planned path and go back to the overhead confirm."/>
+                                    <Button Grid.Column="4" Content="Continue"
+                                            Classes="PrimaryButton"
+                                            HorizontalAlignment="Stretch"
+                                            Command="{Binding Scan.ContinueMagicCommand}"
+                                            ToolTip.Tip="Merge the scans. Localization also matches the model. The fine stations are not sent to the arm."/>
+                                </Grid>
+                                <Button Content="Merge scans"
+                                        HorizontalAlignment="Stretch"
+                                        Margin="10,0,10,6"
+                                        Command="{Binding Scan.MergeScansCommand}"
+                                        ToolTip.Tip="Merge the original bed scans as a mesh. Same merge as the outliner."/>
+                            </StackPanel>
+                        </Expander>
+
                         <!-- 1 CAPTURE -->
                         <Expander Classes="StepCard" IsExpanded="True">
                             <Expander.Header>
@@ -3383,6 +3505,35 @@
                             <StackPanel Margin="0,0,0,6">
                                 <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
                                            Text="Recall scan poses, capture from the Zivid camera, and choose where scans are written."/>
+
+                                <TextBlock Text="SCAN POSE" Classes="SectionHeader"/>
+                                <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="8,0,8,6"
+                                           Text="Moves the simulated robot only. The live arm stays where it is, including during a program."/>
+                                <ComboBox Margin="8,0,8,4"
+                                          HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding Scan.AvailableScanPoseNames}"
+                                          SelectedItem="{Binding Scan.SelectedScanPoseName, Mode=TwoWay}"
+                                          ToolTip.Tip="Saved scan poses. Picking a name does not move the robot."/>
+                                <Button Content="Go to Pose"
+                                        Classes="PrimaryButton"
+                                        HorizontalAlignment="Stretch"
+                                        Margin="8,0,8,4"
+                                        Command="{Binding Scan.GoToScanPoseCommand}"
+                                        ToolTip.Tip="Put the viewport robot on this pose. Does not move the live arm, including while a program is running."/>
+                                <TextBox Margin="8,0,8,4"
+                                         Classes="PanelTextBox"
+                                         Text="{Binding Scan.NewScanPoseName, Mode=TwoWay}"
+                                         PlaceholderText="New pose name..."
+                                         VerticalContentAlignment="Center"
+                                         Padding="6,4"
+                                         ToolTip.Tip="Type a name, then SAVE AS SCAN POSE. Overwrites if that name already exists."/>
+                                <Button Content="SAVE AS SCAN POSE"
+                                        HorizontalAlignment="Stretch"
+                                        Margin="8,0,8,4"
+                                        Command="{Binding Scan.SaveScanPoseCommand}"
+                                        ToolTip.Tip="Save the current simulated A1–E1 sliders. Does not read or move the live arm."/>
+                                <TextBlock Text="{Binding Scan.ScanPoseStatus}"
+                                           Classes="LabelMuted" Margin="8,0,8,6" TextWrapping="Wrap"/>
 
                                 <!-- QUICK POSITIONS hidden until MassiveDRIVE joint recall is reliable (LFAM 3).
                                      Keep markup so we can re-show later; ViewModel still works via console. -->
@@ -3441,12 +3592,19 @@
                                             <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.CameraIp}"/>
                                         </Grid>
 
+                                        <CheckBox Content="Fake scan data"
+                                                  IsChecked="{Binding Scan.UseFakeScanData}"
+                                                  Margin="8,6,8,2"
+                                                  FontSize="11"
+                                                  ToolTip.Tip="Off: Test Scan uses the Zivid camera. On: Test Scan lifts the simulated scanner, grids the whole model, then moves closer for the fine points. The live arm is not moved. Hand-eye and bed calibration always use the camera."/>
+                                        <TextBlock Text="{Binding Scan.FakeScanCaption}"
+                                                   Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
                                         <Button Content="Test Scan"
                                                 Classes="PrimaryButton"
                                                 HorizontalAlignment="Stretch"
                                                 Margin="8,8,8,2"
                                                 Command="{Binding Scan.TestScanCommand}"
-                                                ToolTip.Tip="Capture a single frame from the Zivid camera and add it to the scene"/>
+                                                ToolTip.Tip="With Fake scan data off, capture a frame from the Zivid camera. With it on, lift the simulated scanner, grid the whole model, then move closer for the fine points. The live arm is not moved."/>
                                         <TextBlock Text="{Binding Scan.ScanStatus}"
                                                    Classes="LabelMuted" Margin="8,2,8,4" TextWrapping="Wrap"/>
                                     </StackPanel>

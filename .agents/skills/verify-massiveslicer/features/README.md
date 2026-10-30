@@ -31,6 +31,9 @@ Start with these five. Add a file when a new user-visible behavior ships.
 | Scan merge performance | `scan-merge-performance.md` | `viewset OptimizedScanMerge` (read-only; `false` writes the app preference) |
 | Scan view resolution | `scan-display-resolution.md` | `viewset ReducedScanDisplay` (read-only; `false` writes the app preference) |
 | Scan model alignment | `scan-model-align.md` | `scan-align status` (read-only; `scan-align` alone moves the model when the fit is good) |
+| Scan pose | `scan-pose.md` | `scan-pose status` (read-only; `scan-pose go` moves the simulated arm in that window and does not move the live robot) |
+| Magic scan | `magic-scan.md` | `magic-scan status` (read-only; Move to overhead and Go to Pose move the simulated arm only) |
+| Fake scan | `fake-scan.md` | `scan-fake status` (read-only; `on` / `off` only flip the toggle and do not capture) |
 | End wipe | `end-wipe.md` | `addset EndWipeEnabled` (read-only; a value reslices) |
 
 Proof standards: real user path, action + resulting state, side effects on disk/console. Unit tests are extra, not a substitute.

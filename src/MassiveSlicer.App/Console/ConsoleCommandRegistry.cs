@@ -142,6 +142,93 @@ public sealed partial class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "scan-pose",
+            Description = "Move the simulated robot to a saved scan pose. Does not move the live arm.",
+            Usage = "scan-pose | scan-pose status | scan-pose go [name] | scan-pose save [name]",
+            Execute = (ctx, args) =>
+            {
+                var scan = ctx.Main.RightPanel.Scan;
+                var parts = args.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var verb = parts.Length == 0 ? "status" : parts[0];
+                var rest = parts.Length > 1 ? parts[1].Trim().Trim('"') : "";
+                if (verb.Equals("status", StringComparison.OrdinalIgnoreCase)
+                    || verb.Equals("list", StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Log(scan.DescribeScanPoses());
+                    return;
+                }
+
+                if (verb.Equals("go", StringComparison.OrdinalIgnoreCase))
+                {
+                    scan.GoToNamedScanPose(rest);
+                    ctx.Log("[scan-pose] " + scan.ScanPoseStatus);
+                    return;
+                }
+
+                if (verb.Equals("save", StringComparison.OrdinalIgnoreCase))
+                {
+                    scan.SaveNamedScanPose(rest);
+                    ctx.Log("[scan-pose] " + scan.ScanPoseStatus);
+                    return;
+                }
+
+                ctx.LogError("[scan-pose] usage: scan-pose | scan-pose status | scan-pose go [name] | scan-pose save [name]");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "scan-fake",
+            Description = "Turn fake model scan data on or off. Does not capture and does not move the arm.",
+            Usage = "scan-fake | scan-fake status | scan-fake on | scan-fake off",
+            Execute = (ctx, args) =>
+            {
+                var scan = ctx.Main.RightPanel.Scan;
+                var verb = args.Trim();
+                if (verb.Length == 0 || verb.Equals("status", StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Log(scan.DescribeFakeScan());
+                    return;
+                }
+
+                if (verb.Equals("on", StringComparison.OrdinalIgnoreCase))
+                {
+                    scan.UseFakeScanData = true;
+                    ctx.Log(scan.DescribeFakeScan());
+                    return;
+                }
+
+                if (verb.Equals("off", StringComparison.OrdinalIgnoreCase))
+                {
+                    scan.UseFakeScanData = false;
+                    ctx.Log(scan.DescribeFakeScan());
+                    return;
+                }
+
+                ctx.LogError("[scan-fake] usage: scan-fake | scan-fake status | scan-fake on | scan-fake off");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "magic-scan",
+            Description = "Read Magic Scan mode and the planned fine stations. Does not move the arm.",
+            Usage = "magic-scan | magic-scan status",
+            Execute = (ctx, args) =>
+            {
+                var verb = args.Trim();
+                if (verb.Length == 0 || verb.Equals("status", StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Log(ctx.Main.RightPanel.Scan.DescribeMagicScan());
+                    return;
+                }
+
+                ctx.LogError("[magic-scan] usage: magic-scan | magic-scan status");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "save-as",
             Aliases = ["saveas", "save as"],
             Description = "Save workspace to a new file",

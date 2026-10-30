@@ -32,6 +32,7 @@ Pass: the line reports stock, tolerance, match, shift, and turn. Do not run `sca
 - A model stored as several meshes is sampled from every mesh. The first mesh alone is not the part.
 - A merged scan is sampled more densely than the model. A few thousand samples on a multi-metre sheet read as stock error.
 - A scan of one face matches that face. The rest of the model is ignored, and minimum match is the percent of the scan on the model.
+- A curved face is seated as a whole, on the scan's surface normal, not on one flat patch of that face.
 - A face that sits off to the side of the scan, so the match would slide, is still not applied. Nudge instead, or scan more of the part.
 - Match locates the model on the scan first, from any starting distance and from a large pitch, roll, or yaw, then fine-tunes. One scanned face is enough. The operator does not pre-align the model or raise Max rotation.
 - Max shift and max rotation bound the fine match only. The locate step may move farther than max shift and turn farther than max rotation.

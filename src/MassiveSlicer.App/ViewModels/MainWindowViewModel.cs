@@ -13,6 +13,7 @@ using MassiveSlicer.Core.Kinematics;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Core.Scanning;
 using MassiveSlicer.Viewport;
+using MassiveSlicer.Viewport.FK;
 using MassiveSlicer.Viewport.Loading;
 using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels.Base;
@@ -439,7 +440,17 @@ public sealed class MainWindowViewModel : ViewModelBase
             // Skip transient capture-progress properties.
             if (e.PropertyName is nameof(ScanSettingsViewModel.IsScanning)
                                 or nameof(ScanSettingsViewModel.ScanStatus)
-                                or nameof(ScanSettingsViewModel.QuickPositionStatus))
+                                or nameof(ScanSettingsViewModel.QuickPositionStatus)
+                                or nameof(ScanSettingsViewModel.ScanPoseStatus)
+                                or nameof(ScanSettingsViewModel.NewScanPoseName)
+                                or nameof(ScanSettingsViewModel.SelectedScanPoseName)
+                                or nameof(ScanSettingsViewModel.AvailableScanPoseNames)
+                                or nameof(ScanSettingsViewModel.MagicScanStatus)
+                                or nameof(ScanSettingsViewModel.ShowMagicMove)
+                                or nameof(ScanSettingsViewModel.ShowMagicReview)
+                                or nameof(ScanSettingsViewModel.DetectedPartText)
+                                or nameof(ScanSettingsViewModel.UseFakeScanData)
+                                or nameof(ScanSettingsViewModel.FakeScanCaption))
                 return;
             OnSettingsChanged();
         };
@@ -476,6 +487,21 @@ public sealed class MainWindowViewModel : ViewModelBase
         RightPanel.Scan.OnAlignOffsetChanged = () => Viewport.RequestScanModelNudge();
         RightPanel.Scan.OnMoveQuickPositionRequested = name => _ = MoveQuickPositionAsync(name);
         RightPanel.Scan.OnSaveQuickPositionRequested = name => _ = SaveQuickPositionAsync(name);
+        // Scan Pose recalls the simulated arm only. ApplyViewportJoints writes the
+        // A1–E1 sliders and pauses the inbound joint poll. It does not call
+        // SendAxes, GoToWaypoint, or any other live-arm command.
+        RightPanel.Scan.OnApplyScanPose = angles => robot.ApplyViewportJoints(angles);
+        RightPanel.Scan.CaptureSimJoints = () => new float[]
+        {
+            (float)robot.A1, (float)robot.A2, (float)robot.A3,
+            (float)robot.A4, (float)robot.A5, (float)robot.A6, (float)robot.E1,
+        };
+        RightPanel.Scan.ActiveCellPath = () => Viewport.ActiveCellPath;
+        RightPanel.Scan.SampleScanPoints = () => Viewport.SampleScanWorldPoints(8000);
+        RightPanel.Scan.BedZ = () => Viewport.ActiveCell?.Bed.Origin.Z ?? 0f;
+        RightPanel.Scan.TryMergeScans = TryMergeBedScans;
+        RightPanel.Scan.AlignLocalizedModel = () => Viewport.RequestScanModelAlign();
+        RightPanel.Scan.OnFakeScanRequested = () => _ = CaptureFakeScanAsync();
 
         // Wire hand-eye calibration: provide the live flange pose and apply result to TCP fields.
         // CRITICAL: calibration must use the SAME flange frame the viewport applies scans in
@@ -633,6 +659,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             SyncLfam3WorkflowSidebar();
             SyncKrlFrameIndicesToActiveTab();
             RightPanel.Scan.RefreshQuickPositions(cell);
+            RightPanel.Scan.ReloadScanPoses(Viewport.ActiveCellPath);
             Viewport.FlattenScansToBedGroup();
 
             TryApplyPendingWorkspaceRestore(generation);
@@ -681,16 +708,52 @@ public sealed class MainWindowViewModel : ViewModelBase
         scan.QuickPositionStatus = $"Saved {displayName}.";
     }
 
+    bool TryMergeBedScans()
+    {
+        var vp = Viewport;
+        // A selection the user already made is the outliner merge. Otherwise
+        // pick the original captures the same way scan-merge does.
+        if (!vp.CanMergeScans)
+        {
+            vp.ClearScanOutlinerSelection();
+            foreach (var item in vp.GetBedLevelScanItems())
+            {
+                if (item.Name.StartsWith("Merged Scan", StringComparison.OrdinalIgnoreCase))
+                {
+                    item.Visible = false;
+                    continue;
+                }
+                if (!item.Name.StartsWith("Scan ", StringComparison.Ordinal))
+                    continue;
+                vp.ToggleScanOutlinerSelection(item);
+            }
+        }
+
+        if (!vp.CanMergeScans)
+            return false;
+        vp.RequestMergeScans(MassiveSlicer.Viewport.Scene.ScanMergeOutput.Mesh);
+        return true;
+    }
+
     /// <summary>
     /// Captures a frame from the Zivid camera on a worker thread, meshes the
     /// organized point cloud, and adds the result to the viewport and outliner.
     /// The scan is placed on the bed centre; camera-to-robot registration comes
     /// later with hand-eye calibration.
     /// </summary>
-    private async void RunTestScan()
+    private async void RunTestScan() => await CaptureScanAsync();
+
+    /// <summary>
+    /// Captures a frame from the Zivid camera on a worker thread, meshes the
+    /// organized point cloud, and adds the result to the viewport and outliner.
+    /// Magic Scan uses this same capture. Returns false when the frame is not added.
+    /// </summary>
+    internal async Task<bool> CaptureScanAsync()
     {
         var scan = RightPanel.Scan;
-        if (scan.IsScanning) return;
+        if (scan.IsScanning) return false;
+        if (scan.UseFakeScanData)
+            return await CaptureFakeScanAsync();
 
         scan.IsScanning = true;
         scan.ScanStatus = "Starting capture...";
@@ -738,7 +801,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (node is null)
             {
                 scan.ScanStatus = "Scan contained no meshable points.";
-                return;
+                return false;
             }
 
             node.CullFaces = false;
@@ -776,6 +839,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 : "";
             scan.ScanStatus = $"Added \"{name}\" — {result.ValidPointCount:N0} points{saved}";
             Console.Log($"[scan] {scan.ScanStatus}");
+            return true;
         }
         catch (Exception ex)
         {
@@ -783,11 +847,462 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.Log($"[scan] ERROR: {ex.GetType().Name}: {ex.Message}");
             for (var inner = ex.InnerException; inner is not null; inner = inner.InnerException)
                 Console.Log($"[scan]   inner: {inner.GetType().Name}: {inner.Message}");
+            return false;
         }
         finally
         {
             scan.IsScanning = false;
         }
+    }
+
+    int _fakeFrameSerial;
+
+    /// <summary>
+    /// Lifts the simulated scanner into a high grid over the whole model, collects
+    /// a rough frame at each station, then moves closer for the fine grid.
+    /// Does not open the camera and does not command the live arm.
+    /// </summary>
+    async Task<bool> CaptureFakeScanAsync()
+    {
+        var scan = RightPanel.Scan;
+        if (scan.IsScanning) return false;
+        scan.IsScanning = true;
+        try
+        {
+            if (!scan.TryCopySelectedScanPose(out var poseName, out var seedPose))
+            {
+                ReportFake(scan, "Pick an overhead Scan Pose first. The camera was not used.");
+                return false;
+            }
+
+            float[] triangles = Viewport.CollectWorkpieceTriangles();
+            var model = MagicScanPlanner.BoundsOfTriangles(triangles);
+            if (model is not { } part)
+            {
+                ReportFake(scan, "Fake scan found no model in the scene. The camera was not used.");
+                Console.Log("[scan-fake] No workpiece triangles.");
+                return false;
+            }
+
+            float fineRequest = (float)scan.StandoffMm;
+            float raised = MagicScanPlanner.RaisedStandoffMm(part, fineRequest);
+            var attempts = MagicScanPlanner.StandoffAttempts(raised, fineRequest);
+            float[] seed6 = First6(seedPose);
+            float e1 = (float)RightPanel.Settings.Robot.E1;
+
+            ReportFake(scan, "Finding a higher view over the whole model. The live arm is not moving.");
+            var solver = await WaitForScannerSolverAsync();
+            Vector3 robotWorld = default;
+            bool arm = false;
+            float usedCoarse = attempts.Count > 0 ? attempts[0] : raised;
+            var coarse = MagicScanPlanner.PlanCoarse(part, usedCoarse);
+            float yaw = 0f;
+            if (solver is not null)
+            {
+                robotWorld = RobotWorldForSolver(solver, CurrentJoints6());
+                foreach (float height in attempts)
+                {
+                    var grid = MagicScanPlanner.PlanCoarse(part, height);
+                    if (grid.Count == 0) continue;
+                    var center = grid[grid.Count / 2];
+                    if (TrySolveScanStation(solver, robotWorld, center, part, seed6, aimAtPart: true, ref yaw, out _))
+                    {
+                        arm = true;
+                        usedCoarse = height;
+                        coarse = grid;
+                        break;
+                    }
+                }
+
+                if (!arm)
+                    Console.Log("[scan-fake] The high grid is outside the simulated arm. Sampling cameras above the model.");
+            }
+            else
+                Console.Log("[scan-fake] Scanner pose is not on the simulated arm yet. Sampling cameras above the model.");
+
+            var from = CurrentJoints7(e1);
+            int coarseAdded = 0;
+            var rough = new List<float>(4096);
+            if (arm && solver is not null)
+            {
+                for (int i = 0; i < coarse.Count; i++)
+                {
+                    ReportFake(scan, $"Lifting the simulated scanner for a rough sketch, station {i + 1} of {coarse.Count}, {usedCoarse:0} mm above the part. The live arm is not moving.");
+                    if (!TrySolveScanStation(solver, robotWorld, coarse[i], part, seed6, aimAtPart: true, ref yaw, out var joints))
+                    {
+                        Console.Log($"[scan-fake] Rough station {i + 1} was not reachable.");
+                        continue;
+                    }
+
+                    var next = WithE1(joints, e1);
+                    await PlayTravelAsync(from, next);
+                    from = next;
+                    seed6 = First6(next);
+                    if (await AddFakeFrameAsync(scan, triangles, camera: null, worldOut: rough))
+                        coarseAdded++;
+                }
+            }
+
+            if (coarseAdded == 0)
+            {
+                arm = false;
+                var aim = PartAim(part);
+                for (int i = 0; i < coarse.Count; i++)
+                {
+                    var s = coarse[i];
+                    ReportFake(scan, $"Sampling a high rough grid above the model, station {i + 1} of {coarse.Count}. The live arm is not moving.");
+                    if (!FakeScanSampler.TryLookAt(s.X, s.Y, s.Z, aim.X, aim.Y, aim.Z, out var pose))
+                        continue;
+                    if (await AddFakeFrameAsync(scan, triangles, CameraMatrix(pose), rough))
+                        coarseAdded++;
+                }
+            }
+
+            if (coarseAdded == 0)
+            {
+                ReportFake(scan, $"Played the high grid from {poseName}. No frame saw the model. The live arm was not moved.");
+                Console.Log("[scan-fake] " + scan.ScanStatus);
+                return false;
+            }
+
+            float bed = scan.BedZ?.Invoke() ?? part.MinZ;
+            var detected = MagicScanPlanner.Detect(rough.ToArray(), bed, (float)scan.BedClearanceMm);
+            var fineBox = detected ?? part;
+            float closer = MagicScanPlanner.CloserStandoffMm(usedCoarse, fineRequest);
+            scan.ApplyRoughBox(fineBox, closer);
+            var fine = CappedFineStations(fineBox, closer, scan);
+            PublishFineStations(scan, fine);
+
+            int fineAdded = 0;
+            if (arm && solver is not null)
+            {
+                for (int i = 0; i < fine.Count; i++)
+                {
+                    ReportFake(scan, $"Moving closer for fine points, station {i + 1} of {fine.Count}, {closer:0} mm above the part. The live arm is not moving.");
+                    if (!TrySolveScanStation(solver, robotWorld, fine[i], fineBox, seed6, aimAtPart: false, ref yaw, out var joints))
+                    {
+                        Console.Log($"[scan-fake] Fine station {i + 1} was not reachable.");
+                        continue;
+                    }
+
+                    var next = WithE1(joints, e1);
+                    await PlayTravelAsync(from, next);
+                    from = next;
+                    seed6 = First6(next);
+                    if (await AddFakeFrameAsync(scan, triangles))
+                        fineAdded++;
+                }
+            }
+            else
+            {
+                for (int i = 0; i < fine.Count; i++)
+                {
+                    var s = fine[i];
+                    ReportFake(scan, $"Sampling closer fine points, station {i + 1} of {fine.Count}. The live arm is not moving.");
+                    if (!FakeScanSampler.TryLookAt(s.X, s.Y, s.Z, s.X, s.Y, fineBox.Top, out var pose))
+                        continue;
+                    if (await AddFakeFrameAsync(scan, triangles, CameraMatrix(pose)))
+                        fineAdded++;
+                }
+            }
+
+            string how = arm
+                ? $"FAKE rough grid added {coarseAdded} frame{(coarseAdded == 1 ? "" : "s")} at {usedCoarse:0} mm up, then {fineAdded} closer frame{(fineAdded == 1 ? "" : "s")} at {closer:0} mm."
+                : $"FAKE sampled {coarseAdded} high frame{(coarseAdded == 1 ? "" : "s")} at {usedCoarse:0} mm up and {fineAdded} closer frame{(fineAdded == 1 ? "" : "s")} because the simulated arm could not hold the grid.";
+            string done = $"{how} The live arm was not moved. {scan.DetectedPartText}";
+            ReportFake(scan, done);
+            Console.Log("[scan-fake] " + done);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            scan.ScanStatus = "Fake scan failed: " + ex.Message;
+            scan.SetMagicStatus(scan.ScanStatus);
+            Console.Log($"[scan-fake] ERROR: {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            scan.IsScanning = false;
+        }
+    }
+
+    static void ReportFake(ScanSettingsViewModel scan, string text)
+    {
+        scan.ScanStatus = text;
+        scan.SetMagicStatus(text);
+    }
+
+    static IReadOnlyList<MagicScanStation> CappedFineStations(MagicScanBox box, float standoff, ScanSettingsViewModel scan)
+    {
+        float footprint = (float)scan.FootprintMm;
+        float overlap = (float)scan.OverlapPercent / 100f;
+        var stations = MagicScanPlanner.PlanFine(box, standoff, footprint, overlap);
+        while (stations.Count > 16 && footprint < 2000f)
+        {
+            footprint = MathF.Min(2000f, footprint * 1.25f);
+            stations = MagicScanPlanner.PlanFine(box, standoff, footprint, overlap);
+        }
+        return stations;
+    }
+
+    static void PublishFineStations(ScanSettingsViewModel scan, IReadOnlyList<MagicScanStation> stations)
+    {
+        scan.MagicScanStations.Clear();
+        int n = 1;
+        foreach (var s in stations)
+            scan.MagicScanStations.Add($"{n++}   X {s.X:0}   Y {s.Y:0}   Z {s.Z:0}");
+    }
+
+    async Task PlayTravelAsync(float[] from, float[] to)
+    {
+        var stops = FakeScanMotion.CaptureStops(from, to, stepDegrees: 25f, maxStops: 6);
+        var cursor = from;
+        foreach (var stop in stops)
+        {
+            await PlaySimJointsAsync(cursor, stop);
+            cursor = stop;
+        }
+    }
+
+    float[] CurrentJoints6()
+    {
+        var robot = RightPanel.Settings.Robot;
+        return [(float)robot.A1, (float)robot.A2, (float)robot.A3, (float)robot.A4, (float)robot.A5, (float)robot.A6];
+    }
+
+    float[] CurrentJoints7(float e1)
+    {
+        var j = CurrentJoints6();
+        return [j[0], j[1], j[2], j[3], j[4], j[5], e1];
+    }
+
+    static float[] First6(float[] joints)
+    {
+        var six = new float[6];
+        int n = Math.Min(6, joints.Length);
+        Array.Copy(joints, six, n);
+        return six;
+    }
+
+    static float[] WithE1(float[] joints6, float e1)
+    {
+        var pose = new float[7];
+        int n = Math.Min(6, joints6.Length);
+        Array.Copy(joints6, pose, n);
+        pose[6] = e1;
+        return pose;
+    }
+
+    static Vector3 PartAim(MagicScanBox box)
+        => new(box.CenterX, box.CenterY, (box.MinZ + box.MaxZ) * 0.5f);
+
+    /// <summary>
+    /// Waits until the viewport IK is the mounted scanner, not the spindle.
+    /// Selecting the tool updates the dropdown before the mesh and the solver swap.
+    /// </summary>
+    async Task<GltfNumericalIkSolver?> WaitForScannerSolverAsync()
+    {
+        var robot = RightPanel.Settings.Robot;
+        int scanner = ScanToolCalSweep.ResultToolIndex;
+        bool already = robot.KrlToolIndex == scanner && ScannerSolverMatches(robot.IkSolver, CurrentJoints6());
+        var before = robot.IkSolver is { } prior ? prior.ComputeTcpPosScene(CurrentJoints6()) : Vector3.Zero;
+        EnsureCalibratedScannerToolSelected("[scan-fake]");
+        if (already && robot.IkSolver is not null)
+            return robot.IkSolver;
+
+        for (int i = 0; i < 10; i++)
+        {
+            await Task.Delay(40);
+            var solver = robot.IkSolver;
+            if (robot.KrlToolIndex != scanner || solver is null) continue;
+            var joints = CurrentJoints6();
+            if (!ScannerSolverMatches(solver, joints)) continue;
+            if ((solver.ComputeTcpPosScene(joints) - before).Length > 30f)
+                return solver;
+        }
+
+        // A match that never left the pre-select TCP is still the previous tool.
+        return null;
+    }
+
+    bool ScannerSolverMatches(GltfNumericalIkSolver? solver, float[] joints)
+    {
+        if (solver is null || joints.Length < 6) return false;
+        var tool = ResolveCalibratedScannerTool();
+        if (tool is null || Viewport.GetToolWorldPose?.Invoke(tool) is not { } pose)
+            return false;
+        return (solver.ComputeTcpPosScene(joints) - pose.Row3.Xyz).Length < 80f;
+    }
+
+    Vector3 RobotWorldForSolver(GltfNumericalIkSolver solver, float[] joints)
+    {
+        var tcp = solver.ComputeTcpPosScene(joints);
+        var cell = Viewport.ActiveCell;
+        var guesses = new List<Vector3>(3) { Vector3.Zero };
+        if (cell is not null)
+        {
+            var model = cell.Robot.ModelWorldPosition;
+            var root = cell.Robot.WorldPosition;
+            guesses.Insert(0, new Vector3(model.X, model.Y, model.Z));
+            guesses.Insert(1, new Vector3(root.X, root.Y, root.Z));
+        }
+
+        foreach (var world in guesses)
+        {
+            var solved = solver.Solve(tcp - world, joints, maxIterations: 40, finalTolerance: 20f);
+            if (solved is null) continue;
+            if ((solver.ComputeTcpPosScene(solved) - tcp).Length <= 25f)
+                return world;
+        }
+
+        return guesses[0];
+    }
+
+    static bool TrySolveScanStation(
+        GltfNumericalIkSolver solver,
+        Vector3 robotWorld,
+        MagicScanStation station,
+        MagicScanBox part,
+        float[] seed,
+        bool aimAtPart,
+        ref float yaw,
+        out float[] joints)
+    {
+        joints = seed;
+        var at = new Vector3(station.X, station.Y, station.Z);
+        Vector3 aim = aimAtPart
+            ? Vector3.Normalize(PartAim(part) - at)
+            : new Vector3(0f, 0f, -1f);
+        if (aim.Z > -0.25f) return false;
+
+        float[] yaws = [yaw, 0f, 90f, -90f, 180f];
+        float[]? best = null;
+        float bestYaw = yaw;
+        float bestDelta = float.MaxValue;
+        foreach (float y in yaws)
+        {
+            var rot = solver.TargetRotFromMillNormal(new Vector3(-aim.X, -aim.Y, -aim.Z), y);
+            var solved = solver.Solve(at - robotWorld, seed, rot, maxIterations: 100, requireOrientation: true)
+                         ?? solver.Solve(at - robotWorld, seed, rot, maxIterations: 100, requireOrientation: false);
+            if (solved is null || solved.Length < 6) continue;
+            var tcp = solver.ComputeTcpPosScene(solved);
+            if ((tcp - at).Length > 40f) continue;
+            var toolZ = solver.ToolZScene(solved);
+            if (Vector3.Dot(toolZ, aim) < 0.8f || toolZ.Z > -0.35f) continue;
+            float delta = 0f;
+            for (int i = 0; i < 6; i++)
+                delta += MathF.Abs(FakeScanMotion.WrapDegrees(solved[i] - seed[i]));
+            if (delta < bestDelta)
+            {
+                bestDelta = delta;
+                best = solved;
+                bestYaw = y;
+            }
+        }
+
+        if (best is null) return false;
+        yaw = bestYaw;
+        joints = best;
+        return true;
+    }
+
+    static Matrix4 CameraMatrix(FakeScanPose pose)
+        => new(
+            pose.RightX, pose.RightY, pose.RightZ, 0f,
+            pose.UpX, pose.UpY, pose.UpZ, 0f,
+            pose.ForwardX, pose.ForwardY, pose.ForwardZ, 0f,
+            pose.OriginX, pose.OriginY, pose.OriginZ, 1f);
+
+    async Task PlaySimJointsAsync(float[] from, float[] to)
+    {
+        var robot = RightPanel.Settings.Robot;
+        int n = Math.Min(from.Length, to.Length);
+        const int frames = 10;
+        for (int frame = 1; frame <= frames; frame++)
+        {
+            float t = frame / (float)frames;
+            float s = t * t * (3f - 2f * t);
+            var pose = new float[n];
+            bool last = frame == frames;
+            for (int i = 0; i < n; i++)
+            {
+                float delta = FakeScanMotion.WrapDegrees(to[i] - from[i]);
+                pose[i] = last ? to[i] : from[i] + delta * s;
+            }
+            robot.ApplyViewportJoints(pose);
+            await Task.Delay(40);
+        }
+    }
+
+    async Task<bool> AddFakeFrameAsync(
+        ScanSettingsViewModel scan, float[] triangles, Matrix4? camera = null, List<float>? worldOut = null)
+    {
+        Matrix4 pose;
+        if (camera is { } given)
+            pose = given;
+        else
+        {
+            ToolCellConfig? scannerTool = ResolveCalibratedScannerTool();
+            if (scannerTool is null || Viewport.GetToolWorldPose?.Invoke(scannerTool) is not { } live)
+            {
+                Console.Log("[scan-fake] No simulated camera pose at this stop.");
+                return false;
+            }
+            pose = live;
+        }
+
+        var origin = pose.Row3.Xyz;
+        var right = pose.Row0.Xyz;
+        var up = pose.Row1.Xyz;
+        var forward = pose.Row2.Xyz;
+        if (right.LengthSquared < 1e-8f || up.LengthSquared < 1e-8f || forward.LengthSquared < 1e-8f)
+            return false;
+        right.Normalize();
+        up.Normalize();
+        forward.Normalize();
+
+        var cloud = await Task.Run(() => FakeScanSampler.Rasterize(
+            triangles,
+            origin.X, origin.Y, origin.Z,
+            right.X, right.Y, right.Z,
+            up.X, up.Y, up.Z,
+            forward.X, forward.Y, forward.Z));
+        if (cloud.ValidPointCount < 30)
+        {
+            Console.Log($"[scan-fake] Stop saw {cloud.ValidPointCount} points, skipped.");
+            return false;
+        }
+
+        if (worldOut is not null)
+        {
+            int kept = 0;
+            for (int i = 0; i + 2 < cloud.PointsXYZ.Length && worldOut.Count < 4000; i += 3)
+            {
+                float x = cloud.PointsXYZ[i];
+                float y = cloud.PointsXYZ[i + 1];
+                float z = cloud.PointsXYZ[i + 2];
+                if (float.IsNaN(x)) continue;
+                if ((kept++ & 3) != 0) continue;
+                worldOut.Add(origin.X + x * right.X + y * up.X + z * forward.X);
+                worldOut.Add(origin.Y + x * right.Y + y * up.Y + z * forward.Y);
+                worldOut.Add(origin.Z + x * right.Z + y * up.Z + z * forward.Z);
+            }
+        }
+
+        var name = $"Scan {DateTime.Now:HH-mm-ss-fff}-{++_fakeFrameSerial:00}";
+        var node = await Task.Run(() => PointCloudMesher.Build(
+            cloud.PointsXYZ, cloud.Width, cloud.Height, name));
+        if (node is null) return false;
+        node.CullFaces = false;
+        node.LocalTransform = new Matrix4(
+            right.X, right.Y, right.Z, 0f,
+            up.X, up.Y, up.Z, 0f,
+            forward.X, forward.Y, forward.Z, 0f,
+            origin.X, origin.Y, origin.Z, 1f);
+        Viewport.AddScanNode(node);
+        Console.Log($"[scan-fake] Added \"{name}\" — {cloud.ValidPointCount:N0} points.");
+        return true;
     }
 
     /// <summary>Maps a C3 Bridge protocol error code to its name (ulsu-tech C3BI enum).</summary>
